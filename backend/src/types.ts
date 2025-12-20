@@ -33,6 +33,7 @@ export interface ServerRecord {
   createdAt: string;
   updatedAt: string;
   notes?: string;
+  restartRequired?: boolean;
 }
 
 export interface ServerCreateInput {
@@ -51,4 +52,5 @@ export interface ServerUpdateInput {
   status?: ServerStatus;
   containerId?: string | null;
   serverPackUrl?: string;
+  restartRequired?: boolean;
 }

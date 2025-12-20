@@ -3,11 +3,12 @@ import { ServerStatus, statusColor, statusLabel } from '../lib/serverTypes';
 
 type Props = {
   counts: Record<ServerStatus, number>;
+  restartRequiredCount: number;
   loading: boolean;
   onRefresh: () => void;
 };
 
-export function StatusBar({ counts, loading, onRefresh }: Props) {
+export function StatusBar({ counts, restartRequiredCount, loading, onRefresh }: Props) {
   return (
     <Card shadow="sm" className="mb-4 bg-white/5 border border-white/10">
       <CardBody className="flex flex-wrap items-center gap-3">
@@ -17,6 +18,9 @@ export function StatusBar({ counts, loading, onRefresh }: Props) {
               {statusLabel[status as ServerStatus]}: {count}
             </Chip>
           ))}
+          <Chip color="warning" variant="flat">
+            Restart required: {restartRequiredCount}
+          </Chip>
         </div>
         <div className="ml-auto">
           <Button size="sm" variant="flat" onPress={onRefresh} isDisabled={loading}>

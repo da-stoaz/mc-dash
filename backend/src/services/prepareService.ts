@@ -283,3 +283,16 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
 
   return { containerId, script: scriptPath };
 }
+
+export async function applyConfigFiles(server: ServerRecord): Promise<void> {
+  const serverRoot = path.join(config.dataRoot, 'servers', server.id);
+  const packDir = path.join(serverRoot, 'pack');
+
+  if (!(await pathExists(packDir))) {
+    throw new Error('Server pack not prepared yet');
+  }
+
+  const workingDir = await detectWorkingDir(packDir);
+  await applyServerProperties(workingDir, server);
+  await applyVariablesTxt(workingDir, server);
+}

@@ -20,10 +20,16 @@ db.prepare(
     resources TEXT NOT NULL,
     game TEXT NOT NULL,
     notes TEXT,
+    restartRequired INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   )`
 ).run();
+
+const columns = db.prepare(`PRAGMA table_info(servers)`).all() as { name: string }[];
+if (!columns.find((col) => col.name === 'restartRequired')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN restartRequired INTEGER NOT NULL DEFAULT 0`).run();
+}
 
 type ServerRow = {
   id: string;
@@ -37,6 +43,7 @@ type ServerRow = {
   resources: string;
   game: string;
   notes?: string;
+  restartRequired?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -65,6 +72,7 @@ function mapRow(row: ServerRow): ServerRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     notes: row.notes ?? undefined,
+    restartRequired: row.restartRequired === 1,
   };
 }
 
@@ -85,12 +93,13 @@ export class ServerStore {
     const id = randomUUID();
     const now = new Date().toISOString();
     const defaultStatus: ServerStatus = 'stopped';
+    const restartRequired = 0;
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, packId, packFileId, packVersion, serverPackUrl, containerId, status, resources, game, notes, createdAt, updatedAt
+        id, name, packId, packFileId, packVersion, serverPackUrl, containerId, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @packId, @packFileId, @packVersion, @serverPackUrl, NULL, @status, @resources, @game, NULL, @createdAt, @updatedAt
+        @id, @name, @packId, @packFileId, @packVersion, @serverPackUrl, NULL, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
@@ -104,6 +113,7 @@ export class ServerStore {
       status: defaultStatus,
       resources: JSON.stringify(input.resources),
       game: JSON.stringify(input.game),
+      restartRequired,
       createdAt: now,
       updatedAt: now,
     });
@@ -121,21 +131,24 @@ export class ServerStore {
 
     const next: Partial<ServerRow> = {};
 
-  if (updates.resources) {
-    next.resources = JSON.stringify(updates.resources);
-  }
-  if (updates.game) {
-    next.game = JSON.stringify(updates.game);
-  }
-  if (typeof updates.status === 'string') {
-    next.status = updates.status;
-  }
-  if (updates.containerId !== undefined) {
-    next.containerId = updates.containerId ?? null;
-  }
-   if (updates.serverPackUrl !== undefined) {
-    next.serverPackUrl = updates.serverPackUrl;
-  }
+    if (updates.resources) {
+      next.resources = JSON.stringify(updates.resources);
+    }
+    if (updates.game) {
+      next.game = JSON.stringify(updates.game);
+    }
+    if (typeof updates.status === 'string') {
+      next.status = updates.status;
+    }
+    if (updates.containerId !== undefined) {
+      next.containerId = updates.containerId ?? null;
+    }
+    if (updates.serverPackUrl !== undefined) {
+      next.serverPackUrl = updates.serverPackUrl;
+    }
+    if (updates.restartRequired !== undefined) {
+      next.restartRequired = updates.restartRequired ? 1 : 0;
+    }
 
     if (Object.keys(next).length === 0) {
       return existing;

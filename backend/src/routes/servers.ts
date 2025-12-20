@@ -7,7 +7,7 @@ import { dockerService } from '../services/dockerService';
 import { serverStore } from '../serverStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
-import { prepareServer } from '../services/prepareService';
+import { applyConfigFiles, prepareServer } from '../services/prepareService';
 import { config } from '../config';
 
 const createServerSchema = z.object({
@@ -70,11 +70,28 @@ router.post('/', (req, res, next) => {
   }
 });
 
-router.patch('/:id', (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
     const parsed = updateServerSchema.parse(req.body);
-    const updated = serverStore.update(req.params.id, parsed);
+    let updated = serverStore.update(req.params.id, parsed);
     if (!updated) return notFound(res);
+
+    const shouldApplyConfig = !!parsed.resources || !!parsed.game;
+    if (shouldApplyConfig) {
+      try {
+        await applyConfigFiles(updated);
+        updated = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
+        return res.json(updated);
+      } catch (err: any) {
+        const flagged = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
+        return res.status(409).json({
+          error: 'Config saved but not applied (server pack not prepared yet)',
+          details: err?.message,
+          server: flagged,
+        });
+      }
+    }
+
     res.json(updated);
   } catch (err) {
     next(err);
@@ -94,7 +111,7 @@ router.post('/:id/start', async (req, res) => {
   if (!server) return notFound(res);
   try {
     const containerId = await dockerService.start(server);
-    const updated = serverStore.update(server.id, { status: 'running', containerId });
+    const updated = serverStore.update(server.id, { status: 'running', containerId, restartRequired: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Start failed');
@@ -120,7 +137,7 @@ router.post('/:id/restart', async (req, res) => {
   if (!server) return notFound(res);
   try {
     await dockerService.restart(server);
-    const updated = serverStore.update(server.id, { status: 'running' });
+    const updated = serverStore.update(server.id, { status: 'running', restartRequired: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Restart failed');
@@ -151,7 +168,7 @@ router.post('/:id/prepare', async (req, res) => {
   try {
     serverStore.update(server.id, { status: 'creating' });
     const { containerId } = await prepareServer(server);
-    const updated = serverStore.update(server.id, { status: 'stopped', containerId });
+    const updated = serverStore.update(server.id, { status: 'stopped', containerId, restartRequired: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Prepare failed');

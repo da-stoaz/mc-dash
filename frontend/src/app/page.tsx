@@ -172,6 +172,8 @@ export default function Page() {
     );
   }, [servers]);
 
+  const restartRequiredCount = useMemo(() => servers.filter((s) => s.restartRequired).length, [servers]);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="page">
@@ -191,7 +193,7 @@ export default function Page() {
           </Card>
         )}
 
-        <StatusBar counts={statusCounts} loading={loading} onRefresh={fetchServers} />
+        <StatusBar counts={statusCounts} restartRequiredCount={restartRequiredCount} loading={loading} onRefresh={fetchServers} />
 
         <ServerTable
           servers={servers}

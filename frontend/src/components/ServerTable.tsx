@@ -33,9 +33,16 @@ export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit
                 </div>
               </TableCell>
               <TableCell>
-                <Chip color={statusColor[server.status]} variant="flat" size="sm">
-                  {statusLabel[server.status]}
-                </Chip>
+                <div className="flex flex-wrap gap-2">
+                  <Chip color={statusColor[server.status]} variant="flat" size="sm">
+                    {statusLabel[server.status]}
+                  </Chip>
+                  {server.restartRequired && (
+                    <Chip color="warning" variant="flat" size="sm">
+                      Restart required
+                    </Chip>
+                  )}
+                </div>
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1 max-w-[220px]">

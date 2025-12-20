@@ -9,6 +9,7 @@ export type ServerRecord = {
   packVersion?: string;
   serverPackUrl?: string;
   status: ServerStatus;
+  restartRequired?: boolean;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
   game: { renderDistance?: number; gameMode?: GameMode; seed?: string };
 };
