@@ -76,20 +76,41 @@ router.patch('/:id', async (req, res, next) => {
     let updated = serverStore.update(req.params.id, parsed);
     if (!updated) return notFound(res);
 
-    const shouldApplyConfig = !!parsed.resources || !!parsed.game;
-    if (shouldApplyConfig) {
+    const hasConfigChanges = !!parsed.resources || !!parsed.game;
+    const hasResourceChanges = !!parsed.resources;
+
+    let configError: Error | null = null;
+    let resourceError: Error | null = null;
+
+    if (hasConfigChanges) {
       try {
         await applyConfigFiles(updated);
-        updated = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
-        return res.json(updated);
       } catch (err: any) {
-        const flagged = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
-        return res.status(409).json({
-          error: 'Config saved but not applied (server pack not prepared yet)',
-          details: err?.message,
-          server: flagged,
-        });
+        configError = err;
       }
+    }
+
+    if (hasResourceChanges) {
+      try {
+        await dockerService.updateResources(updated);
+      } catch (err: any) {
+        resourceError = err;
+      }
+    }
+
+    if (hasConfigChanges) {
+      updated = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
+    }
+
+    if (configError || resourceError) {
+      return res.status(409).json({
+        error: 'Update saved but not fully applied',
+        details: {
+          config: configError?.message,
+          resources: resourceError?.message,
+        },
+        server: updated,
+      });
     }
 
     res.json(updated);

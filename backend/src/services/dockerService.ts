@@ -140,6 +140,21 @@ export class DockerService {
     }
   }
 
+  async updateResources(server: ServerRecord): Promise<void> {
+    const container = await this.getContainer(server);
+    const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : 0;
+    const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : 0;
+    try {
+      await container.update({
+        Memory: memoryBytes,
+        NanoCPUs: nanoCpus,
+      });
+    } catch (err) {
+      logger.error({ err }, 'Failed to update container resources');
+      throw err;
+    }
+  }
+
   async remove(server: ServerRecord): Promise<void> {
     try {
       const container = await this.getContainer(server);
