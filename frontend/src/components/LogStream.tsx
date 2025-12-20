@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Button, Chip } from '@heroui/react';
-import { Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { Button, Chip, Modal, ModalBody, ModalContent, ModalHeader } from '@heroui/react';
+import { ArrowDown, Expand, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
 
 const MAX_LOG_CHARS = 200_000;
 
@@ -18,7 +18,9 @@ export function LogStream({ serverId, apiBase }: Props) {
   const [autoScroll, setAutoScroll] = useState(true);
   const [reconnectToken, setReconnectToken] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const modalRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!serverId || paused) return;
@@ -79,6 +81,8 @@ export function LogStream({ serverId, apiBase }: Props) {
     if (!autoScroll) return;
     const el = containerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    const modalEl = modalRef.current;
+    if (modalEl) modalEl.scrollTop = modalEl.scrollHeight;
   }, [autoScroll, logs]);
 
   const handleScroll = () => {
@@ -86,6 +90,13 @@ export function LogStream({ serverId, apiBase }: Props) {
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     setAutoScroll(atBottom);
+  };
+
+  const scrollToBottom = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setAutoScroll(true);
   };
 
   return (
@@ -108,6 +119,18 @@ export function LogStream({ serverId, apiBase }: Props) {
           >
             {paused ? 'Resume' : 'Pause'}
           </Button>
+          <Button size="sm" variant="flat" startContent={<Expand size={14} />} onPress={() => setExpanded(true)}>
+            Expand
+          </Button>
+          <Button
+            size="sm"
+            variant="flat"
+            startContent={<ArrowDown size={14} />}
+            onPress={scrollToBottom}
+            isDisabled={autoScroll}
+          >
+            Back to bottom
+          </Button>
           <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={() => setReconnectToken((val) => val + 1)}>
             Reconnect
           </Button>
@@ -123,6 +146,63 @@ export function LogStream({ serverId, apiBase }: Props) {
       >
         {logs || 'No logs yet.'}
       </div>
+
+      <Modal isOpen={expanded} onClose={() => setExpanded(false)} placement="center" size="5xl" scrollBehavior="inside">
+        <ModalContent className="max-w-6xl">
+          {(onClose) => (
+            <>
+              <ModalHeader>Live logs</ModalHeader>
+              <ModalBody className="p-0">
+                <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-white/10">
+                  <Chip size="sm" variant="flat" color={connected ? 'success' : 'warning'}>
+                    {connected ? 'Connected' : paused ? 'Paused' : 'Disconnected'}
+                  </Chip>
+                  {error && (
+                    <Chip size="sm" variant="flat" color="danger">
+                      {error}
+                    </Chip>
+                  )}
+                  <div className="ml-auto flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      startContent={paused ? <Play size={14} /> : <Pause size={14} />}
+                      onPress={() => setPaused((prev) => !prev)}
+                    >
+                      {paused ? 'Resume' : 'Pause'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="flat"
+                      startContent={<ArrowDown size={14} />}
+                      onPress={scrollToBottom}
+                      isDisabled={autoScroll}
+                    >
+                      Back to bottom
+                    </Button>
+                    <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={() => setReconnectToken((val) => val + 1)}>
+                      Reconnect
+                    </Button>
+                    <Button size="sm" variant="flat" startContent={<Trash2 size={14} />} onPress={() => setLogs('')}>
+                      Clear
+                    </Button>
+                    <Button size="sm" variant="flat" onPress={onClose}>
+                      Close
+                    </Button>
+                  </div>
+                </div>
+                <div
+                  ref={modalRef}
+                  onScroll={handleScroll}
+                  className="h-[70vh] bg-black/40 px-6 py-4 font-mono text-xs leading-relaxed whitespace-pre-wrap overflow-y-auto"
+                >
+                  {logs || 'No logs yet.'}
+                </div>
+              </ModalBody>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
     </div>
   );
 }

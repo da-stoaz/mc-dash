@@ -238,8 +238,9 @@ export class DockerService {
 
     let networkRxBytes = 0;
     let networkTxBytes = 0;
-    if (stats?.networks) {
-      Object.values(stats.networks).forEach((net) => {
+    const networks = stats?.networks as Record<string, { rx_bytes?: number; tx_bytes?: number }> | undefined;
+    if (networks) {
+      Object.values(networks).forEach((net) => {
         networkRxBytes += net.rx_bytes ?? 0;
         networkTxBytes += net.tx_bytes ?? 0;
       });
