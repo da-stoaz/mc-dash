@@ -30,16 +30,17 @@ type Props = {
   onUpload: (id: string, file: File) => void;
   onEdit: () => void;
   onDeleteContainer: () => void;
+  onDeleteServer: () => void;
 };
 
-export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDeleteContainer }: Props) {
+export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDeleteContainer, onDeleteServer }: Props) {
   const disabled = !!busy || server.status === 'creating';
-  const canStart = server.status !== 'running' && server.status !== 'creating';
-  const canStop = server.status === 'running';
+  const canStart = ['stopped', 'exited', 'error'].includes(server.status);
+  const canStop = ['running', 'starting', 'restarting'].includes(server.status);
   const canRestart = server.status === 'running';
   const hasPack = Boolean(server.serverPackUrl || server.packId);
-  const canPrepare = server.status === 'stopped' && hasPack;
-  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete'>(null);
+  const canPrepare = ['stopped', 'exited', 'error'].includes(server.status) && hasPack;
+  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete' | 'deleteServer'>(null);
 
   const handleFile = (evt: ChangeEvent<HTMLInputElement>) => {
     const file = evt.target.files?.[0];
@@ -131,6 +132,17 @@ export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDele
             >
               Delete container
             </Button>
+            <Button
+              size="sm"
+              color="danger"
+              variant="flat"
+              startContent={<Trash2 size={16} />}
+              onPress={() => setConfirmState('deleteServer')}
+              isDisabled={disabled || busy === 'deleteServer'}
+              fullWidth
+            >
+              Delete server
+            </Button>
           </div>
         </PopoverContent>
       </Popover>
@@ -138,12 +150,20 @@ export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDele
       <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
         <ModalContent>
           {(onModalClose) => {
-            const actionLabel = confirmState === 'stop' ? 'Stop server' : confirmState === 'restart' ? 'Restart server' : 'Delete container';
-            const actionColor = confirmState === 'delete' ? 'danger' : 'warning';
+            const actionLabel =
+              confirmState === 'stop'
+                ? 'Stop server'
+                : confirmState === 'restart'
+                  ? 'Restart server'
+                  : confirmState === 'deleteServer'
+                    ? 'Delete server'
+                    : 'Delete container';
+            const actionColor = confirmState === 'delete' || confirmState === 'deleteServer' ? 'danger' : 'warning';
             const actionFn = () => {
               if (confirmState === 'stop') onAction(server.id, 'stop');
               if (confirmState === 'restart') onAction(server.id, 'restart');
               if (confirmState === 'delete') onDeleteContainer();
+              if (confirmState === 'deleteServer') onDeleteServer();
               setConfirmState(null);
               onModalClose();
             };
@@ -152,9 +172,9 @@ export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDele
               <>
                 <ModalHeader>{actionLabel}</ModalHeader>
                 <ModalBody className="text-sm">
-                  {confirmState === 'delete'
-                    ? 'This will remove the Docker container for this server. World data stays on disk.'
-                    : 'Are you sure you want to proceed?'}
+                  {confirmState === 'delete' && 'This will remove the Docker container for this server. World data stays on disk.'}
+                  {confirmState === 'deleteServer' && 'This will remove the server entry and its container. World data stays on disk.'}
+                  {confirmState !== 'delete' && confirmState !== 'deleteServer' && 'Are you sure you want to proceed?'}
                 </ModalBody>
                 <ModalFooter>
                   <Button variant="light" onPress={onModalClose}>

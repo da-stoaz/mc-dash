@@ -141,6 +141,26 @@ export default function Page() {
     }
   };
 
+  const deleteServer = async (id: string) => {
+    setMessage(null);
+    setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
+    try {
+      const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
+      await fetchServers();
+      setMessage('Server deleted.');
+    } catch (err: any) {
+      setMessage(err?.message ?? 'Delete failed');
+    } finally {
+      setActionLoading((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
+    }
+  };
+
   const uploadPack = async (id: string, file: File) => {
     setMessage(null);
     setActionLoading((m) => ({ ...m, [id]: 'upload' }));
@@ -169,7 +189,16 @@ export default function Page() {
         acc[s.status] = (acc[s.status] ?? 0) + 1;
         return acc;
       },
-      { creating: 0, running: 0, stopped: 0, exited: 0, error: 0 }
+      {
+        creating: 0,
+        starting: 0,
+        running: 0,
+        restarting: 0,
+        stopping: 0,
+        stopped: 0,
+        exited: 0,
+        error: 0,
+      }
     );
   }, [servers]);
 
@@ -203,6 +232,7 @@ export default function Page() {
           onUpload={uploadPack}
           onEdit={setShowEdit}
           onDeleteContainer={deleteContainer}
+          onDeleteServer={deleteServer}
         />
       </div>
 

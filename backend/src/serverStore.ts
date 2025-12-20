@@ -170,6 +170,12 @@ export class ServerStore {
 
     return this.get(id);
   }
+
+  delete(id: string): boolean {
+    const stmt = db.prepare(`DELETE FROM servers WHERE id = ?`);
+    const result = stmt.run(id);
+    return result.changes > 0;
+  }
 }
 
 export const serverStore = new ServerStore();

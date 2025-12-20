@@ -9,9 +9,10 @@ type Props = {
   onUpload: (id: string, file: File) => void;
   onEdit: (server: ServerRecord) => void;
   onDeleteContainer: (id: string) => void;
+  onDeleteServer: (id: string) => void;
 };
 
-export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit, onDeleteContainer }: Props) {
+export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit, onDeleteContainer, onDeleteServer }: Props) {
   return (
     <Card shadow="sm" className="bg-white/5 border border-white/10">
       <Table aria-label="Servers" removeWrapper>
@@ -74,6 +75,7 @@ export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit
                   onUpload={onUpload}
                   onEdit={() => onEdit(server)}
                   onDeleteContainer={() => onDeleteContainer(server.id)}
+                  onDeleteServer={() => onDeleteServer(server.id)}
                 />
               </TableCell>
             </TableRow>

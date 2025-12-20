@@ -2,6 +2,9 @@ export type ServerStatus =
   | 'creating'
   | 'stopped'
   | 'running'
+  | 'starting'
+  | 'stopping'
+  | 'restarting'
   | 'exited'
   | 'error';
 

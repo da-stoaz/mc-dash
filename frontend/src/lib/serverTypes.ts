@@ -1,4 +1,12 @@
-export type ServerStatus = 'creating' | 'stopped' | 'running' | 'exited' | 'error';
+export type ServerStatus =
+  | 'creating'
+  | 'starting'
+  | 'running'
+  | 'restarting'
+  | 'stopping'
+  | 'stopped'
+  | 'exited'
+  | 'error';
 export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
 
 export type ServerRecord = {
@@ -45,6 +53,9 @@ export const emptyForm: FormState = {
 export const statusColor: Record<ServerStatus, 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'default'> = {
   running: 'success',
   creating: 'warning',
+  starting: 'warning',
+  restarting: 'secondary',
+  stopping: 'warning',
   stopped: 'default',
   exited: 'warning',
   error: 'danger',
@@ -53,6 +64,9 @@ export const statusColor: Record<ServerStatus, 'primary' | 'secondary' | 'succes
 export const statusLabel: Record<ServerStatus, string> = {
   running: 'Running',
   creating: 'Preparing',
+  starting: 'Starting',
+  restarting: 'Restarting',
+  stopping: 'Stopping',
   stopped: 'Stopped',
   exited: 'Exited',
   error: 'Error',

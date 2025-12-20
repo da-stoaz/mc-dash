@@ -31,7 +31,7 @@ const createServerSchema = z.object({
 const updateServerSchema = z.object({
   resources: createServerSchema.shape.resources.optional(),
   game: createServerSchema.shape.game.optional(),
-  status: z.enum(['creating', 'stopped', 'running', 'exited', 'error']).optional(),
+  status: z.enum(['creating', 'stopped', 'running', 'starting', 'stopping', 'restarting', 'exited', 'error']).optional(),
   serverPackUrl: z.string().optional(),
 });
 
@@ -50,8 +50,17 @@ function safeStatus(server: ServerRecord): ServerStatus {
   return server.status;
 }
 
-router.get('/', (_req, res) => {
-  res.json(serverStore.list());
+router.get('/', async (_req, res) => {
+  const servers = serverStore.list();
+  const refreshed = await Promise.all(
+    servers.map(async (server) => {
+      if (server.status === 'creating') return server;
+      const status = await dockerService.status(server);
+      if (status === server.status) return server;
+      return serverStore.update(server.id, { status }) ?? server;
+    })
+  );
+  res.json(refreshed);
 });
 
 router.get('/:id', (req, res) => {
@@ -131,11 +140,13 @@ router.post('/:id/start', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
+    serverStore.update(server.id, { status: 'starting' });
     const containerId = await dockerService.start(server);
-    const updated = serverStore.update(server.id, { status: 'running', containerId, restartRequired: false });
+    const updated = serverStore.update(server.id, { status: 'starting', containerId, restartRequired: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Start failed');
+    serverStore.update(server.id, { status: 'error' });
     res.status(501).json({ error: 'Container start not wired to a built server pack yet', details: err?.message });
   }
 });
@@ -144,11 +155,13 @@ router.post('/:id/stop', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
+    serverStore.update(server.id, { status: 'stopping' });
     await dockerService.stop(server);
     const updated = serverStore.update(server.id, { status: 'stopped' });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Stop failed');
+    serverStore.update(server.id, { status: 'error' });
     res.status(500).json({ error: 'Failed to stop container', details: err?.message });
   }
 });
@@ -157,11 +170,13 @@ router.post('/:id/restart', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
+    serverStore.update(server.id, { status: 'restarting' });
     await dockerService.restart(server);
-    const updated = serverStore.update(server.id, { status: 'running', restartRequired: false });
+    const updated = serverStore.update(server.id, { status: 'restarting', restartRequired: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Restart failed');
+    serverStore.update(server.id, { status: 'error' });
     res.status(500).json({ error: 'Failed to restart container', details: err?.message });
   }
 });
@@ -182,7 +197,7 @@ router.get('/:id/logs', async (req, res) => {
 router.post('/:id/prepare', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
-  if (server.status === 'running') {
+  if (server.status === 'running' || server.status === 'starting' || server.status === 'restarting') {
     return res.status(409).json({ error: 'Stop the server before preparing a new container' });
   }
   if (!server.packId && !server.serverPackUrl) {
@@ -212,6 +227,22 @@ router.delete('/:id/container', async (req, res) => {
     logger.error({ err }, 'Remove container failed');
     res.status(500).json({ error: 'Failed to delete container', details: err?.message });
   }
+});
+
+router.delete('/:id', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  try {
+    if (server.containerId) {
+      await dockerService.remove(server);
+    }
+  } catch (err: any) {
+    logger.warn({ err }, 'Failed to remove container during server delete');
+  }
+
+  const removed = serverStore.delete(server.id);
+  if (!removed) return notFound(res);
+  res.json({ ok: true });
 });
 
 router.post('/:id/upload-pack', upload.single('file'), (req, res) => {
