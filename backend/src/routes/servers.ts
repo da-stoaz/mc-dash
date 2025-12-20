@@ -194,6 +194,19 @@ router.get('/:id/logs', async (req, res) => {
   }
 });
 
+router.get('/:id/metrics', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  try {
+    const metrics = await dockerService.metrics(server);
+    res.json(metrics);
+  } catch (err: any) {
+    logger.error({ err }, 'Metrics failed');
+    const statusCode = err?.statusCode === 404 ? 404 : 500;
+    res.status(statusCode).json({ error: 'Failed to read metrics', details: err?.message });
+  }
+});
+
 router.post('/:id/prepare', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);

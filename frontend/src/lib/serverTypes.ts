@@ -22,6 +22,22 @@ export type ServerRecord = {
   game: { renderDistance?: number; gameMode?: GameMode; seed?: string };
 };
 
+export type ServerMetrics = {
+  cpuPercent: number;
+  memoryBytes: number;
+  memoryLimitBytes: number;
+  memoryPercent: number;
+  networkRxBytes: number;
+  networkTxBytes: number;
+  blkReadBytes: number;
+  blkWriteBytes: number;
+  pids: number | null;
+  startedAt: string | null;
+  status: string | null;
+  exitCode: number | null;
+  uptimeSeconds: number | null;
+};
+
 export type FormState = {
   name: string;
   packId: string;

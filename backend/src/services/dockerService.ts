@@ -216,6 +216,68 @@ export class DockerService {
     });
   }
 
+  async metrics(server: ServerRecord) {
+    const container = await this.getContainer(server);
+    const inspect = await container.inspect();
+    const isRunning = inspect.State?.Running === true;
+    const stats = isRunning ? await container.stats({ stream: false }) : null;
+
+    const cpuDelta = stats?.cpu_stats?.cpu_usage?.total_usage - stats?.precpu_stats?.cpu_usage?.total_usage;
+    const systemDelta = stats?.cpu_stats?.system_cpu_usage - stats?.precpu_stats?.system_cpu_usage;
+    const onlineCpus = stats?.cpu_stats?.online_cpus ?? stats?.cpu_stats?.cpu_usage?.percpu_usage?.length ?? 1;
+    const cpuPercent = systemDelta && cpuDelta && systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus * 100 : 0;
+
+    const memoryBytes = stats?.memory_stats?.usage ?? 0;
+    const memoryLimitBytes = stats?.memory_stats?.limit ?? 0;
+    const memoryPercent = memoryLimitBytes ? (memoryBytes / memoryLimitBytes) * 100 : 0;
+
+    let networkRxBytes = 0;
+    let networkTxBytes = 0;
+    if (stats?.networks) {
+      Object.values(stats.networks).forEach((net) => {
+        networkRxBytes += net.rx_bytes ?? 0;
+        networkTxBytes += net.tx_bytes ?? 0;
+      });
+    }
+
+    let blkReadBytes = 0;
+    let blkWriteBytes = 0;
+    const blk = stats?.blkio_stats?.io_service_bytes_recursive;
+    if (Array.isArray(blk)) {
+      blk.forEach((entry) => {
+        if (entry.op === 'Read') blkReadBytes += entry.value ?? 0;
+        if (entry.op === 'Write') blkWriteBytes += entry.value ?? 0;
+      });
+    }
+
+    const startedAt = inspect.State?.StartedAt || null;
+    const finishedAt = inspect.State?.FinishedAt || null;
+    const now = Date.now();
+    const startedMs = startedAt ? new Date(startedAt).getTime() : null;
+    const finishedMs = finishedAt ? new Date(finishedAt).getTime() : null;
+    let uptimeSeconds: number | null = null;
+    if (startedMs) {
+      const endMs = inspect.State?.Running ? now : finishedMs ?? now;
+      uptimeSeconds = Math.max(0, Math.floor((endMs - startedMs) / 1000));
+    }
+
+    return {
+      cpuPercent,
+      memoryBytes,
+      memoryLimitBytes,
+      memoryPercent,
+      networkRxBytes,
+      networkTxBytes,
+      blkReadBytes,
+      blkWriteBytes,
+      pids: stats.pids_stats?.current ?? null,
+      startedAt,
+      status: inspect.State?.Status ?? null,
+      exitCode: inspect.State?.ExitCode ?? null,
+      uptimeSeconds,
+    };
+  }
+
   private async isReady(container: Container, server: ServerRecord): Promise<boolean> {
     let inspect: Awaited<ReturnType<Container['inspect']>> | null = null;
     try {

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Card, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip } from '@heroui/react';
 import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
@@ -29,7 +30,9 @@ export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit
             <TableRow key={server.id}>
               <TableCell>
                 <div className="flex flex-col">
-                  <strong>{server.name}</strong>
+                  <Link href={`/servers/${server.id}`} className="font-semibold hover:text-cyan-200 transition-colors">
+                    {server.name}
+                  </Link>
                   <span className="muted text-xs">{server.id.slice(0, 8)}</span>
                 </div>
               </TableCell>
