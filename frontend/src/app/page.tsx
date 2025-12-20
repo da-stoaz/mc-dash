@@ -168,7 +168,7 @@ export default function Page() {
         acc[s.status] = (acc[s.status] ?? 0) + 1;
         return acc;
       },
-      { pending: 0, creating: 0, running: 0, stopped: 0, starting: 0, restarting: 0, exited: 0, error: 0 }
+      { creating: 0, running: 0, stopped: 0, exited: 0, error: 0 }
     );
   }, [servers]);
 

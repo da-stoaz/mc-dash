@@ -1,10 +1,7 @@
 export type ServerStatus =
-  | 'pending'
   | 'creating'
   | 'stopped'
   | 'running'
-  | 'starting'
-  | 'restarting'
   | 'exited'
   | 'error';
 

@@ -31,7 +31,7 @@ const createServerSchema = z.object({
 const updateServerSchema = z.object({
   resources: createServerSchema.shape.resources.optional(),
   game: createServerSchema.shape.game.optional(),
-  status: z.enum(['pending', 'creating', 'stopped', 'running', 'starting', 'restarting', 'exited', 'error']).optional(),
+  status: z.enum(['creating', 'stopped', 'running', 'exited', 'error']).optional(),
   serverPackUrl: z.string().optional(),
 });
 
@@ -47,9 +47,6 @@ function notFound(res: any) {
 }
 
 function safeStatus(server: ServerRecord): ServerStatus {
-  if (server.status === 'starting' || server.status === 'restarting' || server.status === 'creating') {
-    return server.status;
-  }
   return server.status;
 }
 
@@ -190,7 +187,7 @@ router.post('/:id/upload-pack', upload.single('file'), (req, res) => {
       logger.error({ err }, 'Failed to store upload');
       return res.status(500).json({ error: 'Failed to store uploaded file' });
     }
-    const updated = serverStore.update(server.id, { serverPackUrl: target, status: 'pending' });
+    const updated = serverStore.update(server.id, { serverPackUrl: target, status: 'stopped' });
     res.json(updated);
   });
 });

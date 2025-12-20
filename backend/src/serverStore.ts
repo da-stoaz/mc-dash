@@ -84,7 +84,7 @@ export class ServerStore {
   create(input: ServerCreateInput): ServerRecord {
     const id = randomUUID();
     const now = new Date().toISOString();
-    const defaultStatus: ServerStatus = 'pending';
+    const defaultStatus: ServerStatus = 'stopped';
 
     const stmt = db.prepare(
       `INSERT INTO servers (
