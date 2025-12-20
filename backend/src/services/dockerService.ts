@@ -4,12 +4,13 @@ import { logger } from '../logger';
 import { ServerRecord, ServerStatus } from '../types';
 
 function buildDockerClient(): Docker {
+  const apiVersion = config.dockerApiVersion;
   if (config.dockerHost) {
-    return new Docker({ host: config.dockerHost, version: 'v1.43' });
+    return new Docker({ host: config.dockerHost, version: apiVersion });
   }
   return new Docker({
     socketPath: config.dockerSocketPath ?? '/var/run/docker.sock',
-    version: 'v1.43',
+    version: apiVersion,
   });
 }
 
@@ -20,7 +21,7 @@ export class DockerService {
     this.docker = buildDockerClient();
   }
 
-  private containerName(serverId: string) {
+  containerName(serverId: string) {
     return `mc-dash-${serverId}`;
   }
 
@@ -29,6 +30,67 @@ export class DockerService {
       return this.docker.getContainer(server.containerId);
     }
     return this.docker.getContainer(this.containerName(server.id));
+  }
+
+  private async ensureImage(image: string) {
+    const images = await this.docker.listImages({ filters: { reference: [image] } });
+    if (images.length > 0) return;
+
+    await new Promise<void>((resolve, reject) => {
+      this.docker.pull(image, (err, stream) => {
+        if (err) return reject(err);
+        this.docker.modem.followProgress(stream, (pullErr: any) => {
+          if (pullErr) return reject(pullErr);
+          resolve();
+        });
+      });
+    });
+  }
+
+  async createOrReplaceContainer(
+    server: ServerRecord,
+    options: {
+      image: string;
+      hostServerDir: string;
+      workdir: string;
+      cmd: string[];
+      port: number;
+      memoryBytes?: number;
+      nanoCpus?: number;
+    }
+  ): Promise<string> {
+    const name = this.containerName(server.id);
+
+    try {
+      const existing = this.docker.getContainer(name);
+      await existing.inspect();
+      await existing.remove({ force: true });
+      logger.info({ name }, 'Removed existing container to recreate');
+    } catch {
+      // ignore missing container
+    }
+
+    await this.ensureImage(options.image);
+
+    const container = await this.docker.createContainer({
+      name,
+      Image: options.image,
+      WorkingDir: options.workdir,
+      Cmd: options.cmd,
+      ExposedPorts: {
+        [`${options.port}/tcp`]: {},
+      },
+      HostConfig: {
+        Binds: [`${options.hostServerDir}:/server`],
+        PortBindings: {
+          [`${options.port}/tcp`]: [{ HostPort: String(options.port) }],
+        },
+        Memory: options.memoryBytes,
+        NanoCPUs: options.nanoCpus,
+      },
+    });
+
+    return container.id;
   }
 
   async status(server: ServerRecord): Promise<ServerStatus> {
@@ -74,6 +136,16 @@ export class DockerService {
       await container.restart();
     } catch (err) {
       logger.error({ err }, 'Failed to restart container');
+      throw err;
+    }
+  }
+
+  async remove(server: ServerRecord): Promise<void> {
+    try {
+      const container = await this.getContainer(server);
+      await container.remove({ force: true });
+    } catch (err) {
+      logger.error({ err }, 'Failed to remove container');
       throw err;
     }
   }

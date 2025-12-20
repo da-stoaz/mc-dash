@@ -53,4 +53,5 @@ export interface ServerUpdateInput {
   game?: GameConfig;
   status?: ServerStatus;
   containerId?: string | null;
+  serverPackUrl?: string;
 }

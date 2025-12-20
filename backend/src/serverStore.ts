@@ -121,18 +121,21 @@ export class ServerStore {
 
     const next: Partial<ServerRow> = {};
 
-    if (updates.resources) {
-      next.resources = JSON.stringify(updates.resources);
-    }
-    if (updates.game) {
-      next.game = JSON.stringify(updates.game);
-    }
-    if (typeof updates.status === 'string') {
-      next.status = updates.status;
-    }
-    if (updates.containerId !== undefined) {
-      next.containerId = updates.containerId ?? null;
-    }
+  if (updates.resources) {
+    next.resources = JSON.stringify(updates.resources);
+  }
+  if (updates.game) {
+    next.game = JSON.stringify(updates.game);
+  }
+  if (typeof updates.status === 'string') {
+    next.status = updates.status;
+  }
+  if (updates.containerId !== undefined) {
+    next.containerId = updates.containerId ?? null;
+  }
+   if (updates.serverPackUrl !== undefined) {
+    next.serverPackUrl = updates.serverPackUrl;
+  }
 
     if (Object.keys(next).length === 0) {
       return existing;

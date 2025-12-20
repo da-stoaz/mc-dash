@@ -23,6 +23,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - `GET /servers` — list server records.
 - `POST /servers` — create a record; body includes `name`, `packId`, `packFileId`, `packVersion`, `serverPackUrl`, `resources`, `game`.
 - `PATCH /servers/:id` — update resources/game/status.
+- `POST /servers/:id/prepare` — resolve/download server pack, unzip/configure, and create a Docker container (supports `serverPackUrl` as an http(s) URL or a local file path; otherwise uses `CURSEFORGE_API_KEY` to resolve).
 - `GET /servers/:id/status` — inspect Docker container status.
 - `POST /servers/:id/{start|stop|restart}` — issues container actions (expects container already built/created).
 - `GET /servers/:id/logs` — streams Docker logs.
@@ -45,10 +46,11 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - Backend API: `backend/src/index.ts`, routes in `backend/src/routes/servers.ts`.
 - SQLite store: `backend/src/serverStore.ts`.
 - CurseForge helpers: `backend/src/services/curseforgeService.ts`.
+- Prepare/build pipeline: `backend/src/services/prepareService.ts`.
 - Docker actions: `backend/src/services/dockerService.ts`.
 - Frontend UI: `frontend/src/app/page.tsx`.
 
 ## Next steps
-- Implement the server-pack build pipeline (download -> unzip -> config templating -> container creation).
-- Add health checks and container auto-create if missing.
+- Add richer health checks (RCON or ping) and reflect in status.
+- Support per-server host ports and collision checks.
 - Add auth and validation on mutating endpoints.

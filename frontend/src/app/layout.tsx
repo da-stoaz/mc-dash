@@ -1,8 +1,6 @@
 import type { Metadata } from 'next';
-import { Space_Grotesk } from 'next/font/google';
+import { Providers } from './providers';
 import './globals.css';
-
-const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], display: 'swap' });
 
 export const metadata: Metadata = {
   title: 'MC Dash',
@@ -11,8 +9,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={spaceGrotesk.className}>{children}</body>
+    <html lang="en" className="dark">
+      <body className="bg-background text-foreground">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

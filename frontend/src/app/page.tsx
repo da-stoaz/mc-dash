@@ -1,6 +1,33 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Chip,
+  Divider,
+  Input,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Select,
+  SelectItem,
+  Spacer,
+  Table,
+  TableBody,
+  TableCell,
+  TableColumn,
+  TableHeader,
+  TableRow,
+  Tooltip,
+} from '@heroui/react';
 
 type ServerStatus = 'pending' | 'creating' | 'stopped' | 'running' | 'starting' | 'restarting' | 'exited' | 'error';
 type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
@@ -19,25 +46,50 @@ type ServerRecord = {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
-const statusLabels: Record<ServerStatus, string> = {
+const statusColor: Record<ServerStatus, 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'default'> = {
+  running: 'success',
+  starting: 'primary',
+  restarting: 'secondary',
+  creating: 'warning',
+  pending: 'default',
+  stopped: 'default',
+  exited: 'warning',
+  error: 'danger',
+};
+
+const statusLabel: Record<ServerStatus, string> = {
   running: 'Running',
-  stopped: 'Stopped',
-  pending: 'Pending',
   starting: 'Starting',
   restarting: 'Restarting',
-  creating: 'Creating',
+  creating: 'Preparing',
+  pending: 'Pending',
+  stopped: 'Stopped',
   exited: 'Exited',
   error: 'Error',
 };
 
-const defaultNewServer = {
+type FormState = {
+  name: string;
+  packId: string;
+  packFileId: string;
+  packVersion: string;
+  serverPackUrl: string;
+  minRamMb: number;
+  maxRamMb: number;
+  cpuLimit: string;
+  renderDistance: number;
+  gameMode: GameMode;
+  seed: string;
+};
+
+const emptyForm: FormState = {
   name: '',
   packId: '',
   packFileId: '',
   packVersion: '',
   serverPackUrl: '',
-  minRamMb: 2048,
-  maxRamMb: 4096,
+  minRamMb: 4096,
+  maxRamMb: 6144,
   cpuLimit: '',
   renderDistance: 10,
   gameMode: 'survival',
@@ -48,8 +100,10 @@ export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ ...defaultNewServer });
+  const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
+  const [showCreate, setShowCreate] = useState(false);
+  const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
+  const [form, setForm] = useState<FormState>({ ...emptyForm });
 
   const fetchServers = async () => {
     setLoading(true);
@@ -58,7 +112,6 @@ export default function Page() {
       const data = await res.json();
       setServers(data);
     } catch (err) {
-      console.error(err);
       setMessage('Failed to load servers');
     } finally {
       setLoading(false);
@@ -67,11 +120,11 @@ export default function Page() {
 
   useEffect(() => {
     fetchServers();
+    const interval = setInterval(fetchServers, 1000);
+    return () => clearInterval(interval);
   }, []);
 
-  const submitNewServer = async (evt: FormEvent) => {
-    evt.preventDefault();
-    setCreating(true);
+  const handleCreate = async () => {
     setMessage(null);
     try {
       const payload = {
@@ -96,30 +149,103 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text);
-      }
-      setForm({ ...defaultNewServer });
+      if (!res.ok) throw new Error(await res.text());
+      setForm({ ...emptyForm });
+      setShowCreate(false);
       await fetchServers();
-      setMessage('Server added. Build/download step still required for CurseForge server pack.');
+      setMessage('Server created. Upload or prepare to build the container.');
     } catch (err: any) {
-      setMessage(err?.message ?? 'Failed to create server');
-    } finally {
-      setCreating(false);
+      setMessage(err?.message ?? 'Create failed');
     }
   };
 
-  const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart') => {
+  const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     setMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/${action}`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/servers/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resources: {
+            minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
+            maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,
+            cpuLimit: changes.cpuLimit ? Number(changes.cpuLimit) : undefined,
+          },
+          game: {
+            renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
+            gameMode: changes.gameMode,
+            seed: changes.seed,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await fetchServers();
+      setShowEdit(null);
+      setMessage('Updated.');
+    } catch (err: any) {
+      setMessage(err?.message ?? 'Update failed');
+    }
+  };
+
+  const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
+    setMessage(null);
+    setActionLoading((m) => ({ ...m, [id]: action }));
+    try {
+      const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Action failed');
+      if (!res.ok) throw new Error(data?.error ?? `${action} failed`);
       await fetchServers();
       setMessage(`${action} issued`);
     } catch (err: any) {
-      setMessage(err?.message ?? 'Action failed');
+      setMessage(err?.message ?? `${action} failed`);
+    } finally {
+      setActionLoading((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
+    }
+  };
+
+  const deleteContainer = async (id: string) => {
+    setMessage(null);
+    setActionLoading((m) => ({ ...m, [id]: 'delete' }));
+    try {
+      const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
+      await fetchServers();
+      setMessage('Container deleted.');
+    } catch (err: any) {
+      setMessage(err?.message ?? 'Delete failed');
+    } finally {
+      setActionLoading((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
+    }
+  };
+
+  const uploadPack = async (id: string, file: File) => {
+    setMessage(null);
+    setActionLoading((m) => ({ ...m, [id]: 'upload' }));
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`${API_BASE}/servers/${id}/upload-pack`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'Upload failed');
+      await fetchServers();
+      setMessage('Server pack uploaded. Now run Prepare.');
+    } catch (err: any) {
+      setMessage(err?.message ?? 'Upload failed');
+    } finally {
+      setActionLoading((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
     }
   };
 
@@ -134,199 +260,361 @@ export default function Page() {
   }, [servers]);
 
   return (
-    <div className="page">
-      <div className="header">
-        <div>
-          <p className="muted">MC Dash</p>
-          <h1>CurseForge server manager</h1>
-        </div>
-        <button onClick={fetchServers} disabled={loading}>
-          Refresh
-        </button>
-      </div>
-
-      {message && <div className="card muted">{message}</div>}
-
-      <div className="panels">
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3>Servers</h3>
-            <span className="muted">{loading ? 'Loading…' : `${servers.length} total`}</span>
+    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
+      <div className="page">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div className="brand text-lg">MC Dash</div>
+            <div className="muted text-sm">CurseForge server manager</div>
           </div>
-          <div className="server-grid">
-            {servers.map((server) => (
-              <ServerRow key={server.id} server={server} onAction={invokeAction} />
+          <Button color="primary" variant="shadow" startContent="+"
+            onPress={() => setShowCreate(true)}>
+            New server
+          </Button>
+        </div>
+
+        {message && (
+          <Card shadow="sm" className="mb-3 bg-primary/10 border border-primary/30">
+            <CardBody>{message}</CardBody>
+          </Card>
+        )}
+
+        <Card shadow="sm" className="mb-4 bg-white/5 border border-white/10">
+          <CardBody className="flex flex-wrap items-center gap-2">
+            {Object.entries(statusCounts).map(([status, count]) => (
+              <Chip key={status} color={statusColor[status as ServerStatus]} variant="flat">
+                {statusLabel[status as ServerStatus]}: {count}
+              </Chip>
             ))}
-            {servers.length === 0 && <div className="muted">No servers yet.</div>}
-          </div>
-        </div>
+            <Spacer x={1} />
+            <Button size="sm" variant="flat" onPress={fetchServers} isDisabled={loading}>
+              Refresh
+            </Button>
+          </CardBody>
+        </Card>
 
-        <div className="card">
-          <h3>Create server</h3>
-          <form onSubmit={submitNewServer}>
-            <label>
-              Server name
-              <input
-                required
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="My Modded Server"
-              />
-            </label>
-            <div className="inline-inputs">
-              <label>
-                CurseForge Mod ID
-                <input
-                  value={form.packId}
-                  onChange={(e) => setForm((f) => ({ ...f, packId: e.target.value }))}
-                  placeholder="e.g. 123456"
-                />
-              </label>
-              <label>
-                File ID (server pack)
-                <input
-                  value={form.packFileId}
-                  onChange={(e) => setForm((f) => ({ ...f, packFileId: e.target.value }))}
-                  placeholder="Optional"
-                />
-              </label>
-            </div>
-            <div className="inline-inputs">
-              <label>
-                Version label
-                <input
-                  value={form.packVersion}
-                  onChange={(e) => setForm((f) => ({ ...f, packVersion: e.target.value }))}
-                  placeholder="Optional"
-                />
-              </label>
-              <label>
-                Server pack URL (override)
-                <input
-                  value={form.serverPackUrl}
-                  onChange={(e) => setForm((f) => ({ ...f, serverPackUrl: e.target.value }))}
-                  placeholder="https://…"
-                />
-              </label>
-            </div>
-
-            <div className="inline-inputs">
-              <label>
-                Min RAM (MB)
-                <input
-                  type="number"
-                  min={512}
-                  value={form.minRamMb}
-                  onChange={(e) => setForm((f) => ({ ...f, minRamMb: Number(e.target.value) }))}
-                />
-              </label>
-              <label>
-                Max RAM (MB)
-                <input
-                  type="number"
-                  min={512}
-                  value={form.maxRamMb}
-                  onChange={(e) => setForm((f) => ({ ...f, maxRamMb: Number(e.target.value) }))}
-                />
-              </label>
-              <label>
-                CPU cap (cores)
-                <input
-                  type="number"
-                  step="0.1"
-                  min={0.1}
-                  value={form.cpuLimit}
-                  onChange={(e) => setForm((f) => ({ ...f, cpuLimit: e.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="inline-inputs">
-              <label>
-                Render distance
-                <input
-                  type="number"
-                  min={2}
-                  max={32}
-                  value={form.renderDistance}
-                  onChange={(e) => setForm((f) => ({ ...f, renderDistance: Number(e.target.value) }))}
-                />
-              </label>
-              <label>
-                Game mode
-                <select
-                  value={form.gameMode}
-                  onChange={(e) => setForm((f) => ({ ...f, gameMode: e.target.value }))}
-                >
-                  <option value="survival">Survival</option>
-                  <option value="creative">Creative</option>
-                  <option value="adventure">Adventure</option>
-                  <option value="spectator">Spectator</option>
-                </select>
-              </label>
-              <label>
-                World seed
-                <input
-                  value={form.seed}
-                  onChange={(e) => setForm((f) => ({ ...f, seed: e.target.value }))}
-                  placeholder="Optional"
-                />
-              </label>
-            </div>
-
-            <button type="submit" disabled={creating}>
-              {creating ? 'Creating…' : 'Add server'}
-            </button>
-            <p className="muted" style={{ margin: 0 }}>
-              This only records metadata. Download/build of the CurseForge server pack is still required in the backend.
-            </p>
-          </form>
-        </div>
+        <Card shadow="sm" className="bg-white/5 border border-white/10">
+          <Table aria-label="Servers" removeWrapper>
+            <TableHeader>
+              <TableColumn>Name</TableColumn>
+              <TableColumn>Status</TableColumn>
+              <TableColumn>Pack</TableColumn>
+              <TableColumn>Resources</TableColumn>
+              <TableColumn>Game</TableColumn>
+              <TableColumn align="end">Actions</TableColumn>
+            </TableHeader>
+            <TableBody emptyContent="No servers yet." items={servers}>
+              {(server) => (
+                <TableRow key={server.id}>
+                  <TableCell>
+                    <div className="flex flex-col">
+                      <strong>{server.name}</strong>
+                      <span className="muted text-xs">{server.id.slice(0, 8)}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Chip color={statusColor[server.status] as any} variant="flat" size="sm">
+                      {statusLabel[server.status]}
+                    </Chip>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1 max-w-[220px]">
+                      {server.packId && <span>ID {server.packId}</span>}
+                      {server.packVersion && <span className="muted text-xs">v{server.packVersion}</span>}
+                      {server.serverPackUrl && <span className="muted text-xs truncate">{server.serverPackUrl}</span>}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <span>{server.resources.minRamMb}–{server.resources.maxRamMb} MB</span>
+                      {server.resources.cpuLimit && <span className="muted text-xs">{server.resources.cpuLimit} CPU</span>}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      {server.game.gameMode && <span>{server.game.gameMode}</span>}
+                      {server.game.renderDistance && <span className="muted text-xs">{server.game.renderDistance} chunks</span>}
+                      {server.game.seed && <span className="muted text-xs truncate">{server.game.seed}</span>}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <ActionButtons
+                      server={server}
+                      busy={actionLoading[server.id]}
+                      onAction={invokeAction}
+                      onUpload={uploadPack}
+                      onEdit={() => setShowEdit(server)}
+                      onDeleteContainer={() => deleteContainer(server.id)}
+                    />
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </Card>
       </div>
 
-      <div style={{ marginTop: 18 }} className="card">
-        <h3>Status snapshot</h3>
-        <div className="server-meta">
-          {Object.entries(statusCounts).map(([status, count]) => (
-            <span key={status} className={`status-pill status-${status}`}>
-              {statusLabels[status as ServerStatus]}: {count}
-            </span>
-          ))}
-        </div>
-      </div>
+      <CreateModal open={showCreate} onClose={() => setShowCreate(false)} form={form} setForm={setForm} onCreate={handleCreate} />
+      <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
     </div>
   );
 }
 
-function ServerRow({ server, onAction }: { server: ServerRecord; onAction: (id: string, action: 'start' | 'stop' | 'restart') => void }) {
-  const actionsDisabled = server.status === 'starting' || server.status === 'creating';
+function ActionButtons({
+  server,
+  busy,
+  onAction,
+  onUpload,
+  onEdit,
+  onDeleteContainer,
+}: {
+  server: ServerRecord;
+  busy?: string;
+  onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
+  onUpload: (id: string, file: File) => void;
+  onEdit: () => void;
+  onDeleteContainer: () => void;
+}) {
+  const disabled = !!busy || server.status === 'creating';
+
+  const handleFile = (evt: ChangeEvent<HTMLInputElement>) => {
+    const file = evt.target.files?.[0];
+    if (file) {
+      onUpload(server.id, file);
+      evt.target.value = '';
+    }
+  };
+
   return (
-    <div className="server-row">
-      <div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <strong>{server.name}</strong>
-          <span className={`status-pill status-${server.status}`}>{statusLabels[server.status]}</span>
-        </div>
-        <div className="server-meta">
-          {server.packId && <span>Mod ID: {server.packId}</span>}
-          {server.packVersion && <span>Version: {server.packVersion}</span>}
-          {server.resources?.maxRamMb && <span>RAM {server.resources.minRamMb}–{server.resources.maxRamMb} MB</span>}
-          {server.resources?.cpuLimit && <span>CPU cap {server.resources.cpuLimit} cores</span>}
-          {server.game?.renderDistance && <span>Render distance {server.game.renderDistance}</span>}
-          {server.game?.gameMode && <span>Mode: {server.game.gameMode}</span>}
-        </div>
-      </div>
-      <div className="actions">
-        <button className="secondary" disabled={actionsDisabled} onClick={() => onAction(server.id, 'stop')}>
-          Stop
-        </button>
-        <button className="secondary" disabled={actionsDisabled} onClick={() => onAction(server.id, 'restart')}>
-          Restart
-        </button>
-        <button disabled={actionsDisabled} onClick={() => onAction(server.id, 'start')}>
-          Start
-        </button>
-      </div>
+    <div className="flex flex-wrap gap-2 justify-end">
+      <input type="file" accept=".zip" className="hidden" id={`file-${server.id}`} onChange={handleFile} />
+      <Tooltip content="Upload server pack zip">
+        <Button size="sm" variant="flat" onPress={() => document.getElementById(`file-${server.id}`)?.click()} isDisabled={disabled || busy === 'upload'}>
+          {busy === 'upload' ? 'Uploading…' : 'Upload'}
+        </Button>
+      </Tooltip>
+      <Button size="sm" color="warning" variant="flat" onPress={() => onAction(server.id, 'prepare')} isDisabled={disabled || busy === 'prepare'}>
+        {busy === 'prepare' ? 'Preparing…' : 'Prepare'}
+      </Button>
+      <Button size="sm" color="success" variant="flat" onPress={() => onAction(server.id, 'start')} isDisabled={disabled || busy === 'start'}>
+        {busy === 'start' ? 'Starting…' : 'Start'}
+      </Button>
+      <Button size="sm" variant="flat" onPress={() => onAction(server.id, 'stop')} isDisabled={disabled || busy === 'stop'}>
+        {busy === 'stop' ? 'Stopping…' : 'Stop'}
+      </Button>
+      <Button size="sm" color="secondary" variant="flat" onPress={() => onAction(server.id, 'restart')} isDisabled={disabled || busy === 'restart'}>
+        {busy === 'restart' ? 'Restarting…' : 'Restart'}
+      </Button>
+      <Button size="sm" variant="bordered" onPress={onEdit}>
+        Edit
+      </Button>
+      <Popover placement="bottom-end">
+        <PopoverTrigger>
+          <Button size="sm" color="danger" variant="flat" isDisabled={disabled || busy === 'delete'}>
+            Delete
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent>
+          <div className="p-3 space-y-2 text-sm">
+            <div>Delete container only?</div>
+            <Button color="danger" size="sm" onPress={onDeleteContainer}>
+              Delete container
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
+  );
+}
+
+function CreateModal({
+  open,
+  onClose,
+  form,
+  setForm,
+  onCreate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  form: FormState;
+  setForm: (f: FormState) => void;
+  onCreate: () => void;
+}) {
+  return (
+    <Modal isOpen={open} onClose={onClose} placement="center">
+      <ModalContent>
+        {(onModalClose) => (
+          <>
+            <ModalHeader>Create server</ModalHeader>
+            <ModalBody className="space-y-3">
+              <Input label="Name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <Divider />
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input label="CurseForge Mod ID" value={form.packId} onChange={(e) => setForm({ ...form, packId: e.target.value })} />
+                <Input label="File ID (server pack)" value={form.packFileId} onChange={(e) => setForm({ ...form, packFileId: e.target.value })} />
+              </div>
+              <Input label="Version label" value={form.packVersion} onChange={(e) => setForm({ ...form, packVersion: e.target.value })} />
+              <Input
+                label="Server pack URL or local path"
+                placeholder="https://... or /path/to/pack.zip"
+                value={form.serverPackUrl}
+                onChange={(e) => setForm({ ...form, serverPackUrl: e.target.value })}
+              />
+              <Divider />
+              <div className="grid gap-3 md:grid-cols-3">
+                <Input
+                  type="number"
+                  label="Min RAM (MB)"
+                  value={String(form.minRamMb)}
+                  onChange={(e) => setForm({ ...form, minRamMb: Number(e.target.value) })}
+                />
+                <Input
+                  type="number"
+                  label="Max RAM (MB)"
+                  value={String(form.maxRamMb)}
+                  onChange={(e) => setForm({ ...form, maxRamMb: Number(e.target.value) })}
+                />
+                <Input
+                  type="number"
+                  label="CPU cap (cores)"
+                  placeholder="Optional"
+                  value={form.cpuLimit}
+                  onChange={(e) => setForm({ ...form, cpuLimit: e.target.value })}
+                />
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <Input
+                  type="number"
+                  label="Render distance"
+                  value={String(form.renderDistance)}
+                  onChange={(e) => setForm({ ...form, renderDistance: Number(e.target.value) })}
+                />
+                <Select
+                  label="Game mode"
+                  selectedKeys={[form.gameMode]}
+                  onSelectionChange={(keys) => setForm({ ...form, gameMode: Array.from(keys)[0] as GameMode })}
+                >
+                  <SelectItem key="survival">Survival</SelectItem>
+                  <SelectItem key="creative">Creative</SelectItem>
+                  <SelectItem key="adventure">Adventure</SelectItem>
+                  <SelectItem key="spectator">Spectator</SelectItem>
+                </Select>
+                <Input label="World seed" value={form.seed} onChange={(e) => setForm({ ...form, seed: e.target.value })} />
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" onPress={onModalClose}>
+                Cancel
+              </Button>
+              <Button color="primary" onPress={onCreate}>
+                Create
+              </Button>
+            </ModalFooter>
+          </>
+        )}
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function EditModal({
+  server,
+  onClose,
+  onSave,
+}: {
+  server: ServerRecord | null;
+  onClose: () => void;
+  onSave: (id: string, changes: Partial<FormState>) => void;
+}) {
+  const [local, setLocal] = useState<FormState | null>(null);
+
+  useEffect(() => {
+    if (server) {
+      setLocal({
+        name: server.name,
+        packId: String(server.packId ?? ''),
+        packFileId: String(server.packFileId ?? ''),
+        packVersion: server.packVersion ?? '',
+        serverPackUrl: server.serverPackUrl ?? '',
+        minRamMb: server.resources.minRamMb ?? 4096,
+        maxRamMb: server.resources.maxRamMb ?? 6144,
+        cpuLimit: server.resources.cpuLimit?.toString() ?? '',
+        renderDistance: server.game.renderDistance ?? 10,
+        gameMode: server.game.gameMode ?? 'survival',
+        seed: server.game.seed ?? '',
+      });
+    } else {
+      setLocal(null);
+    }
+  }, [server]);
+
+  if (!server || !local) return null;
+
+  return (
+    <Modal isOpen onClose={onClose} placement="center">
+      <ModalContent>
+        {(onModalClose) => (
+          <>
+            <ModalHeader>Edit {server.name}</ModalHeader>
+            <ModalBody className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-3">
+                <Input
+                  type="number"
+                  label="Min RAM (MB)"
+                  value={String(local.minRamMb)}
+                  onChange={(e) => setLocal({ ...local, minRamMb: Number(e.target.value) })}
+                />
+                <Input
+                  type="number"
+                  label="Max RAM (MB)"
+                  value={String(local.maxRamMb)}
+                  onChange={(e) => setLocal({ ...local, maxRamMb: Number(e.target.value) })}
+                />
+                <Input
+                  type="number"
+                  label="CPU cap (cores)"
+                  placeholder="Optional"
+                  value={local.cpuLimit}
+                  onChange={(e) => setLocal({ ...local, cpuLimit: e.target.value })}
+                />
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <Input
+                  type="number"
+                  label="Render distance"
+                  value={String(local.renderDistance)}
+                  onChange={(e) => setLocal({ ...local, renderDistance: Number(e.target.value) })}
+                />
+                <Select
+                  label="Game mode"
+                  selectedKeys={[local.gameMode]}
+                  onSelectionChange={(keys) => setLocal({ ...local, gameMode: Array.from(keys)[0] as GameMode })}
+                >
+                  <SelectItem key="survival">Survival</SelectItem>
+                  <SelectItem key="creative">Creative</SelectItem>
+                  <SelectItem key="adventure">Adventure</SelectItem>
+                  <SelectItem key="spectator">Spectator</SelectItem>
+                </Select>
+                <Input label="World seed" value={local.seed} onChange={(e) => setLocal({ ...local, seed: e.target.value })} />
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" onPress={onModalClose}>
+                Cancel
+              </Button>
+              <Button
+                color="primary"
+                onPress={() => {
+                  onSave(server.id, local);
+                  onModalClose();
+                }}
+              >
+                Save
+              </Button>
+            </ModalFooter>
+          </>
+        )}
+      </ModalContent>
+    </Modal>
   );
 }

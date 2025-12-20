@@ -1,16 +1,21 @@
 import { Router } from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import { z } from 'zod';
 import { dockerService } from '../services/dockerService';
 import { serverStore } from '../serverStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
+import { prepareServer } from '../services/prepareService';
+import { config } from '../config';
 
 const createServerSchema = z.object({
   name: z.string().min(1),
   packId: z.number().int().optional(),
   packFileId: z.number().int().optional(),
   packVersion: z.string().optional(),
-  serverPackUrl: z.string().url().optional(),
+  serverPackUrl: z.string().optional(),
   resources: z.object({
     minRamMb: z.number().int().positive(),
     maxRamMb: z.number().int().positive(),
@@ -27,9 +32,15 @@ const updateServerSchema = z.object({
   resources: createServerSchema.shape.resources.optional(),
   game: createServerSchema.shape.game.optional(),
   status: z.enum(['pending', 'creating', 'stopped', 'running', 'starting', 'restarting', 'exited', 'error']).optional(),
+  serverPackUrl: z.string().optional(),
 });
 
 const router = Router();
+const uploadDir = path.join(config.dataRoot, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+const upload = multer({ dest: uploadDir });
 
 function notFound(res: any) {
   return res.status(404).json({ error: 'Server not found' });
@@ -131,6 +142,57 @@ router.get('/:id/logs', async (req, res) => {
     logger.error({ err }, 'Logs failed');
     res.status(500).json({ error: 'Failed to stream logs', details: err?.message });
   }
+});
+
+router.post('/:id/prepare', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  if (!server.packId && !server.serverPackUrl) {
+    return res.status(400).json({ error: 'Server entry is missing CurseForge pack info (packId or serverPackUrl)' });
+  }
+
+  try {
+    serverStore.update(server.id, { status: 'creating' });
+    const { containerId } = await prepareServer(server);
+    const updated = serverStore.update(server.id, { status: 'stopped', containerId });
+    res.json(updated);
+  } catch (err: any) {
+    logger.error({ err }, 'Prepare failed');
+    serverStore.update(server.id, { status: 'error' });
+    res.status(500).json({ error: 'Failed to prepare server pack', details: err?.message });
+  }
+});
+
+router.delete('/:id/container', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  try {
+    await dockerService.remove(server);
+    const updated = serverStore.update(server.id, { containerId: null, status: 'stopped' });
+    res.json(updated);
+  } catch (err: any) {
+    logger.error({ err }, 'Remove container failed');
+    res.status(500).json({ error: 'Failed to delete container', details: err?.message });
+  }
+});
+
+router.post('/:id/upload-pack', upload.single('file'), (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded. Use field name "file".' });
+  }
+
+  const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
+  fs.rename(req.file.path, target, (err) => {
+    if (err) {
+      logger.error({ err }, 'Failed to store upload');
+      return res.status(500).json({ error: 'Failed to store uploaded file' });
+    }
+    const updated = serverStore.update(server.id, { serverPackUrl: target, status: 'pending' });
+    res.json(updated);
+  });
 });
 
 export default router;
