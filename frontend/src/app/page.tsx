@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, CardBody } from '@heroui/react';
+import { addToast, Button } from '@heroui/react';
 import { Plus } from 'lucide-react';
 import { emptyForm, FormState, GameMode, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { StatusBar } from '../components/StatusBar';
@@ -13,11 +13,20 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000'
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
+
+  const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
+    addToast({
+      title,
+      description,
+      severity,
+      timeout: 4500,
+      shouldShowTimeoutProgress: true,
+    });
+  };
 
   const fetchServers = async () => {
     setLoading(true);
@@ -26,7 +35,7 @@ export default function Page() {
       const data = await res.json();
       setServers(data);
     } catch (err) {
-      setMessage('Failed to load servers');
+      notify('Failed to load servers', undefined, 'danger');
     } finally {
       setLoading(false);
     }
@@ -39,7 +48,6 @@ export default function Page() {
   }, []);
 
   const handleCreate = async () => {
-    setMessage(null);
     try {
       const payload = {
         name: form.name,
@@ -67,14 +75,13 @@ export default function Page() {
       setForm({ ...emptyForm });
       setShowCreate(false);
       await fetchServers();
-      setMessage('Server created. Upload or prepare to build the container.');
+      notify('Server created', 'Upload or prepare to build the container.', 'success');
     } catch (err: any) {
-      setMessage(err?.message ?? 'Create failed');
+      notify('Create failed', err?.message ?? 'Create failed', 'danger');
     }
   };
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
-    setMessage(null);
     try {
       const res = await fetch(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
@@ -95,23 +102,22 @@ export default function Page() {
       if (!res.ok) throw new Error(await res.text());
       await fetchServers();
       setShowEdit(null);
-      setMessage('Updated.');
+      notify('Updated', 'Changes saved. Restart if required.', 'success');
     } catch (err: any) {
-      setMessage(err?.message ?? 'Update failed');
+      notify('Update failed', err?.message ?? 'Update failed', 'danger');
     }
   };
 
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
-    setMessage(null);
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `${action} failed`);
       await fetchServers();
-      setMessage(`${action} issued`);
+      notify(action.charAt(0).toUpperCase() + action.slice(1), 'Command sent.', 'success');
     } catch (err: any) {
-      setMessage(err?.message ?? `${action} failed`);
+      notify(`${action} failed`, err?.message ?? `${action} failed`, 'danger');
     } finally {
       setActionLoading((m) => {
         const next = { ...m };
@@ -122,16 +128,15 @@ export default function Page() {
   };
 
   const deleteContainer = async (id: string) => {
-    setMessage(null);
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
       await fetchServers();
-      setMessage('Container deleted.');
+      notify('Container deleted', 'World data is still on disk.', 'success');
     } catch (err: any) {
-      setMessage(err?.message ?? 'Delete failed');
+      notify('Delete failed', err?.message ?? 'Delete failed', 'danger');
     } finally {
       setActionLoading((m) => {
         const next = { ...m };
@@ -142,16 +147,15 @@ export default function Page() {
   };
 
   const deleteServer = async (id: string) => {
-    setMessage(null);
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
       await fetchServers();
-      setMessage('Server deleted.');
+      notify('Server deleted', undefined, 'success');
     } catch (err: any) {
-      setMessage(err?.message ?? 'Delete failed');
+      notify('Delete failed', err?.message ?? 'Delete failed', 'danger');
     } finally {
       setActionLoading((m) => {
         const next = { ...m };
@@ -162,7 +166,6 @@ export default function Page() {
   };
 
   const uploadPack = async (id: string, file: File) => {
-    setMessage(null);
     setActionLoading((m) => ({ ...m, [id]: 'upload' }));
     try {
       const fd = new FormData();
@@ -171,9 +174,9 @@ export default function Page() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'Upload failed');
       await fetchServers();
-      setMessage('Server pack uploaded. Now run Prepare.');
+      notify('Upload complete', 'Server pack uploaded. Now run Prepare.', 'success');
     } catch (err: any) {
-      setMessage(err?.message ?? 'Upload failed');
+      notify('Upload failed', err?.message ?? 'Upload failed', 'danger');
     } finally {
       setActionLoading((m) => {
         const next = { ...m };
@@ -216,12 +219,6 @@ export default function Page() {
             New server
           </Button>
         </div>
-
-        {message && (
-          <Card shadow="sm" className="mb-3 bg-primary/10 border border-primary/30">
-            <CardBody>{message}</CardBody>
-          </Card>
-        )}
 
         <StatusBar counts={statusCounts} restartRequiredCount={restartRequiredCount} loading={loading} onRefresh={fetchServers} />
 
