@@ -182,6 +182,9 @@ router.get('/:id/logs', async (req, res) => {
 router.post('/:id/prepare', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
+  if (server.status === 'running') {
+    return res.status(409).json({ error: 'Stop the server before preparing a new container' });
+  }
   if (!server.packId && !server.serverPackUrl) {
     return res.status(400).json({ error: 'Server entry is missing CurseForge pack info (packId or serverPackUrl)' });
   }

@@ -1,4 +1,5 @@
 import { Button, Card, CardBody, Chip } from '@heroui/react';
+import { RefreshCw } from 'lucide-react';
 import { ServerStatus, statusColor, statusLabel } from '../lib/serverTypes';
 
 type Props = {
@@ -23,7 +24,7 @@ export function StatusBar({ counts, restartRequiredCount, loading, onRefresh }: 
           </Chip>
         </div>
         <div className="ml-auto">
-          <Button size="sm" variant="flat" onPress={onRefresh} isDisabled={loading}>
+          <Button size="sm" variant="flat" startContent={<RefreshCw size={14} />} onPress={onRefresh} isDisabled={loading}>
             Refresh
           </Button>
         </div>

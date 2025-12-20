@@ -1,5 +1,26 @@
 import { ChangeEvent, useState } from 'react';
-import { Button, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Tooltip } from '@heroui/react';
+import {
+  Button,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Tooltip,
+} from '@heroui/react';
+import {
+  MoreHorizontal,
+  Pencil,
+  Play,
+  RefreshCw,
+  Square,
+  Trash2,
+  Upload,
+  Wand2,
+} from 'lucide-react';
 import { ServerRecord } from '../lib/serverTypes';
 
 type Props = {
@@ -13,6 +34,11 @@ type Props = {
 
 export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDeleteContainer }: Props) {
   const disabled = !!busy || server.status === 'creating';
+  const canStart = server.status !== 'running' && server.status !== 'creating';
+  const canStop = server.status === 'running';
+  const canRestart = server.status === 'running';
+  const hasPack = Boolean(server.serverPackUrl || server.packId);
+  const canPrepare = server.status === 'stopped' && hasPack;
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete'>(null);
 
   const handleFile = (evt: ChangeEvent<HTMLInputElement>) => {
@@ -26,29 +52,88 @@ export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDele
   return (
     <div className="flex flex-wrap gap-2 justify-end">
       <input type="file" accept=".zip" className="hidden" id={`file-${server.id}`} onChange={handleFile} />
-      <Tooltip content="Upload server pack zip">
-        <Button size="sm" variant="flat" onPress={() => document.getElementById(`file-${server.id}`)?.click()} isDisabled={disabled || busy === 'upload'}>
-          {busy === 'upload' ? 'Uploading…' : 'Upload'}
-        </Button>
-      </Tooltip>
-      <Button size="sm" color="warning" variant="flat" onPress={() => onAction(server.id, 'prepare')} isDisabled={disabled || busy === 'prepare'}>
+      <Button
+        size="sm"
+        color="warning"
+        variant="flat"
+        startContent={<Wand2 size={16} />}
+        onPress={() => onAction(server.id, 'prepare')}
+        isDisabled={disabled || busy === 'prepare' || !canPrepare}
+      >
         {busy === 'prepare' ? 'Preparing…' : 'Prepare'}
       </Button>
-      <Button size="sm" color="success" variant="flat" onPress={() => onAction(server.id, 'start')} isDisabled={disabled || busy === 'start'}>
-        {busy === 'start' ? 'Starting…' : 'Start'}
-      </Button>
-      <Button size="sm" variant="flat" onPress={() => setConfirmState('stop')} isDisabled={disabled || busy === 'stop'}>
-        {busy === 'stop' ? 'Stopping…' : 'Stop'}
-      </Button>
-      <Button size="sm" color="secondary" variant="flat" onPress={() => setConfirmState('restart')} isDisabled={disabled || busy === 'restart'}>
-        {busy === 'restart' ? 'Restarting…' : 'Restart'}
-      </Button>
-      <Button size="sm" variant="bordered" onPress={onEdit}>
+      {canStart && (
+        <Button
+          size="sm"
+          color="success"
+          variant="flat"
+          startContent={<Play size={16} />}
+          onPress={() => onAction(server.id, 'start')}
+          isDisabled={disabled || busy === 'start' || !server.containerId}
+        >
+          {busy === 'start' ? 'Starting…' : 'Start'}
+        </Button>
+      )}
+      {canStop && (
+        <Button
+          size="sm"
+          variant="flat"
+          startContent={<Square size={16} />}
+          onPress={() => setConfirmState('stop')}
+          isDisabled={disabled || busy === 'stop'}
+        >
+          {busy === 'stop' ? 'Stopping…' : 'Stop'}
+        </Button>
+      )}
+      {canRestart && (
+        <Button
+          size="sm"
+          color="secondary"
+          variant="flat"
+          startContent={<RefreshCw size={16} />}
+          onPress={() => setConfirmState('restart')}
+          isDisabled={disabled || busy === 'restart'}
+        >
+          {busy === 'restart' ? 'Restarting…' : 'Restart'}
+        </Button>
+      )}
+      <Button size="sm" variant="bordered" startContent={<Pencil size={16} />} onPress={onEdit}>
         Edit
       </Button>
-      <Button size="sm" color="danger" variant="flat" isDisabled={disabled || busy === 'delete'} onPress={() => setConfirmState('delete')}>
-        Delete
-      </Button>
+      <Popover placement="bottom-end">
+        <PopoverTrigger>
+          <Button size="sm" variant="flat" startContent={<MoreHorizontal size={16} />} isDisabled={disabled}>
+            More
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent>
+          <div className="p-3 space-y-2 text-sm min-w-[160px]">
+            <Tooltip content="Upload server pack zip">
+              <Button
+                size="sm"
+                variant="flat"
+                startContent={<Upload size={16} />}
+                onPress={() => document.getElementById(`file-${server.id}`)?.click()}
+                isDisabled={disabled || busy === 'upload'}
+                fullWidth
+              >
+                {busy === 'upload' ? 'Uploading…' : 'Upload pack'}
+              </Button>
+            </Tooltip>
+            <Button
+              size="sm"
+              color="danger"
+              variant="flat"
+              startContent={<Trash2 size={16} />}
+              onPress={() => setConfirmState('delete')}
+              isDisabled={disabled || busy === 'delete'}
+              fullWidth
+            >
+              Delete container
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
 
       <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
         <ModalContent>

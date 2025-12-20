@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, CardBody } from '@heroui/react';
+import { Plus } from 'lucide-react';
 import { emptyForm, FormState, GameMode, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { StatusBar } from '../components/StatusBar';
 import { ServerTable } from '../components/ServerTable';
@@ -182,7 +183,7 @@ export default function Page() {
             <div className="brand text-lg">MC Dash</div>
             <div className="muted text-sm">CurseForge server manager</div>
           </div>
-          <Button color="primary" variant="shadow" startContent="+" onPress={() => setShowCreate(true)}>
+          <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>
             New server
           </Button>
         </div>
