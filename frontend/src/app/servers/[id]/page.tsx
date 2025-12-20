@@ -1,12 +1,39 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { addToast, Button, Card, CardBody, CardHeader, Chip, Divider, Progress } from '@heroui/react';
-import { ArrowLeft, Cpu, HardDrive, MemoryStick, Network, Server } from 'lucide-react';
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  addToast,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Chip,
+  Divider,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  Progress,
+} from '@heroui/react';
+import {
+  ArrowLeft,
+  Cpu,
+  HardDrive,
+  MemoryStick,
+  Network,
+  Pencil,
+  Play,
+  RefreshCw,
+  Server,
+  Square,
+  Trash2,
+  Upload,
+  Wand2,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal } from '../../../components/ServerModals';
-import { ActionButtons } from '../../../components/ActionButtons';
 import { LogStream } from '../../../components/LogStream';
 import { FormState, ServerMetrics, ServerRecord, statusColor, statusLabel } from '../../../lib/serverTypes';
 
@@ -45,8 +72,10 @@ export default function ServerDetailsPage() {
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
+  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
   const [loading, setLoading] = useState(true);
   const serverErrorRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -148,6 +177,14 @@ export default function ServerDetailsPage() {
     }
   };
 
+  const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && server) {
+      uploadPack(server.id, file);
+    }
+    event.target.value = '';
+  };
+
   const uploadPack = async (id: string, file: File) => {
     setActionLoading((m) => ({ ...m, [id]: 'upload' }));
     try {
@@ -208,6 +245,13 @@ export default function ServerDetailsPage() {
   };
 
   const uptimeLabel = useMemo(() => formatUptime(metrics?.uptimeSeconds ?? null), [metrics?.uptimeSeconds]);
+  const busy = server ? actionLoading[server.id] : undefined;
+  const hasPack = server ? Boolean(server.serverPackUrl || server.packId) : false;
+  const canPrepare = server ? ['stopped', 'exited', 'error'].includes(server.status) && hasPack : false;
+  const canStart = server ? ['stopped', 'exited', 'error'].includes(server.status) : false;
+  const canStop = server ? ['running', 'starting', 'restarting'].includes(server.status) : false;
+  const canRestart = server ? server.status === 'running' : false;
+  const controlsDisabled = !server || !!busy || server.status === 'creating';
 
   if (loading && !server) {
     return (
@@ -256,16 +300,105 @@ export default function ServerDetailsPage() {
             )}
           </div>
         </div>
-        <ActionButtons
-          server={server}
-          busy={actionLoading[server.id]}
-          onAction={invokeAction}
-          onUpload={uploadPack}
-          onEdit={() => setShowEdit(server)}
-          onDeleteContainer={() => deleteContainer(server.id)}
-          onDeleteServer={() => deleteServer(server.id)}
-        />
       </div>
+
+      <Card className="bg-white/5 border border-white/10">
+        <CardHeader className="flex items-center justify-between">
+          <div className="font-semibold">Controls</div>
+          <div className="text-xs muted">Lifecycle, config, and maintenance actions</div>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleFileSelect} />
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="space-y-2">
+              <div className="text-xs uppercase tracking-wide muted">Lifecycle</div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  color="warning"
+                  variant="flat"
+                  startContent={<Wand2 size={14} />}
+                  onPress={() => invokeAction(server.id, 'prepare')}
+                  isDisabled={controlsDisabled || !canPrepare}
+                >
+                  {busy === 'prepare' ? 'Preparing...' : 'Prepare'}
+                </Button>
+                <Button
+                  size="sm"
+                  color="success"
+                  variant="flat"
+                  startContent={<Play size={14} />}
+                  onPress={() => invokeAction(server.id, 'start')}
+                  isDisabled={controlsDisabled || !canStart || !server.containerId}
+                >
+                  {busy === 'start' ? 'Starting...' : 'Start'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  startContent={<Square size={14} />}
+                  onPress={() => setConfirmState('stop')}
+                  isDisabled={controlsDisabled || !canStop}
+                >
+                  {busy === 'stop' ? 'Stopping...' : 'Stop'}
+                </Button>
+                <Button
+                  size="sm"
+                  color="secondary"
+                  variant="flat"
+                  startContent={<RefreshCw size={14} />}
+                  onPress={() => setConfirmState('restart')}
+                  isDisabled={controlsDisabled || !canRestart}
+                >
+                  {busy === 'restart' ? 'Restarting...' : 'Restart'}
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs uppercase tracking-wide muted">Config</div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="flat"
+                  startContent={<Upload size={14} />}
+                  onPress={() => fileInputRef.current?.click()}
+                  isDisabled={controlsDisabled || busy === 'upload'}
+                >
+                  {busy === 'upload' ? 'Uploading...' : 'Upload pack'}
+                </Button>
+                <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
+                  Edit config
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs uppercase tracking-wide muted">Danger zone</div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  startContent={<Trash2 size={14} />}
+                  onPress={() => setConfirmState('deleteContainer')}
+                  isDisabled={controlsDisabled || busy === 'delete'}
+                >
+                  Delete container
+                </Button>
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  startContent={<Trash2 size={14} />}
+                  onPress={() => setConfirmState('deleteServer')}
+                  isDisabled={controlsDisabled || busy === 'deleteServer'}
+                >
+                  Delete server
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
         <Card className="bg-white/5 border border-white/10">
@@ -360,6 +493,53 @@ export default function ServerDetailsPage() {
       </Card>
 
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
+
+      <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
+        <ModalContent>
+          {(onClose) => {
+            const title =
+              confirmState === 'stop'
+                ? 'Stop server'
+                : confirmState === 'restart'
+                  ? 'Restart server'
+                  : confirmState === 'deleteServer'
+                    ? 'Delete server'
+                    : 'Delete container';
+            const tone = confirmState === 'deleteContainer' || confirmState === 'deleteServer' ? 'danger' : 'warning';
+            const description =
+              confirmState === 'deleteContainer'
+                ? 'This will remove the Docker container for this server. World data stays on disk.'
+                : confirmState === 'deleteServer'
+                  ? 'This will remove the server entry and its container. World data stays on disk.'
+                  : 'Are you sure you want to proceed?';
+
+            const handleConfirm = () => {
+              if (!server) return;
+              if (confirmState === 'stop') invokeAction(server.id, 'stop');
+              if (confirmState === 'restart') invokeAction(server.id, 'restart');
+              if (confirmState === 'deleteContainer') deleteContainer(server.id);
+              if (confirmState === 'deleteServer') deleteServer(server.id);
+              setConfirmState(null);
+              onClose();
+            };
+
+            return (
+              <>
+                <ModalHeader>{title}</ModalHeader>
+                <ModalBody className="text-sm">{description}</ModalBody>
+                <ModalFooter>
+                  <Button variant="light" onPress={onClose}>
+                    Cancel
+                  </Button>
+                  <Button color={tone} onPress={handleConfirm}>
+                    Confirm
+                  </Button>
+                </ModalFooter>
+              </>
+            );
+          }}
+        </ModalContent>
+      </Modal>
     </div>
   );
 }
