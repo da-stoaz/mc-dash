@@ -37,6 +37,7 @@ const updateServerSchema = z.object({
 
 const router = Router();
 const uploadDir = path.join(config.dataRoot, 'uploads');
+const preparing = new Set<string>();
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -54,7 +55,7 @@ router.get('/', async (_req, res) => {
   const servers = serverStore.list();
   const refreshed = await Promise.all(
     servers.map(async (server) => {
-      if (server.status === 'creating') return server;
+      if (preparing.has(server.id)) return server;
       const status = await dockerService.status(server);
       if (status === server.status) return server;
       return serverStore.update(server.id, { status }) ?? server;
@@ -131,6 +132,9 @@ router.patch('/:id', async (req, res, next) => {
 router.get('/:id/status', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
+  if (preparing.has(server.id)) {
+    return res.json({ status: 'creating' });
+  }
   const status = await dockerService.status(server);
   const updated = serverStore.update(server.id, { status });
   res.json({ status: safeStatus(updated ?? server) });
@@ -218,6 +222,7 @@ router.post('/:id/prepare', async (req, res) => {
   }
 
   try {
+    preparing.add(server.id);
     serverStore.update(server.id, { status: 'creating' });
     const { containerId } = await prepareServer(server);
     const updated = serverStore.update(server.id, { status: 'stopped', containerId, restartRequired: false });
@@ -226,6 +231,8 @@ router.post('/:id/prepare', async (req, res) => {
     logger.error({ err }, 'Prepare failed');
     serverStore.update(server.id, { status: 'error' });
     res.status(500).json({ error: 'Failed to prepare server pack', details: err?.message });
+  } finally {
+    preparing.delete(server.id);
   }
 });
 

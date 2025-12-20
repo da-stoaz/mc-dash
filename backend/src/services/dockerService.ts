@@ -53,7 +53,13 @@ export class DockerService {
 
   private async getContainer(server: ServerRecord): Promise<Container> {
     if (server.containerId) {
-      return this.docker.getContainer(server.containerId);
+      const byId = this.docker.getContainer(server.containerId);
+      try {
+        await byId.inspect();
+        return byId;
+      } catch (err: any) {
+        if (err?.statusCode !== 404) throw err;
+      }
     }
     return this.docker.getContainer(this.containerName(server.id));
   }
@@ -121,7 +127,6 @@ export class DockerService {
 
   async status(server: ServerRecord): Promise<ServerStatus> {
     try {
-      if (server.status === 'creating') return 'creating';
       const container = await this.getContainer(server);
       const inspect = await container.inspect();
       const state = inspect.State;
@@ -270,7 +275,7 @@ export class DockerService {
       networkTxBytes,
       blkReadBytes,
       blkWriteBytes,
-      pids: stats.pids_stats?.current ?? null,
+      pids: stats?.pids_stats?.current ?? null,
       startedAt,
       status: inspect.State?.Status ?? null,
       exitCode: inspect.State?.ExitCode ?? null,
