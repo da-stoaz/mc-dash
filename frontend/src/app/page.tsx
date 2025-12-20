@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, CardBody } from '@heroui/react';
-import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
+import { emptyForm, FormState, GameMode, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { StatusBar } from '../components/StatusBar';
 import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal } from '../components/ServerModals';
@@ -175,7 +175,7 @@ export default function Page() {
   const restartRequiredCount = useMemo(() => servers.filter((s) => s.restartRequired).length, [servers]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
+    <div className="min-h-screen bg-linear-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="page">
         <div className="flex items-center justify-between mb-4">
           <div>

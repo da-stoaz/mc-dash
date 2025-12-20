@@ -115,6 +115,7 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
       spectator: '3',
     };
     props['gamemode'] = modeMap[server.game.gameMode];
+    props['force-gamemode'] = 'true';
   }
   if (server.game.seed) {
     props['level-seed'] = server.game.seed;
