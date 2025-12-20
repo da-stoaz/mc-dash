@@ -33,6 +33,14 @@ export function CreateModal({ open, onClose, form, setForm, onCreate }: CreatePr
                   onChange={(e) => setForm({ ...form, serverPackUrl: e.target.value })}
                 />
               </div>
+              <div>
+                <Input
+                  label="Java image override"
+                  placeholder="eclipse-temurin:21-jre (leave blank for auto)"
+                  value={form.javaImage}
+                  onChange={(e) => setForm({ ...form, javaImage: e.target.value })}
+                />
+              </div>
               <Divider />
               <div className="grid gap-3 md:grid-cols-3">
                 <Input
@@ -107,6 +115,7 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
         packFileId: String(server.packFileId ?? ''),
         packVersion: server.packVersion ?? '',
         serverPackUrl: server.serverPackUrl ?? '',
+        javaImage: server.javaImage ?? '',
         minRamMb: server.resources.minRamMb ?? emptyForm.minRamMb,
         maxRamMb: server.resources.maxRamMb ?? emptyForm.maxRamMb,
         cpuLimit: server.resources.cpuLimit?.toString() ?? '',
@@ -168,6 +177,12 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                 </Select>
                 <Input label="World seed" value={local.seed} onChange={(e) => setLocal({ ...local, seed: e.target.value })} />
               </div>
+              <Input
+                label="Java image override"
+                placeholder="eclipse-temurin:21-jre (leave blank for auto)"
+                value={local.javaImage}
+                onChange={(e) => setLocal({ ...local, javaImage: e.target.value })}
+              />
             </ModalBody>
             <ModalFooter>
               <Button variant="light" onPress={onModalClose}>

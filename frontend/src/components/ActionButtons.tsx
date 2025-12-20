@@ -34,7 +34,7 @@ type Props = {
 };
 
 export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDeleteContainer, onDeleteServer }: Props) {
-  const disabled = !!busy || server.status === 'creating';
+  const disabled = !!busy;
   const canStart = ['stopped', 'exited', 'error'].includes(server.status);
   const canStop = ['running', 'starting', 'restarting'].includes(server.status);
   const canRestart = server.status === 'running';

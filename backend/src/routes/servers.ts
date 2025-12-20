@@ -16,6 +16,7 @@ const createServerSchema = z.object({
   packFileId: z.number().int().optional(),
   packVersion: z.string().optional(),
   serverPackUrl: z.string().optional(),
+  javaImage: z.string().optional(),
   resources: z.object({
     minRamMb: z.number().int().positive(),
     maxRamMb: z.number().int().positive(),
@@ -33,6 +34,7 @@ const updateServerSchema = z.object({
   game: createServerSchema.shape.game.optional(),
   status: z.enum(['creating', 'stopped', 'running', 'starting', 'stopping', 'restarting', 'exited', 'error']).optional(),
   serverPackUrl: z.string().optional(),
+  javaImage: z.string().optional().nullable(),
 });
 
 const router = Router();
@@ -86,7 +88,7 @@ router.patch('/:id', async (req, res, next) => {
     let updated = serverStore.update(req.params.id, parsed);
     if (!updated) return notFound(res);
 
-    const hasConfigChanges = !!parsed.resources || !!parsed.game;
+    const hasConfigChanges = !!parsed.resources || !!parsed.game || parsed.javaImage !== undefined;
     const hasResourceChanges = !!parsed.resources;
 
     let configError: Error | null = null;

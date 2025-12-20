@@ -15,6 +15,7 @@ db.prepare(
     packFileId INTEGER,
     packVersion TEXT,
     serverPackUrl TEXT,
+    javaImage TEXT,
     containerId TEXT,
     status TEXT NOT NULL,
     resources TEXT NOT NULL,
@@ -30,6 +31,9 @@ const columns = db.prepare(`PRAGMA table_info(servers)`).all() as { name: string
 if (!columns.find((col) => col.name === 'restartRequired')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN restartRequired INTEGER NOT NULL DEFAULT 0`).run();
 }
+if (!columns.find((col) => col.name === 'javaImage')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN javaImage TEXT`).run();
+}
 
 type ServerRow = {
   id: string;
@@ -38,6 +42,7 @@ type ServerRow = {
   packFileId?: number;
   packVersion?: string;
   serverPackUrl?: string;
+  javaImage?: string | null;
   containerId?: string | null;
   status: ServerStatus;
   resources: string;
@@ -65,6 +70,7 @@ function mapRow(row: ServerRow): ServerRecord {
     packFileId: row.packFileId,
     packVersion: row.packVersion,
     serverPackUrl: row.serverPackUrl,
+    javaImage: row.javaImage ?? undefined,
     containerId: row.containerId ?? undefined,
     status: row.status,
     resources: parseJsonField<ResourceConfig>(row.resources),
@@ -97,9 +103,9 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, packId, packFileId, packVersion, serverPackUrl, containerId, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, packId, packFileId, packVersion, serverPackUrl, javaImage, containerId, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @packId, @packFileId, @packVersion, @serverPackUrl, NULL, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @packId, @packFileId, @packVersion, @serverPackUrl, @javaImage, NULL, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
@@ -110,6 +116,7 @@ export class ServerStore {
       packFileId: input.packFileId ?? null,
       packVersion: input.packVersion ?? null,
       serverPackUrl: input.serverPackUrl ?? null,
+      javaImage: input.javaImage ?? null,
       status: defaultStatus,
       resources: JSON.stringify(input.resources),
       game: JSON.stringify(input.game),
@@ -145,6 +152,9 @@ export class ServerStore {
     }
     if (updates.serverPackUrl !== undefined) {
       next.serverPackUrl = updates.serverPackUrl;
+    }
+    if (updates.javaImage !== undefined) {
+      next.javaImage = updates.javaImage ?? null;
     }
     if (updates.restartRequired !== undefined) {
       next.restartRequired = updates.restartRequired ? 1 : 0;

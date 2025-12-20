@@ -170,8 +170,21 @@ export class DockerService {
     try {
       await container.stop({ t: 30 });
     } catch (err) {
-      logger.error({ err }, 'Failed to stop container');
-      throw err;
+      const statusCode = (err as { statusCode?: number })?.statusCode;
+      if (statusCode === 304 || statusCode === 404) {
+        return;
+      }
+      try {
+        await container.kill();
+        return;
+      } catch (killErr) {
+        const killStatus = (killErr as { statusCode?: number })?.statusCode;
+        if (killStatus === 304 || killStatus === 404 || killStatus === 409) {
+          return;
+        }
+        logger.error({ err: killErr }, 'Failed to kill container after stop failure');
+        throw killErr;
+      }
     }
   }
 
@@ -204,7 +217,10 @@ export class DockerService {
     try {
       const container = await this.getContainer(server);
       await container.remove({ force: true });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 404) {
+        return;
+      }
       logger.error({ err }, 'Failed to remove container');
       throw err;
     }

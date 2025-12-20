@@ -137,6 +137,7 @@ export default function ServerDetailsPage() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          javaImage: changes.javaImage ? changes.javaImage : null,
           resources: {
             minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
             maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,
@@ -251,7 +252,7 @@ export default function ServerDetailsPage() {
   const canStart = server ? ['stopped', 'exited', 'error'].includes(server.status) : false;
   const canStop = server ? ['running', 'starting', 'restarting'].includes(server.status) : false;
   const canRestart = server ? server.status === 'running' : false;
-  const controlsDisabled = !server || !!busy || server.status === 'creating';
+  const controlsDisabled = !server || !!busy;
 
   if (loading && !server) {
     return (
@@ -413,6 +414,7 @@ export default function ServerDetailsPage() {
               <div className="muted">File ID: {server.packFileId ?? '-'}</div>
               <div className="muted">Version: {server.packVersion ?? '-'}</div>
               <div className="muted break-all">Server pack: {server.serverPackUrl ?? '-'}</div>
+              <div className="muted">Java image: {server.javaImage ?? 'Auto'}</div>
               <div className="muted">Container: {server.containerId ?? '-'}</div>
             </div>
             <Divider className="bg-white/10" />

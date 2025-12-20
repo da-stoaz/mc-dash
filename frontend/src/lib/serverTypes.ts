@@ -16,6 +16,7 @@ export type ServerRecord = {
   packFileId?: number;
   packVersion?: string;
   serverPackUrl?: string;
+  javaImage?: string;
   status: ServerStatus;
   restartRequired?: boolean;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
@@ -44,6 +45,7 @@ export type FormState = {
   packFileId: string;
   packVersion: string;
   serverPackUrl: string;
+  javaImage: string;
   minRamMb: number;
   maxRamMb: number;
   cpuLimit: string;
@@ -58,6 +60,7 @@ export const emptyForm: FormState = {
   packFileId: '',
   packVersion: '',
   serverPackUrl: '',
+  javaImage: '',
   minRamMb: 4096,
   maxRamMb: 6144,
   cpuLimit: '',

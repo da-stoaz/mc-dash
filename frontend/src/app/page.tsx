@@ -55,6 +55,7 @@ export default function Page() {
         packFileId: form.packFileId ? Number(form.packFileId) : undefined,
         packVersion: form.packVersion || undefined,
         serverPackUrl: form.serverPackUrl || undefined,
+        javaImage: form.javaImage || undefined,
         resources: {
           minRamMb: Number(form.minRamMb),
           maxRamMb: Number(form.maxRamMb),
@@ -87,6 +88,7 @@ export default function Page() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          javaImage: changes.javaImage ? changes.javaImage : null,
           resources: {
             minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
             maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,

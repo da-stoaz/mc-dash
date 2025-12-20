@@ -180,10 +180,13 @@ async function ensureZipExtracted(zipPath: string, packDir: string): Promise<str
   return packDir;
 }
 
-function chooseJavaImage(recommended?: string): string {
-  // If user set JAVA_IMAGE, respect it
+function chooseJavaImage(serverJavaImage?: string, recommended?: string): string {
+  const trimmed = serverJavaImage?.trim();
+  if (trimmed && trimmed.toLowerCase() !== 'auto') {
+    return trimmed;
+  }
   if (process.env.JAVA_IMAGE && process.env.JAVA_IMAGE.trim().length > 0) {
-    return process.env.JAVA_IMAGE;
+    return process.env.JAVA_IMAGE.trim();
   }
   if (recommended) {
     // Try to derive major from patterns like 1.21.x or 21
@@ -270,7 +273,7 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : undefined;
   const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
 
-  const image = chooseJavaImage(varsResult.recommendedJavaVersion);
+  const image = chooseJavaImage(server.javaImage, varsResult.recommendedJavaVersion);
 
   const containerId = await dockerService.createOrReplaceContainer(server, {
     image,

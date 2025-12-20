@@ -29,6 +29,7 @@ export interface ServerRecord {
   packFileId?: number;
   packVersion?: string;
   serverPackUrl?: string;
+  javaImage?: string;
   containerId?: string;
   status: ServerStatus;
   resources: ResourceConfig;
@@ -45,6 +46,7 @@ export interface ServerCreateInput {
   packFileId?: number;
   packVersion?: string;
   serverPackUrl?: string;
+  javaImage?: string;
   resources: ResourceConfig;
   game: GameConfig;
 }
@@ -55,5 +57,6 @@ export interface ServerUpdateInput {
   status?: ServerStatus;
   containerId?: string | null;
   serverPackUrl?: string;
+  javaImage?: string | null;
   restartRequired?: boolean;
 }
