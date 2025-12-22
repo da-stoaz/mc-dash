@@ -25,9 +25,6 @@ export interface GameConfig {
 export interface ServerRecord {
   id: string;
   name: string;
-  packId?: number;
-  packFileId?: number;
-  packVersion?: string;
   serverPackUrl?: string;
   javaImage?: string;
   containerId?: string;
@@ -42,10 +39,6 @@ export interface ServerRecord {
 
 export interface ServerCreateInput {
   name: string;
-  packId?: number;
-  packFileId?: number;
-  packVersion?: string;
-  serverPackUrl?: string;
   javaImage?: string;
   resources: ResourceConfig;
   game: GameConfig;

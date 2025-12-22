@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
 import { Plus } from 'lucide-react';
-import { emptyForm, FormState, GameMode, ServerRecord, ServerStatus } from '../lib/serverTypes';
+import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { StatusBar } from '../components/StatusBar';
 import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal } from '../components/ServerModals';
@@ -17,6 +17,7 @@ export default function Page() {
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
+  const [packFile, setPackFile] = useState<File | null>(null);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -49,34 +50,33 @@ export default function Page() {
 
   const handleCreate = async () => {
     try {
-      const payload = {
-        name: form.name,
-        packId: form.packId ? Number(form.packId) : undefined,
-        packFileId: form.packFileId ? Number(form.packFileId) : undefined,
-        packVersion: form.packVersion || undefined,
-        serverPackUrl: form.serverPackUrl || undefined,
-        javaImage: form.javaImage || undefined,
-        resources: {
-          minRamMb: Number(form.minRamMb),
-          maxRamMb: Number(form.maxRamMb),
-          cpuLimit: form.cpuLimit ? Number(form.cpuLimit) : undefined,
-        },
-        game: {
-          renderDistance: form.renderDistance ? Number(form.renderDistance) : undefined,
-          gameMode: form.gameMode as GameMode,
-          seed: form.seed || undefined,
-        },
-      };
+      if (!packFile) {
+        notify('Server pack required', 'Upload the server pack zip to continue.', 'warning');
+        return;
+      }
+
+      const payload = new FormData();
+      payload.append('file', packFile);
+      payload.append('name', form.name);
+      payload.append('minRamMb', String(form.minRamMb));
+      payload.append('maxRamMb', String(form.maxRamMb));
+      payload.append('gameMode', form.gameMode);
+
+      if (form.javaImage) payload.append('javaImage', form.javaImage);
+      if (form.cpuLimit) payload.append('cpuLimit', form.cpuLimit);
+      if (form.renderDistance) payload.append('renderDistance', String(form.renderDistance));
+      if (form.seed) payload.append('seed', form.seed);
+
       const res = await fetch(`${API_BASE}/servers`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: payload,
       });
       if (!res.ok) throw new Error(await res.text());
       setForm({ ...emptyForm });
+      setPackFile(null);
       setShowCreate(false);
       await fetchServers();
-      notify('Server created', 'Upload or prepare to build the container.', 'success');
+      notify('Server created', 'Server pack uploaded. Now run Prepare.', 'success');
     } catch (err: any) {
       notify('Create failed', err?.message ?? 'Create failed', 'danger');
     }
@@ -167,27 +167,6 @@ export default function Page() {
     }
   };
 
-  const uploadPack = async (id: string, file: File) => {
-    setActionLoading((m) => ({ ...m, [id]: 'upload' }));
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch(`${API_BASE}/servers/${id}/upload-pack`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Upload failed');
-      await fetchServers();
-      notify('Upload complete', 'Server pack uploaded. Now run Prepare.', 'success');
-    } catch (err: any) {
-      notify('Upload failed', err?.message ?? 'Upload failed', 'danger');
-    } finally {
-      setActionLoading((m) => {
-        const next = { ...m };
-        delete next[id];
-        return next;
-      });
-    }
-  };
-
   const statusCounts = useMemo(() => {
     return servers.reduce<Record<ServerStatus, number>>(
       (acc, s) => {
@@ -215,7 +194,7 @@ export default function Page() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <div className="brand text-lg">MC Dash</div>
-            <div className="muted text-sm">CurseForge server manager</div>
+            <div className="muted text-sm">Minecraft server manager</div>
           </div>
           <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>
             New server
@@ -228,14 +207,24 @@ export default function Page() {
           servers={servers}
           actionLoading={actionLoading}
           onAction={invokeAction}
-          onUpload={uploadPack}
           onEdit={setShowEdit}
           onDeleteContainer={deleteContainer}
           onDeleteServer={deleteServer}
         />
       </div>
 
-      <CreateModal open={showCreate} onClose={() => setShowCreate(false)} form={form} setForm={setForm} onCreate={handleCreate} />
+      <CreateModal
+        open={showCreate}
+        onClose={() => {
+          setShowCreate(false);
+          setPackFile(null);
+        }}
+        form={form}
+        setForm={setForm}
+        packFile={packFile}
+        setPackFile={setPackFile}
+        onCreate={handleCreate}
+      />
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
     </div>
   );

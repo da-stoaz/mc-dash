@@ -7,20 +7,19 @@ type Props = {
   servers: ServerRecord[];
   actionLoading: Record<string, string>;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
-  onUpload: (id: string, file: File) => void;
   onEdit: (server: ServerRecord) => void;
   onDeleteContainer: (id: string) => void;
   onDeleteServer: (id: string) => void;
 };
 
-export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit, onDeleteContainer, onDeleteServer }: Props) {
+export function ServerTable({ servers, actionLoading, onAction, onEdit, onDeleteContainer, onDeleteServer }: Props) {
   return (
     <Card shadow="sm" className="bg-white/5 border border-white/10">
       <Table aria-label="Servers" removeWrapper>
         <TableHeader>
           <TableColumn>Name</TableColumn>
           <TableColumn>Status</TableColumn>
-          <TableColumn>Pack</TableColumn>
+          <TableColumn>Server pack</TableColumn>
           <TableColumn>Resources</TableColumn>
           <TableColumn>Game</TableColumn>
           <TableColumn align="end">Actions</TableColumn>
@@ -50,9 +49,13 @@ export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1 max-w-[220px]">
-                  {server.packId && <span>ID {server.packId}</span>}
-                  {server.packVersion && <span className="muted text-xs">v{server.packVersion}</span>}
-                  {server.serverPackUrl && <span className="muted text-xs truncate">{server.serverPackUrl}</span>}
+                  {server.serverPackUrl ? (
+                    <span className="muted text-xs truncate">
+                      {server.serverPackUrl.split(/[\\/]/).pop()}
+                    </span>
+                  ) : (
+                    <span className="muted text-xs">No pack uploaded</span>
+                  )}
                 </div>
               </TableCell>
               <TableCell>
@@ -75,7 +78,6 @@ export function ServerTable({ servers, actionLoading, onAction, onUpload, onEdit
                   server={server}
                   busy={actionLoading[server.id]}
                   onAction={onAction}
-                  onUpload={onUpload}
                   onEdit={() => onEdit(server)}
                   onDeleteContainer={() => onDeleteContainer(server.id)}
                   onDeleteServer={() => onDeleteServer(server.id)}

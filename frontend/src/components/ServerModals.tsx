@@ -7,10 +7,12 @@ type CreateProps = {
   onClose: () => void;
   form: FormState;
   setForm: (f: FormState) => void;
+  packFile: File | null;
+  setPackFile: (file: File | null) => void;
   onCreate: () => void;
 };
 
-export function CreateModal({ open, onClose, form, setForm, onCreate }: CreateProps) {
+export function CreateModal({ open, onClose, form, setForm, packFile, setPackFile, onCreate }: CreateProps) {
   return (
     <Modal isOpen={open} onClose={onClose} placement="center" size="4xl" scrollBehavior="inside">
       <ModalContent className="max-w-5xl">
@@ -19,19 +21,17 @@ export function CreateModal({ open, onClose, form, setForm, onCreate }: CreatePr
             <ModalHeader>Create server</ModalHeader>
             <ModalBody className="space-y-4">
               <Input label="Name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              <Divider />
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input label="CurseForge Mod ID" value={form.packId} onChange={(e) => setForm({ ...form, packId: e.target.value })} />
-                <Input label="File ID (server pack)" value={form.packFileId} onChange={(e) => setForm({ ...form, packFileId: e.target.value })} />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input label="Version label" value={form.packVersion} onChange={(e) => setForm({ ...form, packVersion: e.target.value })} />
-                <Input
-                  label="Server pack URL or local path"
-                  placeholder="https://... or /path/to/pack.zip"
-                  value={form.serverPackUrl}
-                  onChange={(e) => setForm({ ...form, serverPackUrl: e.target.value })}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Server pack zip</div>
+                <input
+                  type="file"
+                  accept=".zip"
+                  onChange={(e) => setPackFile(e.target.files?.[0] ?? null)}
+                  className="text-sm"
                 />
+                <div className="text-xs muted">
+                  {packFile ? `Selected: ${packFile.name}` : 'Required. Use the server pack zip you downloaded.'}
+                </div>
               </div>
               <div>
                 <Input
@@ -111,10 +111,6 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
     if (server) {
       setLocal({
         name: server.name,
-        packId: String(server.packId ?? ''),
-        packFileId: String(server.packFileId ?? ''),
-        packVersion: server.packVersion ?? '',
-        serverPackUrl: server.serverPackUrl ?? '',
         javaImage: server.javaImage ?? '',
         minRamMb: server.resources.minRamMb ?? emptyForm.minRamMb,
         maxRamMb: server.resources.maxRamMb ?? emptyForm.maxRamMb,

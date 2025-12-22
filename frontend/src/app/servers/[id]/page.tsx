@@ -1,6 +1,6 @@
 'use client';
 
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addToast,
   Button,
@@ -28,7 +28,6 @@ import {
   Server,
   Square,
   Trash2,
-  Upload,
   Wand2,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -75,7 +74,6 @@ export default function ServerDetailsPage() {
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
   const [loading, setLoading] = useState(true);
   const serverErrorRef = useRef(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -178,35 +176,6 @@ export default function ServerDetailsPage() {
     }
   };
 
-  const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && server) {
-      uploadPack(server.id, file);
-    }
-    event.target.value = '';
-  };
-
-  const uploadPack = async (id: string, file: File) => {
-    setActionLoading((m) => ({ ...m, [id]: 'upload' }));
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch(`${API_BASE}/servers/${id}/upload-pack`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Upload failed');
-      await fetchServer();
-      notify('Upload complete', 'Server pack uploaded. Now run Prepare.', 'success');
-    } catch (err: any) {
-      notify('Upload failed', err?.message ?? 'Upload failed', 'danger');
-    } finally {
-      setActionLoading((m) => {
-        const next = { ...m };
-        delete next[id];
-        return next;
-      });
-    }
-  };
-
   const deleteContainer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
@@ -247,7 +216,7 @@ export default function ServerDetailsPage() {
 
   const uptimeLabel = useMemo(() => formatUptime(metrics?.uptimeSeconds ?? null), [metrics?.uptimeSeconds]);
   const busy = server ? actionLoading[server.id] : undefined;
-  const hasPack = server ? Boolean(server.serverPackUrl || server.packId) : false;
+  const hasPack = server ? Boolean(server.serverPackUrl) : false;
   const canPrepare = server ? ['stopped', 'exited', 'error'].includes(server.status) && hasPack : false;
   const canStart = server ? ['stopped', 'exited', 'error'].includes(server.status) : false;
   const canStop = server ? ['running', 'starting', 'restarting'].includes(server.status) : false;
@@ -309,7 +278,6 @@ export default function ServerDetailsPage() {
           <div className="text-xs muted">Lifecycle, config, and maintenance actions</div>
         </CardHeader>
         <CardBody className="space-y-4">
-          <input ref={fileInputRef} type="file" accept=".zip" className="hidden" onChange={handleFileSelect} />
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="space-y-2">
               <div className="text-xs uppercase tracking-wide muted">Lifecycle</div>
@@ -358,15 +326,6 @@ export default function ServerDetailsPage() {
             <div className="space-y-2">
               <div className="text-xs uppercase tracking-wide muted">Config</div>
               <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="flat"
-                  startContent={<Upload size={14} />}
-                  onPress={() => fileInputRef.current?.click()}
-                  isDisabled={controlsDisabled || busy === 'upload'}
-                >
-                  {busy === 'upload' ? 'Uploading...' : 'Upload pack'}
-                </Button>
                 <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
                   Edit config
                 </Button>
@@ -409,11 +368,10 @@ export default function ServerDetailsPage() {
           </CardHeader>
           <CardBody className="space-y-4 text-sm">
             <div className="space-y-2">
-              <div className="font-semibold">Pack</div>
-              <div className="muted">Mod ID: {server.packId ?? '-'}</div>
-              <div className="muted">File ID: {server.packFileId ?? '-'}</div>
-              <div className="muted">Version: {server.packVersion ?? '-'}</div>
-              <div className="muted break-all">Server pack: {server.serverPackUrl ?? '-'}</div>
+              <div className="font-semibold">Server pack</div>
+              <div className="muted break-all">
+                {server.serverPackUrl ? server.serverPackUrl.split(/[\\/]/).pop() : 'Not uploaded'}
+              </div>
               <div className="muted">Java image: {server.javaImage ?? 'Auto'}</div>
               <div className="muted">Container: {server.containerId ?? '-'}</div>
             </div>

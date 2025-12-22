@@ -12,9 +12,6 @@ export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
 export type ServerRecord = {
   id: string;
   name: string;
-  packId?: number;
-  packFileId?: number;
-  packVersion?: string;
   serverPackUrl?: string;
   javaImage?: string;
   status: ServerStatus;
@@ -41,10 +38,6 @@ export type ServerMetrics = {
 
 export type FormState = {
   name: string;
-  packId: string;
-  packFileId: string;
-  packVersion: string;
-  serverPackUrl: string;
   javaImage: string;
   minRamMb: number;
   maxRamMb: number;
@@ -56,10 +49,6 @@ export type FormState = {
 
 export const emptyForm: FormState = {
   name: '',
-  packId: '',
-  packFileId: '',
-  packVersion: '',
-  serverPackUrl: '',
   javaImage: '',
   minRamMb: 4096,
   maxRamMb: 6144,

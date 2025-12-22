@@ -4,7 +4,6 @@ import AdmZip from 'adm-zip';
 import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
-import { downloadServerPack, resolveServerPack } from './curseforgeService';
 import { dockerService } from './dockerService';
 import fsSync from 'fs';
 
@@ -84,6 +83,34 @@ async function findStartScript(root: string): Promise<string | null> {
     }
   }
   return fallback;
+}
+
+async function findServerJar(workingDir: string): Promise<string | null> {
+  const entries = await fs.readdir(workingDir, { withFileTypes: true });
+  const jarFiles = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.jar'));
+  const serverJar =
+    jarFiles.find((entry) => entry.name.toLowerCase() === 'server.jar') ??
+    jarFiles.find((entry) => entry.name.toLowerCase().includes('server'));
+  return serverJar ? path.join(workingDir, serverJar.name) : null;
+}
+
+async function ensureStartScript(workingDir: string): Promise<string | null> {
+  const existing = await findStartScript(workingDir);
+  if (existing) return existing;
+
+  const serverJar = await findServerJar(workingDir);
+  if (!serverJar) return null;
+
+  const scriptPath = path.join(workingDir, 'start.sh');
+  const command = `java -jar "${path.basename(serverJar)}" nogui`;
+  const script = `#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+${command}
+`;
+  await fs.writeFile(scriptPath, script, 'utf8');
+  logger.info({ scriptPath }, 'Generated start.sh from server.jar');
+  return scriptPath;
 }
 
 async function writeEula(workingDir: string) {
@@ -174,6 +201,27 @@ async function applyVariablesTxt(workingDir: string, server: ServerRecord): Prom
   }
 }
 
+async function applyUserJvmArgs(workingDir: string, server: ServerRecord) {
+  const argsPath = path.join(workingDir, 'user_jvm_args.txt');
+  if (!(await pathExists(argsPath))) return;
+  if (!server.resources.minRamMb || !server.resources.maxRamMb) return;
+
+  try {
+    const content = await fs.readFile(argsPath, 'utf8');
+    const lines = content.split('\n');
+    const filtered = lines.filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return true;
+      return !(trimmed.startsWith('-Xms') || trimmed.startsWith('-Xmx'));
+    });
+    filtered.push(`-Xms${server.resources.minRamMb}M`);
+    filtered.push(`-Xmx${server.resources.maxRamMb}M`);
+    await fs.writeFile(argsPath, filtered.join('\n') + '\n');
+  } catch (err) {
+    logger.warn({ err }, 'user_jvm_args.txt not updated (file may be missing)');
+  }
+}
+
 async function ensureZipExtracted(zipPath: string, packDir: string): Promise<string> {
   const zip = new AdmZip(zipPath);
   zip.extractAllTo(packDir, true);
@@ -204,32 +252,25 @@ function chooseJavaImage(serverJavaImage?: string, recommended?: string): string
   return config.javaImage;
 }
 
-function isProbablyLocalPath(input: string) {
-  return (
-    input.startsWith('/') ||
-    input.startsWith('file://') ||
-    /^[A-Za-z]:[\\/]/.test(input) // Windows drive letter
-  );
-}
-
-async function getServerPackArchive(downloadUrl: string, downloadsDir: string): Promise<string> {
-  if (isProbablyLocalPath(downloadUrl)) {
-    const filePath = downloadUrl.startsWith('file://') ? new URL(downloadUrl).pathname : downloadUrl;
-    const resolved = path.resolve(filePath);
-    if (!fsSync.existsSync(resolved)) {
-      throw new Error(`Local server pack file not found at ${resolved}`);
-    }
-    const dest = path.join(downloadsDir, path.basename(resolved));
-    await fs.copyFile(resolved, dest);
-    logger.info({ dest }, 'Copied local server pack file');
-    return dest;
+async function getServerPackArchive(serverPackUrl: string, downloadsDir: string): Promise<string> {
+  if (serverPackUrl.startsWith('http://') || serverPackUrl.startsWith('https://')) {
+    throw new Error('Remote URLs are not supported. Upload the server pack zip instead.');
   }
-  return downloadServerPack(downloadUrl, downloadsDir);
+
+  const filePath = serverPackUrl.startsWith('file://') ? new URL(serverPackUrl).pathname : serverPackUrl;
+  const resolved = path.resolve(filePath);
+  if (!fsSync.existsSync(resolved)) {
+    throw new Error(`Server pack file not found at ${resolved}`);
+  }
+  const dest = path.join(downloadsDir, path.basename(resolved));
+  await fs.copyFile(resolved, dest);
+  logger.info({ dest }, 'Copied server pack file');
+  return dest;
 }
 
 export async function prepareServer(server: ServerRecord): Promise<{ containerId: string; script: string }> {
-  if (!server.packId && !server.serverPackUrl) {
-    throw new Error('Server is missing pack information (packId or serverPackUrl)');
+  if (!server.serverPackUrl) {
+    throw new Error('Server is missing an uploaded server pack');
   }
 
   const serverRoot = path.join(config.dataRoot, 'servers', server.id);
@@ -240,18 +281,7 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   await ensureDir(downloadsDir);
   await ensureDir(packDir);
 
-  // Resolve server pack
-  let downloadUrl = server.serverPackUrl;
-  if (!downloadUrl) {
-    const resolved = await resolveServerPack(server.packId as number, server.packFileId);
-    if (!resolved?.downloadUrl) {
-      throw new Error('Could not resolve a server pack with a download URL for this modpack');
-    }
-    downloadUrl = resolved.downloadUrl;
-    logger.info({ serverId: server.id, packFileId: resolved.id }, 'Resolved server pack');
-  }
-
-  const zipPath = await getServerPackArchive(downloadUrl, downloadsDir);
+  const zipPath = await getServerPackArchive(server.serverPackUrl, downloadsDir);
   await cleanPackDir(packDir);
   await ensureZipExtracted(zipPath, packDir);
 
@@ -259,10 +289,11 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   await writeEula(workingDir);
   await applyServerProperties(workingDir, server);
   const varsResult = await applyVariablesTxt(workingDir, server);
+  await applyUserJvmArgs(workingDir, server);
 
-  const scriptPath = await findStartScript(workingDir);
+  const scriptPath = await ensureStartScript(workingDir);
   if (!scriptPath) {
-    throw new Error('Could not find a start script (.sh) inside the server pack');
+    throw new Error('Could not find a start script or server.jar inside the server pack');
   }
   await fs.chmod(scriptPath, 0o755);
 
@@ -299,4 +330,5 @@ export async function applyConfigFiles(server: ServerRecord): Promise<void> {
   const workingDir = await detectWorkingDir(packDir);
   await applyServerProperties(workingDir, server);
   await applyVariablesTxt(workingDir, server);
+  await applyUserJvmArgs(workingDir, server);
 }

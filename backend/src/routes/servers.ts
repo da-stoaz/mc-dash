@@ -10,30 +10,47 @@ import { logger } from '../logger';
 import { applyConfigFiles, prepareServer } from '../services/prepareService';
 import { config } from '../config';
 
+const resourceSchema = z.object({
+  minRamMb: z.number().int().positive(),
+  maxRamMb: z.number().int().positive(),
+  cpuLimit: z.number().positive().optional(),
+});
+
+const gameSchema = z.object({
+  renderDistance: z.number().int().min(2).max(32).optional(),
+  gameMode: z.enum(['survival', 'creative', 'adventure', 'spectator']).optional(),
+  seed: z.string().optional(),
+});
+
+const emptyToUndefined = (value: unknown) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : undefined;
+};
+
+const parseNumber = (value: unknown) => {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    return Number(value);
+  }
+  return undefined;
+};
+
 const createServerSchema = z.object({
   name: z.string().min(1),
-  packId: z.number().int().optional(),
-  packFileId: z.number().int().optional(),
-  packVersion: z.string().optional(),
-  serverPackUrl: z.string().optional(),
-  javaImage: z.string().optional(),
-  resources: z.object({
-    minRamMb: z.number().int().positive(),
-    maxRamMb: z.number().int().positive(),
-    cpuLimit: z.number().positive().optional(),
-  }),
-  game: z.object({
-    renderDistance: z.number().int().min(2).max(32).optional(),
-    gameMode: z.enum(['survival', 'creative', 'adventure', 'spectator']).optional(),
-    seed: z.string().optional(),
-  }),
+  javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
+  minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
+  renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
+  gameMode: z.preprocess(emptyToUndefined, z.enum(['survival', 'creative', 'adventure', 'spectator']).optional()),
+  seed: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
 const updateServerSchema = z.object({
-  resources: createServerSchema.shape.resources.optional(),
-  game: createServerSchema.shape.game.optional(),
+  resources: resourceSchema.optional(),
+  game: gameSchema.optional(),
   status: z.enum(['creating', 'stopped', 'running', 'starting', 'stopping', 'restarting', 'exited', 'error']).optional(),
-  serverPackUrl: z.string().optional(),
   javaImage: z.string().optional().nullable(),
 });
 
@@ -72,12 +89,43 @@ router.get('/:id', (req, res) => {
   res.json(server);
 });
 
-router.post('/', (req, res, next) => {
+router.post('/', upload.single('file'), async (req, res, next) => {
+  let createdId: string | null = null;
   try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Server pack zip required (field "file")' });
+    }
+
     const parsed = createServerSchema.parse(req.body);
-    const server = serverStore.create(parsed);
-    res.status(201).json(server);
+    const server = serverStore.create({
+      name: parsed.name,
+      javaImage: parsed.javaImage,
+      resources: {
+        minRamMb: parsed.minRamMb,
+        maxRamMb: parsed.maxRamMb,
+        cpuLimit: parsed.cpuLimit,
+      },
+      game: {
+        renderDistance: parsed.renderDistance,
+        gameMode: parsed.gameMode,
+        seed: parsed.seed,
+      },
+    });
+    createdId = server.id;
+
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
+    await fs.promises.rename(req.file.path, target);
+
+    const updated = serverStore.update(server.id, { serverPackUrl: target, status: 'stopped' }) ?? server;
+    res.status(201).json(updated);
   } catch (err) {
+    if (createdId) {
+      serverStore.delete(createdId);
+    }
+    if (req.file) {
+      fs.promises.rm(req.file.path, { force: true }).catch(() => {});
+    }
     next(err);
   }
 });
@@ -219,8 +267,8 @@ router.post('/:id/prepare', async (req, res) => {
   if (server.status === 'running' || server.status === 'starting' || server.status === 'restarting') {
     return res.status(409).json({ error: 'Stop the server before preparing a new container' });
   }
-  if (!server.packId && !server.serverPackUrl) {
-    return res.status(400).json({ error: 'Server entry is missing CurseForge pack info (packId or serverPackUrl)' });
+  if (!server.serverPackUrl) {
+    return res.status(400).json({ error: 'Server entry is missing an uploaded server pack' });
   }
 
   try {
@@ -265,25 +313,6 @@ router.delete('/:id', async (req, res) => {
   const removed = serverStore.delete(server.id);
   if (!removed) return notFound(res);
   res.json({ ok: true });
-});
-
-router.post('/:id/upload-pack', upload.single('file'), (req, res) => {
-  const server = serverStore.get(req.params.id);
-  if (!server) return notFound(res);
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded. Use field name "file".' });
-  }
-
-  const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
-  fs.rename(req.file.path, target, (err) => {
-    if (err) {
-      logger.error({ err }, 'Failed to store upload');
-      return res.status(500).json({ error: 'Failed to store uploaded file' });
-    }
-    const updated = serverStore.update(server.id, { serverPackUrl: target, status: 'stopped' });
-    res.json(updated);
-  });
 });
 
 export default router;

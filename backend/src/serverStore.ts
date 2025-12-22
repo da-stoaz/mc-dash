@@ -11,9 +11,6 @@ db.prepare(
   `CREATE TABLE IF NOT EXISTS servers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    packId INTEGER,
-    packFileId INTEGER,
-    packVersion TEXT,
     serverPackUrl TEXT,
     javaImage TEXT,
     containerId TEXT,
@@ -38,9 +35,6 @@ if (!columns.find((col) => col.name === 'javaImage')) {
 type ServerRow = {
   id: string;
   name: string;
-  packId?: number;
-  packFileId?: number;
-  packVersion?: string;
   serverPackUrl?: string;
   javaImage?: string | null;
   containerId?: string | null;
@@ -66,9 +60,6 @@ function mapRow(row: ServerRow): ServerRecord {
   return {
     id: row.id,
     name: row.name,
-    packId: row.packId,
-    packFileId: row.packFileId,
-    packVersion: row.packVersion,
     serverPackUrl: row.serverPackUrl,
     javaImage: row.javaImage ?? undefined,
     containerId: row.containerId ?? undefined,
@@ -103,19 +94,16 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, packId, packFileId, packVersion, serverPackUrl, javaImage, containerId, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, serverPackUrl, javaImage, containerId, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @packId, @packFileId, @packVersion, @serverPackUrl, @javaImage, NULL, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @serverPackUrl, @javaImage, NULL, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
     stmt.run({
       id,
       name: input.name,
-      packId: input.packId ?? null,
-      packFileId: input.packFileId ?? null,
-      packVersion: input.packVersion ?? null,
-      serverPackUrl: input.serverPackUrl ?? null,
+      serverPackUrl: null,
       javaImage: input.javaImage ?? null,
       status: defaultStatus,
       resources: JSON.stringify(input.resources),

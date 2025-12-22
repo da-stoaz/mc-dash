@@ -21,7 +21,6 @@ const defaultDockerSocketPath = (() => {
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   sqlitePath: process.env.SQLITE_PATH ? path.resolve(process.cwd(), process.env.SQLITE_PATH) : defaultSqlitePath,
-  curseforgeApiKey: process.env.CURSEFORGE_API_KEY ?? '',
   dockerSocketPath: defaultDockerSocketPath,
   dockerHost: process.env.DOCKER_HOST,
   dockerTlsVerify: process.env.DOCKER_TLS_VERIFY,

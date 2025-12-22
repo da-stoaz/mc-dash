@@ -1,4 +1,4 @@
-import { ChangeEvent, useState } from 'react';
+import { useState } from 'react';
 import {
   Button,
   Modal,
@@ -9,7 +9,6 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  Tooltip,
 } from '@heroui/react';
 import {
   MoreHorizontal,
@@ -18,7 +17,6 @@ import {
   RefreshCw,
   Square,
   Trash2,
-  Upload,
   Wand2,
 } from 'lucide-react';
 import { ServerRecord } from '../lib/serverTypes';
@@ -27,32 +25,22 @@ type Props = {
   server: ServerRecord;
   busy?: string;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
-  onUpload: (id: string, file: File) => void;
   onEdit: () => void;
   onDeleteContainer: () => void;
   onDeleteServer: () => void;
 };
 
-export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDeleteContainer, onDeleteServer }: Props) {
+export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContainer, onDeleteServer }: Props) {
   const disabled = !!busy;
   const canStart = ['stopped', 'exited', 'error'].includes(server.status);
   const canStop = ['running', 'starting', 'restarting'].includes(server.status);
   const canRestart = server.status === 'running';
-  const hasPack = Boolean(server.serverPackUrl || server.packId);
+  const hasPack = Boolean(server.serverPackUrl);
   const canPrepare = ['stopped', 'exited', 'error'].includes(server.status) && hasPack;
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete' | 'deleteServer'>(null);
 
-  const handleFile = (evt: ChangeEvent<HTMLInputElement>) => {
-    const file = evt.target.files?.[0];
-    if (file) {
-      onUpload(server.id, file);
-      evt.target.value = '';
-    }
-  };
-
   return (
     <div className="flex flex-wrap gap-2 justify-end">
-      <input type="file" accept=".zip" className="hidden" id={`file-${server.id}`} onChange={handleFile} />
       <Button
         size="sm"
         color="warning"
@@ -109,18 +97,6 @@ export function ActionButtons({ server, busy, onAction, onUpload, onEdit, onDele
         </PopoverTrigger>
         <PopoverContent>
           <div className="p-3 space-y-2 text-sm min-w-[160px]">
-            <Tooltip content="Upload server pack zip">
-              <Button
-                size="sm"
-                variant="flat"
-                startContent={<Upload size={16} />}
-                onPress={() => document.getElementById(`file-${server.id}`)?.click()}
-                isDisabled={disabled || busy === 'upload'}
-                fullWidth
-              >
-                {busy === 'upload' ? 'Uploading…' : 'Upload pack'}
-              </Button>
-            </Tooltip>
             <Button
               size="sm"
               color="danger"
