@@ -32,9 +32,9 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { EditModal } from '../../../components/ServerModals';
+import { EditModal, FirewallModal } from '../../../components/ServerModals';
 import { LogStream } from '../../../components/LogStream';
-import { FormState, ServerMetrics, ServerRecord, statusColor, statusLabel } from '../../../lib/serverTypes';
+import { FirewallState, FormState, ServerMetrics, ServerRecord, statusColor, statusLabel } from '../../../lib/serverTypes';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -133,6 +133,7 @@ export default function ServerDetailsPage() {
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
+  const [showFirewall, setShowFirewall] = useState<ServerRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const serverErrorRef = useRef(false);
 
@@ -228,6 +229,34 @@ export default function ServerDetailsPage() {
     }
   };
 
+  const handleFirewallUpdate = async (id: string, changes: FirewallState) => {
+    try {
+      const toList = (value: string) =>
+        value
+          .split('\n')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      const res = await fetch(`${API_BASE}/servers/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          whitelistEnabled: changes.whitelistEnabled,
+          blacklistEnabled: changes.blacklistEnabled,
+          ipBlacklistEnabled: changes.ipBlacklistEnabled,
+          whitelist: toList(changes.whitelist),
+          blacklist: toList(changes.blacklist),
+          ipBlacklist: toList(changes.ipBlacklist),
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await fetchServer();
+      setShowFirewall(null);
+      notify('Firewall updated', 'Access lists saved. Restart if required.', 'success');
+    } catch (err: any) {
+      notify('Firewall update failed', err?.message ?? 'Update failed', 'danger');
+    }
+  };
+
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
@@ -293,6 +322,12 @@ export default function ServerDetailsPage() {
   const canStop = server ? ['running', 'starting', 'restarting'].includes(server.status) : false;
   const canRestart = server ? server.status === 'running' : false;
   const controlsDisabled = !server || !!busy;
+  const whitelistCount = server?.whitelist?.length ?? 0;
+  const blacklistCount = server?.blacklist?.length ?? 0;
+  const ipBlacklistCount = server?.ipBlacklist?.length ?? 0;
+  const whitelistEnabled = server?.whitelistEnabled ?? whitelistCount > 0;
+  const blacklistEnabled = server?.blacklistEnabled ?? blacklistCount > 0;
+  const ipBlacklistEnabled = server?.ipBlacklistEnabled ?? ipBlacklistCount > 0;
 
   if (loading && !server) {
     return (
@@ -444,6 +479,32 @@ export default function ServerDetailsPage() {
         </CardBody>
       </Card>
 
+      <Card className="bg-white/5 border border-white/10">
+        <CardHeader className="flex items-center justify-between">
+          <div className="text-lg font-semibold">Firewall & access</div>
+          <Button size="sm" variant="bordered" onPress={() => setShowFirewall(server)}>
+            Manage firewall
+          </Button>
+        </CardHeader>
+        <CardBody className="grid gap-4 md:grid-cols-3 text-sm">
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs uppercase tracking-wide muted">Whitelist</div>
+            <div className="mt-2 text-lg font-semibold">{whitelistEnabled ? 'Enabled' : 'Disabled'}</div>
+            <div className="text-xs muted">{whitelistCount} allowed</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs uppercase tracking-wide muted">Player blacklist</div>
+            <div className="mt-2 text-lg font-semibold">{blacklistEnabled ? 'Enabled' : 'Disabled'}</div>
+            <div className="text-xs muted">{blacklistCount} blocked</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs uppercase tracking-wide muted">IP blacklist</div>
+            <div className="mt-2 text-lg font-semibold">{ipBlacklistEnabled ? 'Enabled' : 'Disabled'}</div>
+            <div className="text-xs muted">{ipBlacklistCount} blocked</div>
+          </div>
+        </CardBody>
+      </Card>
+
       <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
         <Card className="bg-white/5 border border-white/10">
           <CardHeader className="flex items-center gap-2 text-lg font-semibold">
@@ -560,6 +621,7 @@ export default function ServerDetailsPage() {
       </Card>
 
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
+      <FirewallModal server={showFirewall} onClose={() => setShowFirewall(null)} onSave={handleFirewallUpdate} />
 
       <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
         <ModalContent>

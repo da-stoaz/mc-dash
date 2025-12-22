@@ -14,6 +14,12 @@ db.prepare(
     serverPackUrl TEXT,
     javaImage TEXT,
     containerId TEXT,
+    whitelist TEXT,
+    blacklist TEXT,
+    ipBlacklist TEXT,
+    whitelistEnabled INTEGER NOT NULL DEFAULT 0,
+    blacklistEnabled INTEGER NOT NULL DEFAULT 0,
+    ipBlacklistEnabled INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     resources TEXT NOT NULL,
     game TEXT NOT NULL,
@@ -31,6 +37,24 @@ if (!columns.find((col) => col.name === 'restartRequired')) {
 if (!columns.find((col) => col.name === 'javaImage')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN javaImage TEXT`).run();
 }
+if (!columns.find((col) => col.name === 'whitelist')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN whitelist TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'blacklist')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN blacklist TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'ipBlacklist')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN ipBlacklist TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'whitelistEnabled')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN whitelistEnabled INTEGER NOT NULL DEFAULT 0`).run();
+}
+if (!columns.find((col) => col.name === 'blacklistEnabled')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN blacklistEnabled INTEGER NOT NULL DEFAULT 0`).run();
+}
+if (!columns.find((col) => col.name === 'ipBlacklistEnabled')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN ipBlacklistEnabled INTEGER NOT NULL DEFAULT 0`).run();
+}
 
 type ServerRow = {
   id: string;
@@ -38,6 +62,12 @@ type ServerRow = {
   serverPackUrl?: string;
   javaImage?: string | null;
   containerId?: string | null;
+  whitelist?: string | null;
+  blacklist?: string | null;
+  ipBlacklist?: string | null;
+  whitelistEnabled?: number | null;
+  blacklistEnabled?: number | null;
+  ipBlacklistEnabled?: number | null;
   status: ServerStatus;
   resources: string;
   game: string;
@@ -56,13 +86,35 @@ function parseJsonField<T>(value: string): T {
   }
 }
 
+function parseStringList(value?: string | null): string[] | undefined {
+  if (value == null) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((entry) => typeof entry === 'string') as string[];
+    }
+  } catch (err) {
+    logger.error({ err }, 'Failed to parse string list column');
+  }
+  return [];
+}
+
 function mapRow(row: ServerRow): ServerRecord {
+  const whitelist = parseStringList(row.whitelist);
+  const blacklist = parseStringList(row.blacklist);
+  const ipBlacklist = parseStringList(row.ipBlacklist);
   return {
     id: row.id,
     name: row.name,
     serverPackUrl: row.serverPackUrl,
     javaImage: row.javaImage ?? undefined,
     containerId: row.containerId ?? undefined,
+    whitelist,
+    blacklist,
+    ipBlacklist,
+    whitelistEnabled: row.whitelistEnabled != null ? row.whitelistEnabled === 1 : (whitelist?.length ?? 0) > 0,
+    blacklistEnabled: row.blacklistEnabled != null ? row.blacklistEnabled === 1 : (blacklist?.length ?? 0) > 0,
+    ipBlacklistEnabled: row.ipBlacklistEnabled != null ? row.ipBlacklistEnabled === 1 : (ipBlacklist?.length ?? 0) > 0,
     status: row.status,
     resources: parseJsonField<ResourceConfig>(row.resources),
     game: parseJsonField<GameConfig>(row.game),
@@ -94,17 +146,27 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, serverPackUrl, javaImage, containerId, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, serverPackUrl, javaImage, containerId, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @serverPackUrl, @javaImage, NULL, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @serverPackUrl, @javaImage, NULL, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
+
+    const whitelistEnabled = input.whitelistEnabled ?? (input.whitelist?.length ?? 0) > 0;
+    const blacklistEnabled = input.blacklistEnabled ?? (input.blacklist?.length ?? 0) > 0;
+    const ipBlacklistEnabled = input.ipBlacklistEnabled ?? (input.ipBlacklist?.length ?? 0) > 0;
 
     stmt.run({
       id,
       name: input.name,
       serverPackUrl: null,
       javaImage: input.javaImage ?? null,
+      whitelist: input.whitelist !== undefined ? JSON.stringify(input.whitelist) : null,
+      blacklist: input.blacklist !== undefined ? JSON.stringify(input.blacklist) : null,
+      ipBlacklist: input.ipBlacklist !== undefined ? JSON.stringify(input.ipBlacklist) : null,
+      whitelistEnabled: whitelistEnabled ? 1 : 0,
+      blacklistEnabled: blacklistEnabled ? 1 : 0,
+      ipBlacklistEnabled: ipBlacklistEnabled ? 1 : 0,
       status: defaultStatus,
       resources: JSON.stringify(input.resources),
       game: JSON.stringify(input.game),
@@ -143,6 +205,24 @@ export class ServerStore {
     }
     if (updates.javaImage !== undefined) {
       next.javaImage = updates.javaImage ?? null;
+    }
+    if (updates.whitelist !== undefined) {
+      next.whitelist = JSON.stringify(updates.whitelist);
+    }
+    if (updates.blacklist !== undefined) {
+      next.blacklist = JSON.stringify(updates.blacklist);
+    }
+    if (updates.ipBlacklist !== undefined) {
+      next.ipBlacklist = JSON.stringify(updates.ipBlacklist);
+    }
+    if (updates.whitelistEnabled !== undefined) {
+      next.whitelistEnabled = updates.whitelistEnabled ? 1 : 0;
+    }
+    if (updates.blacklistEnabled !== undefined) {
+      next.blacklistEnabled = updates.blacklistEnabled ? 1 : 0;
+    }
+    if (updates.ipBlacklistEnabled !== undefined) {
+      next.ipBlacklistEnabled = updates.ipBlacklistEnabled ? 1 : 0;
     }
     if (updates.restartRequired !== undefined) {
       next.restartRequired = updates.restartRequired ? 1 : 0;

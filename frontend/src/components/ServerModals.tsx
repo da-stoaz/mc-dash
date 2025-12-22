@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Button, Divider, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Select, SelectItem } from '@heroui/react';
-import { FormState, GameMode, ServerRecord, emptyForm } from '../lib/serverTypes';
+import {
+  Button,
+  Divider,
+  Input,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  Select,
+  SelectItem,
+  Switch,
+  Textarea,
+} from '@heroui/react';
+import { FirewallState, FormState, GameMode, ServerRecord, emptyForm } from '../lib/serverTypes';
 
 type CreateProps = {
   open: boolean;
@@ -179,6 +192,105 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                 value={local.javaImage}
                 onChange={(e) => setLocal({ ...local, javaImage: e.target.value })}
               />
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" onPress={onModalClose}>
+                Cancel
+              </Button>
+              <Button
+                color="primary"
+                onPress={() => {
+                  onSave(server.id, local);
+                  onModalClose();
+                }}
+              >
+                Save
+              </Button>
+            </ModalFooter>
+          </>
+        )}
+      </ModalContent>
+    </Modal>
+  );
+}
+
+type FirewallProps = {
+  server: ServerRecord | null;
+  onClose: () => void;
+  onSave: (id: string, changes: FirewallState) => void;
+};
+
+export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
+  const [local, setLocal] = useState<FirewallState | null>(null);
+
+  useEffect(() => {
+    if (server) {
+      const whitelist = server.whitelist ?? [];
+      const blacklist = server.blacklist ?? [];
+      const ipBlacklist = server.ipBlacklist ?? [];
+      setLocal({
+        whitelistEnabled: server.whitelistEnabled ?? whitelist.length > 0,
+        whitelist: whitelist.join('\n'),
+        blacklistEnabled: server.blacklistEnabled ?? blacklist.length > 0,
+        blacklist: blacklist.join('\n'),
+        ipBlacklistEnabled: server.ipBlacklistEnabled ?? ipBlacklist.length > 0,
+        ipBlacklist: ipBlacklist.join('\n'),
+      });
+    } else {
+      setLocal(null);
+    }
+  }, [server]);
+
+  if (!server || !local) return null;
+
+  return (
+    <Modal isOpen onClose={onClose} placement="center" size="4xl" scrollBehavior="inside">
+      <ModalContent className="max-w-5xl">
+        {(onModalClose) => (
+          <>
+            <ModalHeader>Firewall settings</ModalHeader>
+            <ModalBody className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <Switch isSelected={local.whitelistEnabled} onValueChange={(value) => setLocal({ ...local, whitelistEnabled: value })}>
+                  Enable whitelist
+                </Switch>
+                <Switch isSelected={local.blacklistEnabled} onValueChange={(value) => setLocal({ ...local, blacklistEnabled: value })}>
+                  Enable player blacklist
+                </Switch>
+                <Switch isSelected={local.ipBlacklistEnabled} onValueChange={(value) => setLocal({ ...local, ipBlacklistEnabled: value })}>
+                  Enable IP blacklist
+                </Switch>
+              </div>
+
+              <Divider />
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <Textarea
+                  label="Whitelist"
+                  placeholder="One name or UUID per line"
+                  minRows={6}
+                  value={local.whitelist}
+                  onChange={(e) => setLocal({ ...local, whitelist: e.target.value })}
+                  isDisabled={!local.whitelistEnabled}
+                />
+                <Textarea
+                  label="Player blacklist"
+                  placeholder="One name or UUID per line"
+                  minRows={6}
+                  value={local.blacklist}
+                  onChange={(e) => setLocal({ ...local, blacklist: e.target.value })}
+                  isDisabled={!local.blacklistEnabled}
+                />
+              </div>
+              <Textarea
+                label="IP blacklist"
+                placeholder="One IP per line"
+                minRows={4}
+                value={local.ipBlacklist}
+                onChange={(e) => setLocal({ ...local, ipBlacklist: e.target.value })}
+                isDisabled={!local.ipBlacklistEnabled}
+              />
+              <div className="text-xs muted">Use UUIDs for online-mode servers. Names use offline UUIDs.</div>
             </ModalBody>
             <ModalFooter>
               <Button variant="light" onPress={onModalClose}>

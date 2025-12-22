@@ -6,6 +6,7 @@ import { logger } from '../logger';
 import { ServerRecord } from '../types';
 import { dockerService } from './dockerService';
 import fsSync from 'fs';
+import crypto from 'crypto';
 
 const PRESERVE_DIRS = ['world', 'world_nether', 'world_the_end'];
 
@@ -147,6 +148,11 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
   if (server.game.seed) {
     props['level-seed'] = server.game.seed;
   }
+  if (server.whitelistEnabled !== undefined || server.whitelist !== undefined) {
+    const enabled = server.whitelistEnabled ?? (server.whitelist?.length ?? 0) > 0;
+    props['white-list'] = enabled ? 'true' : 'false';
+    props['enforce-whitelist'] = enabled ? 'true' : 'false';
+  }
 
   const lines = Object.entries(props).map(([key, value]) => `${key}=${value}`);
   await fs.writeFile(propsPath, lines.join('\n') + '\n');
@@ -222,6 +228,97 @@ async function applyUserJvmArgs(workingDir: string, server: ServerRecord) {
   }
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function formatUuid(bytes: Buffer) {
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function offlineUuid(name: string) {
+  const hash = crypto.createHash('md5').update(`OfflinePlayer:${name}`, 'utf8').digest();
+  hash[6] = (hash[6] & 0x0f) | 0x30;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  return formatUuid(hash);
+}
+
+function parseAccessEntry(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  let name = trimmed;
+  let uuid: string | null = null;
+
+  if (trimmed.includes(':')) {
+    const [first, second] = trimmed.split(':').map((part) => part.trim());
+    if (isUuid(first)) {
+      uuid = first;
+      name = second || first;
+    } else if (isUuid(second)) {
+      uuid = second;
+      name = first || second;
+    }
+  }
+
+  if (!uuid && isUuid(trimmed)) {
+    uuid = trimmed;
+    name = trimmed;
+  }
+
+  if (!uuid) {
+    uuid = offlineUuid(name);
+  }
+
+  return { uuid, name };
+}
+
+async function applyAccessLists(workingDir: string, server: ServerRecord) {
+  const whitelist = server.whitelist?.map((entry) => entry.trim()).filter(Boolean);
+  const blacklist = server.blacklist?.map((entry) => entry.trim()).filter(Boolean);
+  const ipBlacklist = server.ipBlacklist?.map((entry) => entry.trim()).filter(Boolean);
+  const isEntry = (entry: { uuid: string; name: string } | null): entry is { uuid: string; name: string } => entry !== null;
+  const now = new Date().toISOString();
+  const whitelistEnabled = server.whitelistEnabled ?? (whitelist?.length ?? 0) > 0;
+  const blacklistEnabled = server.blacklistEnabled ?? (blacklist?.length ?? 0) > 0;
+  const ipBlacklistEnabled = server.ipBlacklistEnabled ?? (ipBlacklist?.length ?? 0) > 0;
+
+  if (server.whitelist !== undefined || server.whitelistEnabled !== undefined) {
+    const entries = whitelistEnabled ? (whitelist ?? []).map(parseAccessEntry).filter(isEntry) : [];
+    const whitelistPath = path.join(workingDir, 'whitelist.json');
+    await fs.writeFile(whitelistPath, JSON.stringify(entries, null, 2) + '\n');
+  }
+
+  if (server.blacklist !== undefined || server.blacklistEnabled !== undefined) {
+    const entries = blacklistEnabled
+      ? (blacklist ?? []).map(parseAccessEntry).filter(isEntry).map((entry) => ({
+          ...entry,
+          created: now,
+          source: 'mc-dash',
+          expires: 'forever',
+          reason: 'Banned via MC Dash',
+        }))
+      : [];
+    const blacklistPath = path.join(workingDir, 'banned-players.json');
+    await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
+  }
+
+  if (server.ipBlacklist !== undefined || server.ipBlacklistEnabled !== undefined) {
+    const entries = ipBlacklistEnabled
+      ? (ipBlacklist ?? []).map((ip) => ({
+          ip,
+          created: now,
+          source: 'mc-dash',
+          expires: 'forever',
+          reason: 'Banned via MC Dash',
+        }))
+      : [];
+    const blacklistPath = path.join(workingDir, 'banned-ips.json');
+    await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
+  }
+}
+
 async function ensureZipExtracted(zipPath: string, packDir: string): Promise<string> {
   const zip = new AdmZip(zipPath);
   zip.extractAllTo(packDir, true);
@@ -290,6 +387,7 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   await applyServerProperties(workingDir, server);
   const varsResult = await applyVariablesTxt(workingDir, server);
   await applyUserJvmArgs(workingDir, server);
+  await applyAccessLists(workingDir, server);
 
   const scriptPath = await ensureStartScript(workingDir);
   if (!scriptPath) {
@@ -331,4 +429,5 @@ export async function applyConfigFiles(server: ServerRecord): Promise<void> {
   await applyServerProperties(workingDir, server);
   await applyVariablesTxt(workingDir, server);
   await applyUserJvmArgs(workingDir, server);
+  await applyAccessLists(workingDir, server);
 }

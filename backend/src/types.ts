@@ -28,6 +28,12 @@ export interface ServerRecord {
   serverPackUrl?: string;
   javaImage?: string;
   containerId?: string;
+  whitelist?: string[];
+  blacklist?: string[];
+  ipBlacklist?: string[];
+  whitelistEnabled?: boolean;
+  blacklistEnabled?: boolean;
+  ipBlacklistEnabled?: boolean;
   status: ServerStatus;
   resources: ResourceConfig;
   game: GameConfig;
@@ -40,6 +46,12 @@ export interface ServerRecord {
 export interface ServerCreateInput {
   name: string;
   javaImage?: string;
+  whitelist?: string[];
+  blacklist?: string[];
+  ipBlacklist?: string[];
+  whitelistEnabled?: boolean;
+  blacklistEnabled?: boolean;
+  ipBlacklistEnabled?: boolean;
   resources: ResourceConfig;
   game: GameConfig;
 }
@@ -51,5 +63,11 @@ export interface ServerUpdateInput {
   containerId?: string | null;
   serverPackUrl?: string;
   javaImage?: string | null;
+  whitelist?: string[];
+  blacklist?: string[];
+  ipBlacklist?: string[];
+  whitelistEnabled?: boolean;
+  blacklistEnabled?: boolean;
+  ipBlacklistEnabled?: boolean;
   restartRequired?: boolean;
 }
