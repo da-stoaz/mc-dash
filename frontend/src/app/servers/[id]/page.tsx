@@ -1,128 +1,31 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   addToast,
   Button,
   Card,
   CardBody,
-  CardHeader,
-  Chip,
-  Divider,
   Modal,
   ModalBody,
   ModalContent,
   ModalFooter,
   ModalHeader,
-  Progress,
 } from '@heroui/react';
-import {
-  ArrowLeft,
-  Cpu,
-  HardDrive,
-  MemoryStick,
-  Network,
-  Pencil,
-  Play,
-  RefreshCw,
-  Server,
-  Square,
-  Trash2,
-  Wand2,
-} from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal, FirewallModal } from '../../../components/ServerModals';
-import { LogStream } from '../../../components/LogStream';
-import { FirewallState, FormState, ServerMetrics, ServerRecord, statusColor, statusLabel } from '../../../lib/serverTypes';
+import { ConfigurationCard } from '../../../components/server-details/ConfigurationCard';
+import { ControlsCard } from '../../../components/server-details/ControlsCard';
+import { FirewallCard } from '../../../components/server-details/FirewallCard';
+import { LogsCard } from '../../../components/server-details/LogsCard';
+import { MetricsCard } from '../../../components/server-details/MetricsCard';
+import { ServerTitle } from '../../../components/server-details/ServerTitle';
+import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
+import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
-
-function formatBytes(bytes?: number | null) {
-  if (!bytes || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let index = 0;
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024;
-    index += 1;
-  }
-  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-function formatUptime(seconds?: number | null) {
-  if (!seconds || seconds <= 0) return '0s';
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  const parts = [];
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (minutes) parts.push(`${minutes}m`);
-  if (secs && parts.length === 0) parts.push(`${secs}s`);
-  return parts.join(' ');
-}
-
-const HISTORY_LIMIT = 60;
-
-function clampPercent(value?: number | null) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, value as number));
-}
-
-function buildSparklinePath(values: number[], width = 100, height = 36) {
-  if (values.length === 0) return '';
-  const step = values.length > 1 ? width / (values.length - 1) : width;
-  return values
-    .map((value, index) => {
-      const x = index * step;
-      const y = height - (value / 100) * height;
-      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
-    })
-    .join(' ');
-}
-
-function buildSparklineArea(values: number[], width = 100, height = 36) {
-  const line = buildSparklinePath(values, width, height);
-  if (!line) return '';
-  return `${line} L ${width} ${height} L 0 ${height} Z`;
-}
-
-type SparklineProps = {
-  label: string;
-  values: number[];
-  current?: number | null;
-  stroke: string;
-  fill: string;
-};
-
-function SparklineCard({ label, values, current, stroke, fill }: SparklineProps) {
-  const linePath = buildSparklinePath(values);
-  const areaPath = buildSparklineArea(values);
-  const hasData = values.length > 1;
-  const avgValue =
-    values.length > 0 ? `${Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)}%` : '--';
-
-  return (
-    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center justify-between text-xs">
-        <span className="font-semibold">{label}</span>
-        <span className="muted">Avg {avgValue}</span>
-      </div>
-      <div className="mt-2 h-16">
-        {hasData ? (
-          <svg viewBox="0 0 100 36" className="h-full w-full" preserveAspectRatio="none">
-            <path d={areaPath} fill={fill} />
-            <path d={linePath} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        ) : (
-          <div className="flex h-full items-center justify-center text-xs muted">Waiting for data</div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export default function ServerDetailsPage() {
   const params = useParams<{ id: string }>();
@@ -314,7 +217,6 @@ export default function ServerDetailsPage() {
     }
   };
 
-  const uptimeLabel = useMemo(() => formatUptime(metrics?.uptimeSeconds ?? null), [metrics?.uptimeSeconds]);
   const busy = server ? actionLoading[server.id] : undefined;
   const hasPack = server ? Boolean(server.serverPackUrl) : false;
   const canPrepare = server ? ['stopped', 'exited', 'error'].includes(server.status) && hasPack : false;
@@ -361,264 +263,41 @@ export default function ServerDetailsPage() {
         <span className="muted">Server details</span>
       </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-2">
-          <div className="text-3xl font-semibold tracking-tight">{server.name}</div>
-          <div className="muted text-sm">{server.id}</div>
-          <div className="flex flex-wrap gap-2">
-            <Chip color={statusColor[server.status]} variant="flat" size="sm">
-              {statusLabel[server.status]}
-            </Chip>
-            {server.restartRequired && (
-              <Chip color="warning" variant="flat" size="sm">
-                Restart required
-              </Chip>
-            )}
-          </div>
-        </div>
-      </div>
+      <ServerTitle server={server} />
 
-      <Card className="bg-white/5 border border-white/10">
-        <CardHeader className="flex items-center justify-between">
-          <div className="text-lg font-semibold">Controls</div>
-          <div className="text-xs muted">Lifecycle, config, and maintenance actions</div>
-        </CardHeader>
-        <CardBody className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-            <div className="space-y-4">
-              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-semibold">Lifecycle</div>
-                  <div className="text-xs muted">Prepare, start, stop, restart</div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    color="warning"
-                    variant="flat"
-                    startContent={<Wand2 size={14} />}
-                    onPress={() => invokeAction(server.id, 'prepare')}
-                    isDisabled={controlsDisabled || !canPrepare}
-                  >
-                    {busy === 'prepare' ? 'Preparing...' : 'Prepare'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    color="success"
-                    variant="flat"
-                    startContent={<Play size={14} />}
-                    onPress={() => invokeAction(server.id, 'start')}
-                    isDisabled={controlsDisabled || !canStart || !server.containerId}
-                  >
-                    {busy === 'start' ? 'Starting...' : 'Start'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    startContent={<Square size={14} />}
-                    onPress={() => setConfirmState('stop')}
-                    isDisabled={controlsDisabled || !canStop}
-                  >
-                    {busy === 'stop' ? 'Stopping...' : 'Stop'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    color="secondary"
-                    variant="flat"
-                    startContent={<RefreshCw size={14} />}
-                    onPress={() => setConfirmState('restart')}
-                    isDisabled={controlsDisabled || !canRestart}
-                  >
-                    {busy === 'restart' ? 'Restarting...' : 'Restart'}
-                  </Button>
-                </div>
-              </div>
+      <ControlsCard
+        busy={busy}
+        canPrepare={canPrepare}
+        canStart={canStart}
+        canStop={canStop}
+        canRestart={canRestart}
+        controlsDisabled={controlsDisabled}
+        hasContainer={Boolean(server.containerId)}
+        onPrepare={() => invokeAction(server.id, 'prepare')}
+        onStart={() => invokeAction(server.id, 'start')}
+        onStop={() => setConfirmState('stop')}
+        onRestart={() => setConfirmState('restart')}
+        onEdit={() => setShowEdit(server)}
+        onDeleteContainer={() => setConfirmState('deleteContainer')}
+        onDeleteServer={() => setConfirmState('deleteServer')}
+      />
 
-              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Configuration</div>
-                  <div className="text-xs muted">Resources, game rules, Java image</div>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
-                    Edit config
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4">
-              <div className="text-sm font-semibold text-rose-100">Danger zone</div>
-              <div className="text-xs muted">Destructive actions for this server</div>
-              <div className="mt-3 flex flex-col gap-2">
-                <Button
-                  size="sm"
-                  color="danger"
-                  variant="flat"
-                  startContent={<Trash2 size={14} />}
-                  onPress={() => setConfirmState('deleteContainer')}
-                  isDisabled={controlsDisabled || busy === 'delete'}
-                  fullWidth
-                >
-                  Delete container
-                </Button>
-                <Button
-                  size="sm"
-                  color="danger"
-                  variant="flat"
-                  startContent={<Trash2 size={14} />}
-                  onPress={() => setConfirmState('deleteServer')}
-                  isDisabled={controlsDisabled || busy === 'deleteServer'}
-                  fullWidth
-                >
-                  Delete server
-                </Button>
-              </div>
-            </div>
-          </div>
-        </CardBody>
-      </Card>
-
-      <Card className="bg-white/5 border border-white/10">
-        <CardHeader className="flex items-center justify-between">
-          <div className="text-lg font-semibold">Firewall & access</div>
-          <Button size="sm" variant="bordered" onPress={() => setShowFirewall(server)}>
-            Manage firewall
-          </Button>
-        </CardHeader>
-        <CardBody className="grid gap-4 md:grid-cols-3 text-sm">
-          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-            <div className="text-xs uppercase tracking-wide muted">Whitelist</div>
-            <div className="mt-2 text-lg font-semibold">{whitelistEnabled ? 'Enabled' : 'Disabled'}</div>
-            <div className="text-xs muted">{whitelistCount} allowed</div>
-          </div>
-          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-            <div className="text-xs uppercase tracking-wide muted">Player blacklist</div>
-            <div className="mt-2 text-lg font-semibold">{blacklistEnabled ? 'Enabled' : 'Disabled'}</div>
-            <div className="text-xs muted">{blacklistCount} blocked</div>
-          </div>
-          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-            <div className="text-xs uppercase tracking-wide muted">IP blacklist</div>
-            <div className="mt-2 text-lg font-semibold">{ipBlacklistEnabled ? 'Enabled' : 'Disabled'}</div>
-            <div className="text-xs muted">{ipBlacklistCount} blocked</div>
-          </div>
-        </CardBody>
-      </Card>
+      <FirewallCard
+        whitelistEnabled={whitelistEnabled}
+        whitelistCount={whitelistCount}
+        blacklistEnabled={blacklistEnabled}
+        blacklistCount={blacklistCount}
+        ipBlacklistEnabled={ipBlacklistEnabled}
+        ipBlacklistCount={ipBlacklistCount}
+        onManage={() => setShowFirewall(server)}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
-        <Card className="bg-white/5 border border-white/10">
-          <CardHeader className="flex items-center gap-2 text-lg font-semibold">
-            <Server size={18} />
-            <span>Configuration</span>
-          </CardHeader>
-          <CardBody className="space-y-4 text-sm">
-            <div className="space-y-2">
-              <div className="text-base font-semibold">Server pack</div>
-              <div className="muted break-all">
-                {server.serverPackUrl ? server.serverPackUrl.split(/[\\/]/).pop() : 'Not uploaded'}
-              </div>
-              <div className="muted">Java image: {server.javaImage ?? 'Auto'}</div>
-              <div className="muted">Container: {server.containerId ?? '-'}</div>
-            </div>
-            <Divider className="bg-white/10" />
-            <div className="space-y-2">
-              <div className="text-base font-semibold">Resources</div>
-              <div className="muted">
-                RAM: {server.resources.minRamMb}-{server.resources.maxRamMb} MB
-              </div>
-              <div className="muted">CPU cap: {server.resources.cpuLimit ?? '-'} cores</div>
-            </div>
-            <Divider className="bg-white/10" />
-            <div className="space-y-2">
-              <div className="text-base font-semibold">Game</div>
-              <div className="muted">Mode: {server.game.gameMode ?? '-'}</div>
-              <div className="muted">Render distance: {server.game.renderDistance ?? '-'} chunks</div>
-              <div className="muted break-all">Seed: {server.game.seed || '-'}</div>
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card className="bg-white/5 border border-white/10">
-          <CardHeader className="flex items-center gap-2 text-lg font-semibold">
-            <Cpu size={18} />
-            <span>Metrics</span>
-          </CardHeader>
-          <CardBody className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="text-sm muted mb-2">CPU</div>
-                <Progress size="sm" value={metrics?.cpuPercent ?? 0} showValueLabel />
-              </div>
-              <div>
-                <div className="text-sm muted mb-2">Memory</div>
-                <Progress size="sm" value={metrics?.memoryPercent ?? 0} showValueLabel />
-                <div className="text-xs muted mt-1">
-                  {formatBytes(metrics?.memoryBytes)} / {formatBytes(metrics?.memoryLimitBytes)}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs uppercase tracking-wide muted">
-                <span>Usage history</span>
-                <span className="normal-case">Last {HISTORY_LIMIT}s</span>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <SparklineCard
-                  label="CPU usage"
-                  values={history.cpu}
-                  current={metrics?.cpuPercent}
-                  stroke="#22d3ee"
-                  fill="rgba(34, 211, 238, 0.18)"
-                />
-                <SparklineCard
-                  label="Memory usage"
-                  values={history.memory}
-                  current={metrics?.memoryPercent}
-                  stroke="#3b82f6"
-                  fill="rgba(59, 130, 246, 0.18)"
-                />
-              </div>
-            </div>
-
-            <Divider className="bg-white/10" />
-
-            <div className="grid gap-3 md:grid-cols-3 text-sm">
-              <div className="flex items-start gap-2">
-                <Network size={16} />
-                <div>
-                  <div className="font-semibold">Network</div>
-                  <div className="muted">In: {formatBytes(metrics?.networkRxBytes)}</div>
-                  <div className="muted">Out: {formatBytes(metrics?.networkTxBytes)}</div>
-                </div>
-              </div>
-              <div className="flex items-start gap-2">
-                <HardDrive size={16} />
-                <div>
-                  <div className="font-semibold">Disk</div>
-                  <div className="muted">Read: {formatBytes(metrics?.blkReadBytes)}</div>
-                  <div className="muted">Write: {formatBytes(metrics?.blkWriteBytes)}</div>
-                </div>
-              </div>
-              <div className="flex items-start gap-2">
-                <MemoryStick size={16} />
-                <div>
-                  <div className="font-semibold">Runtime</div>
-                  <div className="muted">PIDs: {metrics?.pids ?? '-'}</div>
-                  <div className="muted">Uptime: {uptimeLabel}</div>
-                </div>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
+        <ConfigurationCard server={server} />
+        <MetricsCard metrics={metrics} history={history} />
       </div>
 
-      <Card className="bg-white/5 border border-white/10">
-        <CardHeader className="text-lg font-semibold">Live logs</CardHeader>
-        <CardBody>
-          <LogStream serverId={server.id} apiBase={API_BASE} />
-        </CardBody>
-      </Card>
+      <LogsCard serverId={server.id} apiBase={API_BASE} />
 
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
       <FirewallModal server={showFirewall} onClose={() => setShowFirewall(null)} onSave={handleFirewallUpdate} />
