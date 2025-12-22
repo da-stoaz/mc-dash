@@ -64,11 +64,72 @@ function formatUptime(seconds?: number | null) {
   return parts.join(' ');
 }
 
+const HISTORY_LIMIT = 60;
+
+function clampPercent(value?: number | null) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, value as number));
+}
+
+function buildSparklinePath(values: number[], width = 100, height = 36) {
+  if (values.length === 0) return '';
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+  return values
+    .map((value, index) => {
+      const x = index * step;
+      const y = height - (value / 100) * height;
+      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+    })
+    .join(' ');
+}
+
+function buildSparklineArea(values: number[], width = 100, height = 36) {
+  const line = buildSparklinePath(values, width, height);
+  if (!line) return '';
+  return `${line} L ${width} ${height} L 0 ${height} Z`;
+}
+
+type SparklineProps = {
+  label: string;
+  values: number[];
+  current?: number | null;
+  stroke: string;
+  fill: string;
+};
+
+function SparklineCard({ label, values, current, stroke, fill }: SparklineProps) {
+  const linePath = buildSparklinePath(values);
+  const areaPath = buildSparklineArea(values);
+  const hasData = values.length > 1;
+  const avgValue =
+    values.length > 0 ? `${Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)}%` : '--';
+
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold">{label}</span>
+        <span className="muted">Avg {avgValue}</span>
+      </div>
+      <div className="mt-2 h-16">
+        {hasData ? (
+          <svg viewBox="0 0 100 36" className="h-full w-full" preserveAspectRatio="none">
+            <path d={areaPath} fill={fill} />
+            <path d={linePath} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : (
+          <div className="flex h-full items-center justify-center text-xs muted">Waiting for data</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ServerDetailsPage() {
   const params = useParams<{ id: string }>();
   const serverId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
+  const [history, setHistory] = useState<{ cpu: number[]; memory: number[] }>({ cpu: [], memory: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
@@ -128,6 +189,16 @@ export default function ServerDetailsPage() {
       clearInterval(metricsInterval);
     };
   }, [serverId]);
+
+  useEffect(() => {
+    if (!metrics) return;
+    const cpu = clampPercent(metrics.cpuPercent);
+    const memory = clampPercent(metrics.memoryPercent);
+    setHistory((prev) => ({
+      cpu: [...prev.cpu, cpu].slice(-HISTORY_LIMIT),
+      memory: [...prev.memory, memory].slice(-HISTORY_LIMIT),
+    }));
+  }, [metrics?.cpuPercent, metrics?.memoryPercent]);
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
@@ -257,7 +328,7 @@ export default function ServerDetailsPage() {
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-2">
-          <div className="text-2xl font-semibold">{server.name}</div>
+          <div className="text-3xl font-semibold tracking-tight">{server.name}</div>
           <div className="muted text-sm">{server.id}</div>
           <div className="flex flex-wrap gap-2">
             <Chip color={statusColor[server.status]} variant="flat" size="sm">
@@ -274,66 +345,77 @@ export default function ServerDetailsPage() {
 
       <Card className="bg-white/5 border border-white/10">
         <CardHeader className="flex items-center justify-between">
-          <div className="font-semibold">Controls</div>
+          <div className="text-lg font-semibold">Controls</div>
           <div className="text-xs muted">Lifecycle, config, and maintenance actions</div>
         </CardHeader>
         <CardBody className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div className="space-y-2">
-              <div className="text-xs uppercase tracking-wide muted">Lifecycle</div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  color="warning"
-                  variant="flat"
-                  startContent={<Wand2 size={14} />}
-                  onPress={() => invokeAction(server.id, 'prepare')}
-                  isDisabled={controlsDisabled || !canPrepare}
-                >
-                  {busy === 'prepare' ? 'Preparing...' : 'Prepare'}
-                </Button>
-                <Button
-                  size="sm"
-                  color="success"
-                  variant="flat"
-                  startContent={<Play size={14} />}
-                  onPress={() => invokeAction(server.id, 'start')}
-                  isDisabled={controlsDisabled || !canStart || !server.containerId}
-                >
-                  {busy === 'start' ? 'Starting...' : 'Start'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  startContent={<Square size={14} />}
-                  onPress={() => setConfirmState('stop')}
-                  isDisabled={controlsDisabled || !canStop}
-                >
-                  {busy === 'stop' ? 'Stopping...' : 'Stop'}
-                </Button>
-                <Button
-                  size="sm"
-                  color="secondary"
-                  variant="flat"
-                  startContent={<RefreshCw size={14} />}
-                  onPress={() => setConfirmState('restart')}
-                  isDisabled={controlsDisabled || !canRestart}
-                >
-                  {busy === 'restart' ? 'Restarting...' : 'Restart'}
-                </Button>
+          <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+            <div className="space-y-4">
+              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-semibold">Lifecycle</div>
+                  <div className="text-xs muted">Prepare, start, stop, restart</div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    color="warning"
+                    variant="flat"
+                    startContent={<Wand2 size={14} />}
+                    onPress={() => invokeAction(server.id, 'prepare')}
+                    isDisabled={controlsDisabled || !canPrepare}
+                  >
+                    {busy === 'prepare' ? 'Preparing...' : 'Prepare'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    color="success"
+                    variant="flat"
+                    startContent={<Play size={14} />}
+                    onPress={() => invokeAction(server.id, 'start')}
+                    isDisabled={controlsDisabled || !canStart || !server.containerId}
+                  >
+                    {busy === 'start' ? 'Starting...' : 'Start'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    startContent={<Square size={14} />}
+                    onPress={() => setConfirmState('stop')}
+                    isDisabled={controlsDisabled || !canStop}
+                  >
+                    {busy === 'stop' ? 'Stopping...' : 'Stop'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    color="secondary"
+                    variant="flat"
+                    startContent={<RefreshCw size={14} />}
+                    onPress={() => setConfirmState('restart')}
+                    isDisabled={controlsDisabled || !canRestart}
+                  >
+                    {busy === 'restart' ? 'Restarting...' : 'Restart'}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Configuration</div>
+                  <div className="text-xs muted">Resources, game rules, Java image</div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
+                    Edit config
+                  </Button>
+                </div>
               </div>
             </div>
-            <div className="space-y-2">
-              <div className="text-xs uppercase tracking-wide muted">Config</div>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
-                  Edit config
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <div className="text-xs uppercase tracking-wide muted">Danger zone</div>
-              <div className="flex flex-wrap gap-2">
+
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4">
+              <div className="text-sm font-semibold text-rose-100">Danger zone</div>
+              <div className="text-xs muted">Destructive actions for this server</div>
+              <div className="mt-3 flex flex-col gap-2">
                 <Button
                   size="sm"
                   color="danger"
@@ -341,6 +423,7 @@ export default function ServerDetailsPage() {
                   startContent={<Trash2 size={14} />}
                   onPress={() => setConfirmState('deleteContainer')}
                   isDisabled={controlsDisabled || busy === 'delete'}
+                  fullWidth
                 >
                   Delete container
                 </Button>
@@ -351,6 +434,7 @@ export default function ServerDetailsPage() {
                   startContent={<Trash2 size={14} />}
                   onPress={() => setConfirmState('deleteServer')}
                   isDisabled={controlsDisabled || busy === 'deleteServer'}
+                  fullWidth
                 >
                   Delete server
                 </Button>
@@ -362,13 +446,13 @@ export default function ServerDetailsPage() {
 
       <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
         <Card className="bg-white/5 border border-white/10">
-          <CardHeader className="flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2 text-lg font-semibold">
             <Server size={18} />
-            Configuration
+            <span>Configuration</span>
           </CardHeader>
           <CardBody className="space-y-4 text-sm">
             <div className="space-y-2">
-              <div className="font-semibold">Server pack</div>
+              <div className="text-base font-semibold">Server pack</div>
               <div className="muted break-all">
                 {server.serverPackUrl ? server.serverPackUrl.split(/[\\/]/).pop() : 'Not uploaded'}
               </div>
@@ -377,7 +461,7 @@ export default function ServerDetailsPage() {
             </div>
             <Divider className="bg-white/10" />
             <div className="space-y-2">
-              <div className="font-semibold">Resources</div>
+              <div className="text-base font-semibold">Resources</div>
               <div className="muted">
                 RAM: {server.resources.minRamMb}-{server.resources.maxRamMb} MB
               </div>
@@ -385,7 +469,7 @@ export default function ServerDetailsPage() {
             </div>
             <Divider className="bg-white/10" />
             <div className="space-y-2">
-              <div className="font-semibold">Game</div>
+              <div className="text-base font-semibold">Game</div>
               <div className="muted">Mode: {server.game.gameMode ?? '-'}</div>
               <div className="muted">Render distance: {server.game.renderDistance ?? '-'} chunks</div>
               <div className="muted break-all">Seed: {server.game.seed || '-'}</div>
@@ -394,9 +478,9 @@ export default function ServerDetailsPage() {
         </Card>
 
         <Card className="bg-white/5 border border-white/10">
-          <CardHeader className="flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2 text-lg font-semibold">
             <Cpu size={18} />
-            Metrics
+            <span>Metrics</span>
           </CardHeader>
           <CardBody className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
@@ -410,6 +494,29 @@ export default function ServerDetailsPage() {
                 <div className="text-xs muted mt-1">
                   {formatBytes(metrics?.memoryBytes)} / {formatBytes(metrics?.memoryLimitBytes)}
                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide muted">
+                <span>Usage history</span>
+                <span className="normal-case">Last {HISTORY_LIMIT}s</span>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <SparklineCard
+                  label="CPU usage"
+                  values={history.cpu}
+                  current={metrics?.cpuPercent}
+                  stroke="#22d3ee"
+                  fill="rgba(34, 211, 238, 0.18)"
+                />
+                <SparklineCard
+                  label="Memory usage"
+                  values={history.memory}
+                  current={metrics?.memoryPercent}
+                  stroke="#3b82f6"
+                  fill="rgba(59, 130, 246, 0.18)"
+                />
               </div>
             </div>
 
@@ -446,7 +553,7 @@ export default function ServerDetailsPage() {
       </div>
 
       <Card className="bg-white/5 border border-white/10">
-        <CardHeader>Live logs</CardHeader>
+        <CardHeader className="text-lg font-semibold">Live logs</CardHeader>
         <CardBody>
           <LogStream serverId={server.id} apiBase={API_BASE} />
         </CardBody>
