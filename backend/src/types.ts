@@ -25,9 +25,11 @@ export interface GameConfig {
 export interface ServerRecord {
   id: string;
   name: string;
+  subdomain?: string;
   serverPackUrl?: string;
   javaImage?: string;
   containerId?: string;
+  serverPort: number;
   whitelist?: string[];
   blacklist?: string[];
   ipBlacklist?: string[];
@@ -45,7 +47,9 @@ export interface ServerRecord {
 
 export interface ServerCreateInput {
   name: string;
+  subdomain?: string;
   javaImage?: string;
+  serverPort?: number;
   whitelist?: string[];
   blacklist?: string[];
   ipBlacklist?: string[];
@@ -63,6 +67,8 @@ export interface ServerUpdateInput {
   containerId?: string | null;
   serverPackUrl?: string;
   javaImage?: string | null;
+  serverPort?: number;
+  subdomain?: string | null;
   whitelist?: string[];
   blacklist?: string[];
   ipBlacklist?: string[];

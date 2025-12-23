@@ -18,6 +18,17 @@ const defaultDockerSocketPath = (() => {
   return varRun;
 })();
 
+const defaultServerPort = Number(process.env.MC_SERVER_PORT ?? 25565);
+const serverPortMin = Number(process.env.MC_SERVER_PORT_MIN ?? defaultServerPort);
+const serverPortMax = Number(process.env.MC_SERVER_PORT_MAX ?? defaultServerPort + 100);
+const routerEnabled = String(process.env.MC_ROUTER_ENABLED ?? '').toLowerCase() === 'true';
+const routerDomain = process.env.MC_ROUTER_DOMAIN ? process.env.MC_ROUTER_DOMAIN.trim().toLowerCase() : undefined;
+const routerPort = Number(process.env.MC_ROUTER_PORT ?? 25565);
+const routerTargetHost = process.env.MC_ROUTER_TARGET_HOST ?? '127.0.0.1';
+const routerDefaultSubdomain = process.env.MC_ROUTER_DEFAULT_SUBDOMAIN
+  ? process.env.MC_ROUTER_DEFAULT_SUBDOMAIN.trim().toLowerCase()
+  : undefined;
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   sqlitePath: process.env.SQLITE_PATH ? path.resolve(process.cwd(), process.env.SQLITE_PATH) : defaultSqlitePath,
@@ -27,7 +38,14 @@ export const config = {
   dockerApiVersion: process.env.DOCKER_API_VERSION,
   dataRoot,
   javaImage: process.env.JAVA_IMAGE ?? 'eclipse-temurin:17-jre',
-  serverPort: Number(process.env.MC_SERVER_PORT ?? 25565),
+  serverPort: Number.isFinite(defaultServerPort) ? defaultServerPort : 25565,
+  serverPortMin: Number.isFinite(serverPortMin) ? serverPortMin : 25565,
+  serverPortMax: Number.isFinite(serverPortMax) ? serverPortMax : 25565,
+  routerEnabled,
+  routerDomain,
+  routerPort: Number.isFinite(routerPort) ? routerPort : 25565,
+  routerTargetHost,
+  routerDefaultSubdomain,
 };
 
 // Ensure the data directory exists for SQLite

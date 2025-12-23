@@ -2,11 +2,19 @@ import { Card, CardBody, CardHeader, Divider } from '@heroui/react';
 import { Server } from 'lucide-react';
 import type { ServerRecord } from '../../lib/serverTypes';
 
+const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+
 type ConfigurationCardProps = {
   server: ServerRecord;
 };
 
 export function ConfigurationCard({ server }: ConfigurationCardProps) {
+  const hostname = server.subdomain
+    ? ROUTER_DOMAIN
+      ? `${server.subdomain}.${ROUTER_DOMAIN}`
+      : server.subdomain
+    : null;
+
   return (
     <Card className="bg-white/5 border border-white/10">
       <CardHeader className="flex items-center gap-2 text-lg font-semibold">
@@ -19,6 +27,8 @@ export function ConfigurationCard({ server }: ConfigurationCardProps) {
           <div className="muted break-all">
             {server.serverPackUrl ? server.serverPackUrl.split(/[\\/]/).pop() : 'Not uploaded'}
           </div>
+          {hostname && <div className="muted">Hostname: {hostname}</div>}
+          <div className="muted">Port: {server.serverPort}</div>
           <div className="muted">Java image: {server.javaImage ?? 'Auto'}</div>
           <div className="muted">Container: {server.containerId ?? '-'}</div>
         </div>

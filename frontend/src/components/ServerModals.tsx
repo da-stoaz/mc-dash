@@ -16,6 +16,8 @@ import {
 } from '@heroui/react';
 import { FirewallState, FormState, GameMode, ServerRecord, emptyForm } from '../lib/serverTypes';
 
+const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+
 type CreateProps = {
   open: boolean;
   onClose: () => void;
@@ -55,6 +57,22 @@ export function CreateModal({
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 isDisabled={isCreating}
               />
+              <div>
+                <Input
+                  label="Subdomain"
+                  placeholder="server1"
+                  value={form.subdomain}
+                  onChange={(e) => setForm({ ...form, subdomain: e.target.value })}
+                  isDisabled={isCreating}
+                />
+                <div className="text-xs muted mt-1">
+                  {ROUTER_DOMAIN
+                    ? form.subdomain
+                      ? `Full hostname: ${form.subdomain}.${ROUTER_DOMAIN}`
+                      : `Full hostname: <subdomain>.${ROUTER_DOMAIN}`
+                    : 'Optional. Used for wildcard subdomain routing if enabled.'}
+                </div>
+              </div>
               <div className="space-y-2">
                 <div className="text-sm font-medium">Server pack zip</div>
                 <input
@@ -70,6 +88,17 @@ export function CreateModal({
                 {isCreating && (
                   <Progress size="sm" value={progressValue} showValueLabel className="mt-2" />
                 )}
+              </div>
+              <div>
+                <Input
+                  type="number"
+                  label="Server port"
+                  placeholder="Leave blank for auto-assign"
+                  value={form.serverPort}
+                  onChange={(e) => setForm({ ...form, serverPort: e.target.value })}
+                  isDisabled={isCreating}
+                />
+                <div className="text-xs muted mt-1">Auto-assign uses the configured port range on the backend.</div>
               </div>
               <div>
                 <Input
@@ -160,7 +189,9 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
     if (server) {
       setLocal({
         name: server.name,
+        subdomain: server.subdomain ?? '',
         javaImage: server.javaImage ?? '',
+        serverPort: String(server.serverPort),
         minRamMb: server.resources.minRamMb ?? emptyForm.minRamMb,
         maxRamMb: server.resources.maxRamMb ?? emptyForm.maxRamMb,
         cpuLimit: server.resources.cpuLimit?.toString() ?? '',
@@ -177,15 +208,44 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
 
   return (
     <Modal isOpen onClose={onClose} placement="center" size="3xl" scrollBehavior="inside">
-      <ModalContent className="max-w-4xl">
-        {(onModalClose) => (
-          <>
-            <ModalHeader>Edit {server.name}</ModalHeader>
-            <ModalBody className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-3">
-                <Input
-                  type="number"
-                  label="Min RAM (MB)"
+        <ModalContent className="max-w-4xl">
+          {(onModalClose) => (
+            <>
+              <ModalHeader>Edit {server.name}</ModalHeader>
+              <ModalBody className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <Input
+                      label="Subdomain"
+                      value={local.subdomain}
+                      onChange={(e) => setLocal({ ...local, subdomain: e.target.value })}
+                    />
+                    <div className="text-xs muted mt-1">
+                      {ROUTER_DOMAIN
+                        ? `Full hostname: ${local.subdomain || '<subdomain>'}.${ROUTER_DOMAIN}`
+                        : 'Optional. Used for wildcard subdomain routing if enabled.'}
+                    </div>
+                  </div>
+                  <div>
+                    <Input
+                      type="number"
+                      label="Server port"
+                      value={local.serverPort}
+                      onChange={(e) => setLocal({ ...local, serverPort: e.target.value })}
+                    />
+                    <div className="text-xs muted mt-1">Changing the port recreates the container while stopped.</div>
+                  </div>
+                  <Input
+                    label="Java image override"
+                    placeholder="eclipse-temurin:21-jre (leave blank for auto)"
+                    value={local.javaImage}
+                    onChange={(e) => setLocal({ ...local, javaImage: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <Input
+                    type="number"
+                    label="Min RAM (MB)"
                   value={String(local.minRamMb)}
                   onChange={(e) => setLocal({ ...local, minRamMb: Number(e.target.value) })}
                 />
@@ -222,12 +282,6 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                 </Select>
                 <Input label="World seed" value={local.seed} onChange={(e) => setLocal({ ...local, seed: e.target.value })} />
               </div>
-              <Input
-                label="Java image override"
-                placeholder="eclipse-temurin:21-jre (leave blank for auto)"
-                value={local.javaImage}
-                onChange={(e) => setLocal({ ...local, javaImage: e.target.value })}
-              />
             </ModalBody>
             <ModalFooter>
               <Button variant="light" onPress={onModalClose}>

@@ -13,6 +13,8 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
    - Frontend: `cd frontend && npm install`
 2. Configure environment:
    - Backend: copy `backend/.env.example` to `backend/.env` and set Docker connection (socket or `DOCKER_HOST`).
+     - Optionally set `MC_SERVER_PORT_MIN`/`MC_SERVER_PORT_MAX` for auto-assigning ports.
+     - For wildcard subdomains, set `MC_ROUTER_ENABLED=true` and `MC_ROUTER_DOMAIN=mc.example.com` (see below).
    - Frontend: copy `frontend/.env.local.example` to `frontend/.env.local` and point `NEXT_PUBLIC_API_BASE_URL` to the backend (default `http://localhost:4000`).
 3. Run:
    - Backend: `cd backend && npm run dev`
@@ -21,7 +23,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 ## Backend endpoints (initial pass)
 - `GET /health`
 - `GET /servers` — list server records.
-- `POST /servers` — create a record with a server pack zip (multipart form, fields include `name`, `minRamMb`, `maxRamMb`, `cpuLimit`, `renderDistance`, `gameMode`, `seed`, `javaImage`, and file field `file`).
+- `POST /servers` — create a record with a server pack zip (multipart form, fields include `name`, `subdomain` (optional), `serverPort` (optional), `minRamMb`, `maxRamMb`, `cpuLimit`, `renderDistance`, `gameMode`, `seed`, `javaImage`, and file field `file`).
 - `PATCH /servers/:id` — update resources/game/status.
 - `POST /servers/:id/prepare` — unzip/configure the uploaded server pack and create a Docker container.
 - `GET /servers/:id/status` — inspect Docker container status.
@@ -33,7 +35,21 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - Run the prepare step to:
   1. Unzip into a per-server directory (e.g., `backend/data/servers/<id>`).
   2. Apply JVM flags (min/max RAM) and `server.properties` (render distance, game mode, seed).
-  3. Create a Docker container that mounts that directory and runs the correct start script (Forge/Fabric/etc.).
+3. Create a Docker container that mounts that directory and runs the correct start script (Forge/Fabric/etc.).
+
+## Subdomain routing (wildcard DNS)
+To avoid per-server DNS entries, you can route all `*.mc.example.com` hostnames to the same server and let mc-dash forward based on the hostname in the Minecraft handshake.
+
+1. Cloudflare DNS:
+   - Add an `A` record for `mc` pointing to your server IP.
+   - Add a wildcard `A` record for `*.mc` pointing to the same IP.
+   - Set both to **DNS only** (gray cloud).
+2. Backend config:
+   - `MC_ROUTER_ENABLED=true`
+   - `MC_ROUTER_DOMAIN=mc.example.com`
+   - `MC_ROUTER_PORT=25565`
+   - Ensure your auto-assign port range excludes the router port (e.g., `MC_SERVER_PORT_MIN=25566`).
+3. Each server gets a subdomain (auto-generated from name or user-provided).
 
 ## Docker rootless vs root
 - Rootless Docker cannot bind ports <1024 and has stricter cgroup limits (swap limits often unavailable; CPU/memory enforcement depends on host kernel). Volume permissions can also differ.

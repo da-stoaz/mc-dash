@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import net from 'net';
 import path from 'path';
 import fs from 'fs';
 import { z } from 'zod';
@@ -7,7 +8,7 @@ import { dockerService } from '../services/dockerService';
 import { serverStore } from '../serverStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
-import { applyConfigFiles, prepareServer } from '../services/prepareService';
+import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
 import { config } from '../config';
 
 const resourceSchema = z.object({
@@ -45,9 +46,18 @@ const parseList = (value: unknown) => {
   return items.length ? items : [];
 };
 
+const portSchema = z.preprocess(parseNumber, z.number().int().min(1024).max(65535));
+const subdomainRegex = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+const subdomainSchema = z.preprocess(
+  emptyToUndefined,
+  z.string().max(63).regex(subdomainRegex, 'Invalid subdomain').optional()
+);
+
 const createServerSchema = z.object({
   name: z.string().min(1),
+  subdomain: subdomainSchema,
   javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
+  serverPort: portSchema.optional(),
   minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
   maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
@@ -67,6 +77,8 @@ const updateServerSchema = z.object({
   game: gameSchema.optional(),
   status: z.enum(['creating', 'stopped', 'running', 'starting', 'stopping', 'restarting', 'exited', 'error']).optional(),
   javaImage: z.string().optional().nullable(),
+  serverPort: portSchema.optional(),
+  subdomain: subdomainSchema,
   whitelist: z.array(z.string()).optional(),
   blacklist: z.array(z.string()).optional(),
   ipBlacklist: z.array(z.string()).optional(),
@@ -89,6 +101,114 @@ function notFound(res: any) {
 
 function safeStatus(server: ServerRecord): ServerStatus {
   return server.status;
+}
+
+function normalizeSubdomain(value?: string): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length ? trimmed : undefined;
+}
+
+function slugifyName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug.slice(0, 63);
+}
+
+function makeUniqueSubdomain(base: string, reserved: Set<string>): string {
+  const fallbackBase = base || 'server';
+  let candidate = fallbackBase;
+  let suffix = 2;
+  while (reserved.has(candidate)) {
+    const suffixStr = `-${suffix}`;
+    const trimmedBase = fallbackBase.slice(0, Math.max(1, 63 - suffixStr.length));
+    candidate = `${trimmedBase}${suffixStr}`;
+    suffix += 1;
+  }
+  reserved.add(candidate);
+  return candidate;
+}
+
+function collectReservedSubdomains(excludeId?: string): Set<string> {
+  const servers = serverStore.list();
+  const reserved = new Set<string>();
+  servers.forEach((server) => {
+    if (excludeId && server.id === excludeId) return;
+    if (server.subdomain) reserved.add(server.subdomain.toLowerCase());
+  });
+  return reserved;
+}
+
+function resolveServerSubdomain(requested: string | undefined, name: string, excludeId?: string): string {
+  const reserved = collectReservedSubdomains(excludeId);
+  const normalized = normalizeSubdomain(requested);
+  if (normalized) {
+    if (reserved.has(normalized)) {
+      throw new Error(`Subdomain "${normalized}" is already assigned to another server.`);
+    }
+    reserved.add(normalized);
+    return normalized;
+  }
+  const base = slugifyName(name);
+  return makeUniqueSubdomain(base, reserved);
+}
+
+function collectReservedPorts(excludeId?: string): Set<number> {
+  const servers = serverStore.list();
+  const ports = servers
+    .filter((server) => server.id !== excludeId)
+    .map((server) => server.serverPort ?? config.serverPort);
+  if (config.routerEnabled) {
+    ports.push(config.routerPort);
+  }
+  return new Set(ports);
+}
+
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    const cleanup = (available: boolean) => {
+      tester.removeAllListeners();
+      resolve(available);
+    };
+    tester.once('error', () => cleanup(false));
+    tester.once('listening', () => {
+      tester.close(() => cleanup(true));
+    });
+    tester.listen(port, '0.0.0.0');
+  });
+}
+
+async function resolveServerPort(requested?: number, excludeId?: string): Promise<number> {
+  const reserved = collectReservedPorts(excludeId);
+  if (requested !== undefined) {
+    if (config.routerEnabled && requested === config.routerPort) {
+      throw new Error(`Port ${requested} is reserved for the router.`);
+    }
+    if (reserved.has(requested)) {
+      throw new Error(`Port ${requested} is already assigned to another server.`);
+    }
+    if (!(await isPortAvailable(requested))) {
+      throw new Error(`Port ${requested} is already in use on the host.`);
+    }
+    return requested;
+  }
+
+  const minPort = Math.max(1024, Math.min(65535, config.serverPortMin));
+  const maxPort = Math.max(1024, Math.min(65535, config.serverPortMax));
+  if (minPort > maxPort) {
+    throw new Error(`Invalid port range ${minPort}-${maxPort}.`);
+  }
+
+  for (let port = minPort; port <= maxPort; port += 1) {
+    if (config.routerEnabled && port === config.routerPort) continue;
+    if (reserved.has(port)) continue;
+    if (await isPortAvailable(port)) return port;
+  }
+
+  throw new Error(`No available ports in range ${minPort}-${maxPort}.`);
 }
 
 router.get('/', async (_req, res) => {
@@ -118,9 +238,23 @@ router.post('/', upload.single('file'), async (req, res, next) => {
     }
 
     const parsed = createServerSchema.parse(req.body);
+    let serverPort: number;
+    try {
+      serverPort = await resolveServerPort(parsed.serverPort);
+    } catch (err: any) {
+      return res.status(409).json({ error: 'Port unavailable', details: err?.message ?? 'Port unavailable' });
+    }
+    let subdomain: string;
+    try {
+      subdomain = resolveServerSubdomain(parsed.subdomain, parsed.name);
+    } catch (err: any) {
+      return res.status(409).json({ error: 'Subdomain unavailable', details: err?.message ?? 'Subdomain unavailable' });
+    }
     const server = serverStore.create({
       name: parsed.name,
+      subdomain,
       javaImage: parsed.javaImage,
+      serverPort,
       whitelist: parsed.whitelist,
       blacklist: parsed.blacklist,
       ipBlacklist: parsed.ipBlacklist,
@@ -160,13 +294,54 @@ router.post('/', upload.single('file'), async (req, res, next) => {
 router.patch('/:id', async (req, res, next) => {
   try {
     const parsed = updateServerSchema.parse(req.body);
-    let updated = serverStore.update(req.params.id, parsed);
+    const existing = serverStore.get(req.params.id);
+    if (!existing) return notFound(res);
+
+    let portChanged = false;
+    let resolvedPort: number | undefined;
+    if (parsed.serverPort !== undefined && parsed.serverPort !== existing.serverPort) {
+      if (['running', 'starting', 'restarting'].includes(existing.status)) {
+        return res.status(409).json({ error: 'Stop the server before changing its port.' });
+      }
+      try {
+        resolvedPort = await resolveServerPort(parsed.serverPort, existing.id);
+      } catch (err: any) {
+        return res.status(409).json({ error: 'Port unavailable', details: err?.message ?? 'Port unavailable' });
+      }
+      portChanged = true;
+    }
+
+    let resolvedSubdomain: string | undefined;
+    if (parsed.subdomain !== undefined) {
+      const normalized = normalizeSubdomain(parsed.subdomain);
+      if (!normalized) {
+        return res.status(400).json({ error: 'Invalid subdomain' });
+      }
+      if (normalized !== existing.subdomain) {
+        try {
+          resolvedSubdomain = resolveServerSubdomain(normalized, existing.name, existing.id);
+        } catch (err: any) {
+          return res.status(409).json({ error: 'Subdomain unavailable', details: err?.message ?? 'Subdomain unavailable' });
+        }
+      } else {
+        resolvedSubdomain = normalized;
+      }
+    }
+
+    const updatePayload = {
+      ...parsed,
+      serverPort: resolvedPort ?? parsed.serverPort,
+      ...(parsed.subdomain !== undefined ? { subdomain: resolvedSubdomain } : {}),
+    };
+
+    let updated = serverStore.update(req.params.id, updatePayload);
     if (!updated) return notFound(res);
 
     const hasConfigChanges =
       !!parsed.resources ||
       !!parsed.game ||
       parsed.javaImage !== undefined ||
+      parsed.serverPort !== undefined ||
       parsed.whitelist !== undefined ||
       parsed.blacklist !== undefined ||
       parsed.ipBlacklist !== undefined ||
@@ -177,6 +352,7 @@ router.patch('/:id', async (req, res, next) => {
 
     let configError: Error | null = null;
     let resourceError: Error | null = null;
+    let recreateError: Error | null = null;
 
     if (hasConfigChanges) {
       try {
@@ -194,16 +370,26 @@ router.patch('/:id', async (req, res, next) => {
       }
     }
 
-    if (hasConfigChanges) {
+    if (portChanged && updated.containerId) {
+      try {
+        const { containerId } = await recreateContainer(updated);
+        updated = serverStore.update(req.params.id, { containerId, status: 'stopped', restartRequired: false }) ?? updated;
+      } catch (err: any) {
+        recreateError = err;
+      }
+    }
+
+    if (hasConfigChanges && !portChanged) {
       updated = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
     }
 
-    if (configError || resourceError) {
+    if (configError || resourceError || recreateError) {
       return res.status(409).json({
         error: 'Update saved but not fully applied',
         details: {
           config: configError?.message,
           resources: resourceError?.message,
+          recreate: recreateError?.message,
         },
         server: updated,
       });

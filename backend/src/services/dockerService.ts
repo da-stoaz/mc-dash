@@ -33,7 +33,7 @@ export class DockerService {
     /For help, type "help"/i,
     /Server started/i,
     /Server ready/i,
-    /Listening on .*:25565/i,
+    /Listening on .*:\d+/i,
   ];
   private readonly startPatterns = [
     /Starting minecraft server/i,

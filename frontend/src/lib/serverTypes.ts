@@ -12,9 +12,11 @@ export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
 export type ServerRecord = {
   id: string;
   name: string;
+  subdomain?: string;
   serverPackUrl?: string;
   javaImage?: string;
   containerId?: string;
+  serverPort: number;
   whitelist?: string[];
   blacklist?: string[];
   ipBlacklist?: string[];
@@ -45,7 +47,9 @@ export type ServerMetrics = {
 
 export type FormState = {
   name: string;
+  subdomain: string;
   javaImage: string;
+  serverPort: string;
   minRamMb: number;
   maxRamMb: number;
   cpuLimit: string;
@@ -65,7 +69,9 @@ export type FirewallState = {
 
 export const emptyForm: FormState = {
   name: '',
+  subdomain: '',
   javaImage: '',
+  serverPort: '',
   minRamMb: 4096,
   maxRamMb: 6144,
   cpuLimit: '',

@@ -3,6 +3,7 @@ import cors from 'cors';
 import serversRouter from './routes/servers';
 import { config } from './config';
 import { logger } from './logger';
+import { routerService } from './services/routerService';
 
 const app = express();
 
@@ -27,3 +28,5 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(config.port, () => {
   logger.info(`API listening on port ${config.port}`);
 });
+
+routerService.start();

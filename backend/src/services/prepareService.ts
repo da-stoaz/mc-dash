@@ -148,6 +148,9 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
   if (server.game.seed) {
     props['level-seed'] = server.game.seed;
   }
+  if (server.serverPort) {
+    props['server-port'] = String(server.serverPort);
+  }
   if (server.whitelistEnabled !== undefined || server.whitelist !== undefined) {
     const enabled = server.whitelistEnabled ?? (server.whitelist?.length ?? 0) > 0;
     props['white-list'] = enabled ? 'true' : 'false';
@@ -156,6 +159,40 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
 
   const lines = Object.entries(props).map(([key, value]) => `${key}=${value}`);
   await fs.writeFile(propsPath, lines.join('\n') + '\n');
+}
+
+async function buildContainerFromPack(
+  server: ServerRecord,
+  serverRoot: string,
+  workingDir: string,
+  varsResult: { recommendedJavaVersion?: string }
+): Promise<{ containerId: string; script: string }> {
+  const scriptPath = await ensureStartScript(workingDir);
+  if (!scriptPath) {
+    throw new Error('Could not find a start script or server.jar inside the server pack');
+  }
+  await fs.chmod(scriptPath, 0o755);
+
+  const scriptDir = path.dirname(scriptPath);
+  const containerWorkdir = toPosix(path.join('/server', path.relative(serverRoot, scriptDir)));
+  const cmd = ['bash', `./${path.basename(scriptPath)}`];
+
+  const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : undefined;
+  const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
+
+  const image = chooseJavaImage(server.javaImage, varsResult.recommendedJavaVersion);
+
+  const containerId = await dockerService.createOrReplaceContainer(server, {
+    image,
+    hostServerDir: serverRoot,
+    workdir: containerWorkdir,
+    cmd,
+    port: server.serverPort ?? config.serverPort,
+    memoryBytes,
+    nanoCpus,
+  });
+
+  return { containerId, script: scriptPath };
 }
 
 async function applyVariablesTxt(workingDir: string, server: ServerRecord): Promise<{ recommendedJavaVersion?: string }> {
@@ -389,32 +426,25 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   await applyUserJvmArgs(workingDir, server);
   await applyAccessLists(workingDir, server);
 
-  const scriptPath = await ensureStartScript(workingDir);
-  if (!scriptPath) {
-    throw new Error('Could not find a start script or server.jar inside the server pack');
+  return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
+}
+
+export async function recreateContainer(server: ServerRecord): Promise<{ containerId: string; script: string }> {
+  const serverRoot = path.join(config.dataRoot, 'servers', server.id);
+  const packDir = path.join(serverRoot, 'pack');
+
+  if (!(await pathExists(packDir))) {
+    throw new Error('Server pack not prepared yet');
   }
-  await fs.chmod(scriptPath, 0o755);
 
-  const scriptDir = path.dirname(scriptPath);
-  const containerWorkdir = toPosix(path.join('/server', path.relative(serverRoot, scriptDir)));
-  const cmd = ['bash', `./${path.basename(scriptPath)}`];
+  const workingDir = await detectWorkingDir(packDir);
+  await writeEula(workingDir);
+  await applyServerProperties(workingDir, server);
+  const varsResult = await applyVariablesTxt(workingDir, server);
+  await applyUserJvmArgs(workingDir, server);
+  await applyAccessLists(workingDir, server);
 
-  const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : undefined;
-  const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
-
-  const image = chooseJavaImage(server.javaImage, varsResult.recommendedJavaVersion);
-
-  const containerId = await dockerService.createOrReplaceContainer(server, {
-    image,
-    hostServerDir: serverRoot,
-    workdir: containerWorkdir,
-    cmd,
-    port: config.serverPort,
-    memoryBytes,
-    nanoCpus,
-  });
-
-  return { containerId, script: scriptPath };
+  return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
 }
 
 export async function applyConfigFiles(server: ServerRecord): Promise<void> {

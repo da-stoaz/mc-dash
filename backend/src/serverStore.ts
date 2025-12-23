@@ -11,9 +11,11 @@ db.prepare(
   `CREATE TABLE IF NOT EXISTS servers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    subdomain TEXT,
     serverPackUrl TEXT,
     javaImage TEXT,
     containerId TEXT,
+    serverPort INTEGER NOT NULL,
     whitelist TEXT,
     blacklist TEXT,
     ipBlacklist TEXT,
@@ -55,13 +57,21 @@ if (!columns.find((col) => col.name === 'blacklistEnabled')) {
 if (!columns.find((col) => col.name === 'ipBlacklistEnabled')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN ipBlacklistEnabled INTEGER NOT NULL DEFAULT 0`).run();
 }
+if (!columns.find((col) => col.name === 'serverPort')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN serverPort INTEGER NOT NULL DEFAULT ${config.serverPort}`).run();
+}
+if (!columns.find((col) => col.name === 'subdomain')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN subdomain TEXT`).run();
+}
 
 type ServerRow = {
   id: string;
   name: string;
+  subdomain?: string | null;
   serverPackUrl?: string;
   javaImage?: string | null;
   containerId?: string | null;
+  serverPort?: number | null;
   whitelist?: string | null;
   blacklist?: string | null;
   ipBlacklist?: string | null;
@@ -76,6 +86,62 @@ type ServerRow = {
   createdAt: string;
   updatedAt: string;
 };
+
+const subdomainRegex = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+function slugifyName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug.slice(0, 63);
+}
+
+function normalizeSubdomain(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (!subdomainRegex.test(trimmed)) return null;
+  return trimmed;
+}
+
+function makeUniqueSubdomain(base: string, reserved: Set<string>): string {
+  const fallbackBase = base || 'server';
+  let candidate = fallbackBase;
+  let suffix = 2;
+  while (reserved.has(candidate)) {
+    const suffixStr = `-${suffix}`;
+    const trimmedBase = fallbackBase.slice(0, Math.max(1, 63 - suffixStr.length));
+    candidate = `${trimmedBase}${suffixStr}`;
+    suffix += 1;
+  }
+  reserved.add(candidate);
+  return candidate;
+}
+
+function backfillSubdomains() {
+  const rows = db.prepare(`SELECT id, name, subdomain FROM servers`).all() as ServerRow[];
+  const reserved = new Set<string>();
+  const updates: { id: string; subdomain: string }[] = [];
+
+  rows.forEach((row) => {
+    const normalized = normalizeSubdomain(row.subdomain);
+    if (normalized && !reserved.has(normalized)) {
+      reserved.add(normalized);
+      return;
+    }
+    const base = slugifyName(row.name);
+    const subdomain = makeUniqueSubdomain(base, reserved);
+    updates.push({ id: row.id, subdomain });
+  });
+
+  if (updates.length) {
+    const stmt = db.prepare(`UPDATE servers SET subdomain = @subdomain WHERE id = @id`);
+    updates.forEach((update) => stmt.run(update));
+  }
+}
+
+backfillSubdomains();
 
 function parseJsonField<T>(value: string): T {
   try {
@@ -106,9 +172,11 @@ function mapRow(row: ServerRow): ServerRecord {
   return {
     id: row.id,
     name: row.name,
+    subdomain: normalizeSubdomain(row.subdomain) ?? undefined,
     serverPackUrl: row.serverPackUrl,
     javaImage: row.javaImage ?? undefined,
     containerId: row.containerId ?? undefined,
+    serverPort: row.serverPort ?? config.serverPort,
     whitelist,
     blacklist,
     ipBlacklist,
@@ -146,9 +214,9 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, serverPackUrl, javaImage, containerId, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, subdomain, serverPackUrl, javaImage, containerId, serverPort, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @serverPackUrl, @javaImage, NULL, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, @serverPort, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
@@ -159,8 +227,10 @@ export class ServerStore {
     stmt.run({
       id,
       name: input.name,
+      subdomain: normalizeSubdomain(input.subdomain) ?? null,
       serverPackUrl: null,
       javaImage: input.javaImage ?? null,
+      serverPort: input.serverPort ?? config.serverPort,
       whitelist: input.whitelist !== undefined ? JSON.stringify(input.whitelist) : null,
       blacklist: input.blacklist !== undefined ? JSON.stringify(input.blacklist) : null,
       ipBlacklist: input.ipBlacklist !== undefined ? JSON.stringify(input.ipBlacklist) : null,
@@ -205,6 +275,12 @@ export class ServerStore {
     }
     if (updates.javaImage !== undefined) {
       next.javaImage = updates.javaImage ?? null;
+    }
+    if (updates.serverPort !== undefined) {
+      next.serverPort = updates.serverPort;
+    }
+    if (updates.subdomain !== undefined) {
+      next.subdomain = updates.subdomain ? normalizeSubdomain(updates.subdomain) : null;
     }
     if (updates.whitelist !== undefined) {
       next.whitelist = JSON.stringify(updates.whitelist);

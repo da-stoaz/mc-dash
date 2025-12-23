@@ -3,6 +3,8 @@ import { Card, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, 
 import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 
+const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+
 type Props = {
   servers: ServerRecord[];
   actionLoading: Record<string, string>;
@@ -20,6 +22,7 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
           <TableColumn>Name</TableColumn>
           <TableColumn>Status</TableColumn>
           <TableColumn>Server pack</TableColumn>
+          <TableColumn>Port</TableColumn>
           <TableColumn>Resources</TableColumn>
           <TableColumn>Game</TableColumn>
           <TableColumn align="end">Actions</TableColumn>
@@ -32,6 +35,11 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
                   <Link href={`/servers/${server.id}`} className="font-semibold hover:text-cyan-200 transition-colors">
                     {server.name}
                   </Link>
+                  {server.subdomain && (
+                    <span className="muted text-xs">
+                      {ROUTER_DOMAIN ? `${server.subdomain}.${ROUTER_DOMAIN}` : server.subdomain}
+                    </span>
+                  )}
                   <span className="muted text-xs">{server.id.slice(0, 8)}</span>
                 </div>
               </TableCell>
@@ -57,6 +65,9 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
                     <span className="muted text-xs">No pack uploaded</span>
                   )}
                 </div>
+              </TableCell>
+              <TableCell>
+                <span className="text-sm">{server.serverPort}</span>
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">

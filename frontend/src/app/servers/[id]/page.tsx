@@ -111,6 +111,8 @@ export default function ServerDetailsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           javaImage: changes.javaImage ? changes.javaImage : null,
+          serverPort: changes.serverPort ? Number(changes.serverPort) : undefined,
+          subdomain: changes.subdomain ? changes.subdomain : undefined,
           resources: {
             minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
             maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,

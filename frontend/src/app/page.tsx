@@ -68,11 +68,13 @@ export default function Page() {
       const payload = new FormData();
       payload.append('file', packFile);
       payload.append('name', form.name);
+      if (form.subdomain) payload.append('subdomain', form.subdomain);
       payload.append('minRamMb', String(form.minRamMb));
       payload.append('maxRamMb', String(form.maxRamMb));
       payload.append('gameMode', form.gameMode);
 
       if (form.javaImage) payload.append('javaImage', form.javaImage);
+      if (form.serverPort) payload.append('serverPort', form.serverPort);
       if (form.cpuLimit) payload.append('cpuLimit', form.cpuLimit);
       if (form.renderDistance) payload.append('renderDistance', String(form.renderDistance));
       if (form.seed) payload.append('seed', form.seed);
@@ -125,6 +127,8 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           javaImage: changes.javaImage ? changes.javaImage : null,
+          serverPort: changes.serverPort ? Number(changes.serverPort) : undefined,
+          subdomain: changes.subdomain ? changes.subdomain : undefined,
           resources: {
             minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
             maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,
