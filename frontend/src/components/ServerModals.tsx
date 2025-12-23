@@ -8,6 +8,7 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Progress,
   Select,
   SelectItem,
   Switch,
@@ -23,9 +24,23 @@ type CreateProps = {
   packFile: File | null;
   setPackFile: (file: File | null) => void;
   onCreate: () => void;
+  isCreating?: boolean;
+  uploadProgress?: number | null;
 };
 
-export function CreateModal({ open, onClose, form, setForm, packFile, setPackFile, onCreate }: CreateProps) {
+export function CreateModal({
+  open,
+  onClose,
+  form,
+  setForm,
+  packFile,
+  setPackFile,
+  onCreate,
+  isCreating = false,
+  uploadProgress,
+}: CreateProps) {
+  const progressValue = Math.min(100, Math.max(0, uploadProgress ?? 0));
+
   return (
     <Modal isOpen={open} onClose={onClose} placement="center" size="4xl" scrollBehavior="inside">
       <ModalContent className="max-w-5xl">
@@ -33,7 +48,13 @@ export function CreateModal({ open, onClose, form, setForm, packFile, setPackFil
           <>
             <ModalHeader>Create server</ModalHeader>
             <ModalBody className="space-y-4">
-              <Input label="Name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <Input
+                label="Name"
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                isDisabled={isCreating}
+              />
               <div className="space-y-2">
                 <div className="text-sm font-medium">Server pack zip</div>
                 <input
@@ -41,10 +62,14 @@ export function CreateModal({ open, onClose, form, setForm, packFile, setPackFil
                   accept=".zip"
                   onChange={(e) => setPackFile(e.target.files?.[0] ?? null)}
                   className="text-sm"
+                  disabled={isCreating}
                 />
                 <div className="text-xs muted">
                   {packFile ? `Selected: ${packFile.name}` : 'Required. Use the server pack zip you downloaded.'}
                 </div>
+                {isCreating && (
+                  <Progress size="sm" value={progressValue} showValueLabel className="mt-2" />
+                )}
               </div>
               <div>
                 <Input
@@ -52,6 +77,7 @@ export function CreateModal({ open, onClose, form, setForm, packFile, setPackFil
                   placeholder="eclipse-temurin:21-jre (leave blank for auto)"
                   value={form.javaImage}
                   onChange={(e) => setForm({ ...form, javaImage: e.target.value })}
+                  isDisabled={isCreating}
                 />
               </div>
               <Divider />
@@ -61,12 +87,14 @@ export function CreateModal({ open, onClose, form, setForm, packFile, setPackFil
                   label="Min RAM (MB)"
                   value={String(form.minRamMb)}
                   onChange={(e) => setForm({ ...form, minRamMb: Number(e.target.value) })}
+                  isDisabled={isCreating}
                 />
                 <Input
                   type="number"
                   label="Max RAM (MB)"
                   value={String(form.maxRamMb)}
                   onChange={(e) => setForm({ ...form, maxRamMb: Number(e.target.value) })}
+                  isDisabled={isCreating}
                 />
                 <Input
                   type="number"
@@ -74,6 +102,7 @@ export function CreateModal({ open, onClose, form, setForm, packFile, setPackFil
                   placeholder="Optional"
                   value={form.cpuLimit}
                   onChange={(e) => setForm({ ...form, cpuLimit: e.target.value })}
+                  isDisabled={isCreating}
                 />
               </div>
               <div className="grid gap-3 md:grid-cols-3">
@@ -82,26 +111,33 @@ export function CreateModal({ open, onClose, form, setForm, packFile, setPackFil
                   label="Render distance"
                   value={String(form.renderDistance)}
                   onChange={(e) => setForm({ ...form, renderDistance: Number(e.target.value) })}
+                  isDisabled={isCreating}
                 />
                 <Select
                   label="Game mode"
                   selectedKeys={[form.gameMode]}
                   onSelectionChange={(keys) => setForm({ ...form, gameMode: Array.from(keys)[0] as GameMode })}
+                  isDisabled={isCreating}
                 >
                   <SelectItem key="survival">Survival</SelectItem>
                   <SelectItem key="creative">Creative</SelectItem>
                   <SelectItem key="adventure">Adventure</SelectItem>
                   <SelectItem key="spectator">Spectator</SelectItem>
                 </Select>
-                <Input label="World seed" value={form.seed} onChange={(e) => setForm({ ...form, seed: e.target.value })} />
+                <Input
+                  label="World seed"
+                  value={form.seed}
+                  onChange={(e) => setForm({ ...form, seed: e.target.value })}
+                  isDisabled={isCreating}
+                />
               </div>
             </ModalBody>
             <ModalFooter>
-              <Button variant="light" onPress={onModalClose}>
+              <Button variant="light" onPress={onModalClose} isDisabled={isCreating}>
                 Cancel
               </Button>
-              <Button color="primary" onPress={onCreate}>
-                Create
+              <Button color="primary" onPress={onCreate} isDisabled={isCreating}>
+                {isCreating ? 'Uploading…' : 'Create'}
               </Button>
             </ModalFooter>
           </>

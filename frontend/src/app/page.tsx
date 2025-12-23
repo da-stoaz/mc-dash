@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
 import { Plus } from 'lucide-react';
 import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
@@ -18,6 +18,9 @@ export default function Page() {
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [packFile, setPackFile] = useState<File | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const serversErrorRef = useRef(false);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -35,8 +38,12 @@ export default function Page() {
       const res = await fetch(`${API_BASE}/servers`);
       const data = await res.json();
       setServers(data);
+      serversErrorRef.current = false;
     } catch (err) {
-      notify('Failed to load servers', undefined, 'danger');
+      if (!serversErrorRef.current) {
+        notify('Failed to load servers', undefined, 'danger');
+        serversErrorRef.current = true;
+      }
     } finally {
       setLoading(false);
     }
@@ -49,12 +56,15 @@ export default function Page() {
   }, []);
 
   const handleCreate = async () => {
+    if (creating) return;
     try {
       if (!packFile) {
         notify('Server pack required', 'Upload the server pack zip to continue.', 'warning');
         return;
       }
 
+      setCreating(true);
+      setUploadProgress(0);
       const payload = new FormData();
       payload.append('file', packFile);
       payload.append('name', form.name);
@@ -67,11 +77,34 @@ export default function Page() {
       if (form.renderDistance) payload.append('renderDistance', String(form.renderDistance));
       if (form.seed) payload.append('seed', form.seed);
 
-      const res = await fetch(`${API_BASE}/servers`, {
-        method: 'POST',
-        body: payload,
+      const resText = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_BASE}/servers`);
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            setUploadProgress(percent);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setUploadProgress(100);
+            resolve(xhr.responseText);
+            return;
+          }
+          reject(new Error(xhr.responseText || 'Create failed'));
+        };
+        xhr.onerror = () => reject(new Error('Create failed'));
+        xhr.send(payload);
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (resText) {
+        try {
+          const parsed = JSON.parse(resText);
+          if (parsed?.error) throw new Error(parsed.error);
+        } catch {
+          // Non-JSON responses are fine on success.
+        }
+      }
       setForm({ ...emptyForm });
       setPackFile(null);
       setShowCreate(false);
@@ -79,6 +112,9 @@ export default function Page() {
       notify('Server created', 'Server pack uploaded. Now run Prepare.', 'success');
     } catch (err: any) {
       notify('Create failed', err?.message ?? 'Create failed', 'danger');
+    } finally {
+      setCreating(false);
+      setUploadProgress(null);
     }
   };
 
@@ -216,6 +252,7 @@ export default function Page() {
       <CreateModal
         open={showCreate}
         onClose={() => {
+          if (creating) return;
           setShowCreate(false);
           setPackFile(null);
         }}
@@ -224,6 +261,8 @@ export default function Page() {
         packFile={packFile}
         setPackFile={setPackFile}
         onCreate={handleCreate}
+        isCreating={creating}
+        uploadProgress={uploadProgress}
       />
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
     </div>
