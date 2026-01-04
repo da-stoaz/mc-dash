@@ -16,6 +16,9 @@ export type ServerRecord = {
   serverPackUrl?: string;
   javaImage?: string;
   effectiveJavaImage?: string;
+  effectiveJavaSource?: string;
+  packRecommendedJava?: string;
+  packRecommendedJavaMajor?: number;
   containerId?: string;
   serverPort: number;
   whitelist?: string[];

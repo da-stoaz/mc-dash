@@ -15,6 +15,9 @@ db.prepare(
     serverPackUrl TEXT,
     javaImage TEXT,
     effectiveJavaImage TEXT,
+    effectiveJavaSource TEXT,
+    packRecommendedJava TEXT,
+    packRecommendedJavaMajor INTEGER,
     containerId TEXT,
     serverPort INTEGER NOT NULL,
     whitelist TEXT,
@@ -42,6 +45,15 @@ if (!columns.find((col) => col.name === 'javaImage')) {
 }
 if (!columns.find((col) => col.name === 'effectiveJavaImage')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN effectiveJavaImage TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'effectiveJavaSource')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN effectiveJavaSource TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'packRecommendedJava')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN packRecommendedJava TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'packRecommendedJavaMajor')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN packRecommendedJavaMajor INTEGER`).run();
 }
 if (!columns.find((col) => col.name === 'whitelist')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN whitelist TEXT`).run();
@@ -75,6 +87,9 @@ type ServerRow = {
   serverPackUrl?: string;
   javaImage?: string | null;
   effectiveJavaImage?: string | null;
+  effectiveJavaSource?: string | null;
+  packRecommendedJava?: string | null;
+  packRecommendedJavaMajor?: number | null;
   containerId?: string | null;
   serverPort?: number | null;
   whitelist?: string | null;
@@ -181,6 +196,9 @@ function mapRow(row: ServerRow): ServerRecord {
     serverPackUrl: row.serverPackUrl,
     javaImage: row.javaImage ?? undefined,
     effectiveJavaImage: row.effectiveJavaImage ?? undefined,
+    effectiveJavaSource: row.effectiveJavaSource ?? undefined,
+    packRecommendedJava: row.packRecommendedJava ?? undefined,
+    packRecommendedJavaMajor: row.packRecommendedJavaMajor ?? undefined,
     containerId: row.containerId ?? undefined,
     serverPort: row.serverPort ?? config.serverPort,
     whitelist,
@@ -220,9 +238,9 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, subdomain, serverPackUrl, javaImage, effectiveJavaImage, containerId, serverPort, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, subdomain, serverPackUrl, javaImage, effectiveJavaImage, effectiveJavaSource, packRecommendedJava, packRecommendedJavaMajor, containerId, serverPort, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, NULL, @serverPort, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, NULL, NULL, NULL, NULL, @serverPort, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
@@ -284,6 +302,15 @@ export class ServerStore {
     }
     if (updates.effectiveJavaImage !== undefined) {
       next.effectiveJavaImage = updates.effectiveJavaImage ?? null;
+    }
+    if (updates.effectiveJavaSource !== undefined) {
+      next.effectiveJavaSource = updates.effectiveJavaSource ?? null;
+    }
+    if (updates.packRecommendedJava !== undefined) {
+      next.packRecommendedJava = updates.packRecommendedJava ?? null;
+    }
+    if (updates.packRecommendedJavaMajor !== undefined) {
+      next.packRecommendedJavaMajor = updates.packRecommendedJavaMajor ?? null;
     }
     if (updates.serverPort !== undefined) {
       next.serverPort = updates.serverPort;

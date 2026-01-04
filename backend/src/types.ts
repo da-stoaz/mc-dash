@@ -29,6 +29,9 @@ export interface ServerRecord {
   serverPackUrl?: string;
   javaImage?: string;
   effectiveJavaImage?: string;
+  effectiveJavaSource?: string;
+  packRecommendedJava?: string;
+  packRecommendedJavaMajor?: number;
   containerId?: string;
   serverPort: number;
   whitelist?: string[];
@@ -69,6 +72,9 @@ export interface ServerUpdateInput {
   serverPackUrl?: string;
   javaImage?: string | null;
   effectiveJavaImage?: string | null;
+  effectiveJavaSource?: string | null;
+  packRecommendedJava?: string | null;
+  packRecommendedJavaMajor?: number | null;
   serverPort?: number;
   subdomain?: string | null;
   whitelist?: string[];

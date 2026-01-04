@@ -166,7 +166,14 @@ async function buildContainerFromPack(
   serverRoot: string,
   workingDir: string,
   varsResult: { recommendedJavaVersion?: string }
-): Promise<{ containerId: string; script: string; image: string }> {
+): Promise<{
+  containerId: string;
+  script: string;
+  image: string;
+  javaSource: 'override' | 'env' | 'pack' | 'default';
+  packRecommendedJava?: string;
+  packRecommendedJavaMajor?: number;
+}> {
   const scriptPath = await ensureStartScript(workingDir);
   if (!scriptPath) {
     throw new Error('Could not find a start script or server.jar inside the server pack');
@@ -180,7 +187,9 @@ async function buildContainerFromPack(
   const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : undefined;
   const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
 
-  const image = chooseJavaImage(server.javaImage, varsResult.recommendedJavaVersion);
+  const packRecommendedJava = varsResult.recommendedJavaVersion ?? (await detectRecommendedJavaFromScript(scriptPath));
+  const javaResolution = resolveJavaImage(server.javaImage, packRecommendedJava);
+  const image = javaResolution.image;
 
   const containerId = await dockerService.createOrReplaceContainer(server, {
     image,
@@ -192,65 +201,153 @@ async function buildContainerFromPack(
     nanoCpus,
   });
 
-  return { containerId, script: scriptPath, image };
+  return {
+    containerId,
+    script: scriptPath,
+    image,
+    javaSource: javaResolution.source,
+    packRecommendedJava,
+    packRecommendedJavaMajor: javaResolution.recommendedMajor,
+  };
 }
 
 async function applyVariablesTxt(workingDir: string, server: ServerRecord): Promise<{ recommendedJavaVersion?: string }> {
-  const varsPath = path.join(workingDir, 'variables.txt');
+  const varsPath = await findVariablesTxt(workingDir);
+  if (!varsPath) {
+    logger.warn({ workingDir }, 'variables.txt not found; skipping variable updates');
+    return {};
+  }
+
   try {
     const content = await fs.readFile(varsPath, 'utf8');
     const lines = content.split('\n');
-    const map: Record<string, string> = {};
-    lines.forEach((line) => {
-      if (!line || line.startsWith('#') || !line.includes('=')) return;
+
+    const normalizeKey = (raw: string) => {
+      const trimmed = raw.trim();
+      const withoutExport = trimmed.toLowerCase().startsWith('export ') ? trimmed.slice('export '.length).trim() : trimmed;
+      return withoutExport.toUpperCase();
+    };
+
+    const parsed = lines.map((line) => {
+      if (!line || line.startsWith('#') || !line.includes('=')) return { kind: 'other' as const, line };
       const idx = line.indexOf('=');
-      const rawKey = line.slice(0, idx).trim();
-      const key = rawKey.toLowerCase().startsWith('export ') ? rawKey.slice('export '.length).trim() : rawKey;
+      const rawKeyPart = line.slice(0, idx).trim();
+      const prefix = rawKeyPart.toLowerCase().startsWith('export ') ? rawKeyPart.slice(0, 'export '.length) : '';
+      const key = prefix ? rawKeyPart.slice('export '.length).trim() : rawKeyPart;
+      const normalizedKey = normalizeKey(rawKeyPart);
       const value = line.slice(idx + 1).trim();
-      map[key] = value;
+      return { kind: 'kv' as const, line, prefix, key, normalizedKey, value };
+    });
+
+    const originalMap: Record<string, string> = {};
+    parsed.forEach((entry) => {
+      if (entry.kind !== 'kv') return;
+      originalMap[entry.normalizedKey] = entry.value;
     });
 
     // Respect user-set JVM args if present; otherwise derive from resources
+    const desired: Record<string, string> = {};
     if (server.resources.maxRamMb && server.resources.minRamMb) {
-      map['JAVA_ARGS'] = `"-Xmx${server.resources.maxRamMb}M -Xms${server.resources.minRamMb}M"`;
+      desired['JAVA_ARGS'] = `"-Xmx${server.resources.maxRamMb}M -Xms${server.resources.minRamMb}M"`;
     }
 
     // Container already has Java; skip interactive installer
-    map['SKIP_JAVA_CHECK'] = 'true';
-    map['WAIT_FOR_USER_INPUT'] = 'false';
-    map['JAVA'] = 'java';
+    desired['SKIP_JAVA_CHECK'] = 'true';
+    desired['WAIT_FOR_USER_INPUT'] = 'false';
+    desired['JAVA'] = 'java';
 
-    const newLines = lines.map((line) => {
-      if (!line || line.startsWith('#') || !line.includes('=')) return line;
-      const idx = line.indexOf('=');
-      const key = line.slice(0, idx).trim();
-      if (map[key] !== undefined) {
-        return `${key}=${map[key]}`;
+    const newLines = parsed.map((entry) => {
+      if (entry.kind !== 'kv') return entry.line;
+      const replacement = desired[entry.normalizedKey];
+      if (replacement !== undefined) {
+        return `${entry.prefix}${entry.key}=${replacement}`;
       }
-      return line;
+      return entry.line;
     });
 
     // Add any new keys not present
-    ['JAVA_ARGS', 'SKIP_JAVA_CHECK', 'WAIT_FOR_USER_INPUT', 'JAVA'].forEach((key) => {
-      if (!newLines.some((l) => l.startsWith(`${key}=`))) {
-        newLines.push(`${key}=${map[key]}`);
+    Object.entries(desired).forEach(([key, value]) => {
+      const normalized = key.toUpperCase();
+      const hasKey = parsed.some((entry) => entry.kind === 'kv' && entry.normalizedKey === normalized);
+      if (!hasKey) {
+        newLines.push(`${key}=${value}`);
       }
     });
 
     await fs.writeFile(varsPath, newLines.join('\n'));
+
+    // Use the original values from the pack for detection (not our overrides).
     const recommendedJavaVersion =
-      map['RECOMMENDED_JAVA_VERSION'] ??
-      map['JAVA_VERSION'] ??
-      map['JAVA_MAJOR_VERSION'] ??
-      map['MINIMUM_JAVA_VERSION'] ??
-      map['MIN_JAVA_VERSION'] ??
-      map['MIN_JAVA'] ??
-      map['JAVA'];
+      originalMap['RECOMMENDED_JAVA_VERSION'] ??
+      originalMap['JAVA_VERSION'] ??
+      originalMap['JAVA_MAJOR_VERSION'] ??
+      originalMap['MINIMUM_JAVA_VERSION'] ??
+      originalMap['MIN_JAVA_VERSION'] ??
+      originalMap['MIN_JAVA'];
     return { recommendedJavaVersion };
   } catch (err) {
     logger.warn({ err }, 'variables.txt not updated (file may be missing)');
     return {};
   }
+}
+
+async function detectRecommendedJavaFromScript(scriptPath: string): Promise<string | undefined> {
+  try {
+    const content = await fs.readFile(scriptPath, 'utf8');
+    const lines = content.split('\n');
+    const keyPattern =
+      /\b(?:export\s+)?(RECOMMENDED_JAVA_VERSION|JAVA_VERSION|JAVA_MAJOR_VERSION|MINIMUM_JAVA_VERSION|MIN_JAVA_VERSION|MIN_JAVA)\s*=\s*(.+)\s*$/i;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const match = trimmed.match(keyPattern);
+      if (!match) continue;
+      const value = match[2]?.split('#')[0]?.trim();
+      if (!value) continue;
+      return value;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+async function findVariablesTxt(root: string): Promise<string | null> {
+  const upwardDirs: string[] = [];
+  const rootResolved = path.resolve(root);
+  upwardDirs.push(rootResolved);
+  upwardDirs.push(path.dirname(rootResolved));
+  upwardDirs.push(path.dirname(path.dirname(rootResolved)));
+  const uniqueUpwardDirs = Array.from(new Set(upwardDirs));
+
+  for (const dir of uniqueUpwardDirs) {
+    const direct = path.join(dir, 'variables.txt');
+    if (await pathExists(direct)) return direct;
+  }
+
+  // Some packs nest scripts/variables under a pack folder; search shallowly.
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) break;
+    let entries: Array<import('fs').Dirent> = [];
+    try {
+      entries = await fs.readdir(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const nextDepth = current.depth + 1;
+      if (nextDepth > 6) continue;
+      const nextDir = path.join(current.dir, entry.name);
+      const candidate = path.join(nextDir, 'variables.txt');
+      if (await pathExists(candidate)) return candidate;
+      queue.push({ dir: nextDir, depth: nextDepth });
+    }
+  }
+  return null;
 }
 
 async function applyUserJvmArgs(workingDir: string, server: ServerRecord) {
@@ -371,21 +468,22 @@ async function ensureZipExtracted(zipPath: string, packDir: string): Promise<str
   return packDir;
 }
 
-function chooseJavaImage(serverJavaImage?: string, recommended?: string): string {
+function resolveJavaImage(serverJavaImage?: string, recommended?: string): {
+  image: string;
+  source: 'override' | 'env' | 'pack' | 'default';
+  recommendedMajor?: number;
+} {
   const trimmed = serverJavaImage?.trim();
   if (trimmed && trimmed.toLowerCase() !== 'auto') {
-    return trimmed;
-  }
-  if (process.env.JAVA_IMAGE && process.env.JAVA_IMAGE.trim().length > 0) {
-    return process.env.JAVA_IMAGE.trim();
+    return { image: trimmed, source: 'override' };
   }
 
   const recommendedMajor = parseRecommendedJavaMajor(recommended);
   if (recommendedMajor) {
-    return `eclipse-temurin:${recommendedMajor}-jre`;
+    return { image: `eclipse-temurin:${recommendedMajor}-jre`, source: 'pack', recommendedMajor };
   }
 
-  return config.javaImage;
+  return { image: config.javaImage, source: 'default' };
 }
 
 function parseRecommendedJavaMajor(recommended?: string): number | undefined {
@@ -435,7 +533,14 @@ async function getServerPackArchive(serverPackUrl: string, downloadsDir: string)
   return dest;
 }
 
-export async function prepareServer(server: ServerRecord): Promise<{ containerId: string; script: string; image: string }> {
+export async function prepareServer(server: ServerRecord): Promise<{
+  containerId: string;
+  script: string;
+  image: string;
+  javaSource: 'override' | 'env' | 'pack' | 'default';
+  packRecommendedJava?: string;
+  packRecommendedJavaMajor?: number;
+}> {
   if (!server.serverPackUrl) {
     throw new Error('Server is missing an uploaded server pack');
   }
@@ -462,7 +567,14 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
 }
 
-export async function recreateContainer(server: ServerRecord): Promise<{ containerId: string; script: string; image: string }> {
+export async function recreateContainer(server: ServerRecord): Promise<{
+  containerId: string;
+  script: string;
+  image: string;
+  javaSource: 'override' | 'env' | 'pack' | 'default';
+  packRecommendedJava?: string;
+  packRecommendedJavaMajor?: number;
+}> {
   const serverRoot = path.join(config.dataRoot, 'servers', server.id);
   const packDir = path.join(serverRoot, 'pack');
 

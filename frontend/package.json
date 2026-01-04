@@ -4,10 +4,10 @@
   "description": "Minecraft dashboard UI",
   "main": "index.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "echo \"No automated tests yet\" && exit 0"
   },
   "keywords": [],

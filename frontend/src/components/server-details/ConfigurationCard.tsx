@@ -34,9 +34,16 @@ export function ConfigurationCard({ server }: ConfigurationCardProps) {
             {server.javaImage
               ? server.javaImage
               : server.effectiveJavaImage
-                ? `Auto → ${server.effectiveJavaImage}`
+                ? `Auto → ${server.effectiveJavaImage}${server.effectiveJavaSource ? ` (${server.effectiveJavaSource})` : ''}`
                 : 'Auto'}
           </div>
+          {!server.javaImage && (server.packRecommendedJava || server.packRecommendedJavaMajor) && (
+            <div className="muted">
+              Pack recommends:{' '}
+              {server.packRecommendedJavaMajor ? `Java ${server.packRecommendedJavaMajor}` : 'Java ?'}
+              {server.packRecommendedJava ? ` (${server.packRecommendedJava})` : ''}
+            </div>
+          )}
           <div className="muted">Container: {server.containerId ?? '-'}</div>
         </div>
         <Divider className="bg-white/10" />
