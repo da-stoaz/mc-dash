@@ -7,6 +7,7 @@ import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverT
 import { StatusBar } from '../components/StatusBar';
 import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal } from '../components/ServerModals';
+import { extractApiErrorMessageFromText, getApiErrorMessage } from '../lib/apiErrors';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -36,6 +37,7 @@ export default function Page() {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/servers`);
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load servers'));
       const data = await res.json();
       setServers(data);
       serversErrorRef.current = false;
@@ -94,7 +96,7 @@ export default function Page() {
             resolve(xhr.responseText);
             return;
           }
-          reject(new Error(xhr.responseText || 'Create failed'));
+          reject(new Error(extractApiErrorMessageFromText(xhr.responseText || '', 'Create failed')));
         };
         xhr.onerror = () => reject(new Error('Create failed'));
         xhr.send(payload);
@@ -141,7 +143,7 @@ export default function Page() {
           },
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
       await fetchServers();
       setShowEdit(null);
       notify('Updated', 'Changes saved. Restart if required.', 'success');
@@ -154,8 +156,8 @@ export default function Page() {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? `${action} failed`);
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
+      await res.json().catch(() => null);
       await fetchServers();
       notify(action.charAt(0).toUpperCase() + action.slice(1), 'Command sent.', 'success');
     } catch (err: any) {
@@ -173,8 +175,8 @@ export default function Page() {
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
+      await res.json().catch(() => null);
       await fetchServers();
       notify('Container deleted', 'World data is still on disk.', 'success');
     } catch (err: any) {
@@ -192,8 +194,8 @@ export default function Page() {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
+      await res.json().catch(() => null);
       await fetchServers();
       notify('Server deleted', undefined, 'success');
     } catch (err: any) {

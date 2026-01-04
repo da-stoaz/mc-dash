@@ -10,6 +10,7 @@ import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
 import { config } from '../config';
+import { toApiError } from '../apiErrors';
 
 const resourceSchema = z.object({
   minRamMb: z.number().int().positive(),
@@ -242,13 +243,13 @@ router.post('/', upload.single('file'), async (req, res, next) => {
     try {
       serverPort = await resolveServerPort(parsed.serverPort);
     } catch (err: any) {
-      return res.status(409).json({ error: 'Port unavailable', details: err?.message ?? 'Port unavailable' });
+      return res.status(409).json({ error: 'Port unavailable', reason: err?.message ?? 'Port unavailable' });
     }
     let subdomain: string;
     try {
       subdomain = resolveServerSubdomain(parsed.subdomain, parsed.name);
     } catch (err: any) {
-      return res.status(409).json({ error: 'Subdomain unavailable', details: err?.message ?? 'Subdomain unavailable' });
+      return res.status(409).json({ error: 'Subdomain unavailable', reason: err?.message ?? 'Subdomain unavailable' });
     }
     const server = serverStore.create({
       name: parsed.name,
@@ -423,7 +424,8 @@ router.post('/:id/start', async (req, res) => {
   } catch (err: any) {
     logger.error({ err }, 'Start failed');
     serverStore.update(server.id, { status: 'error' });
-    res.status(501).json({ error: 'Container start not wired to a built server pack yet', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to start container', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
   }
 });
 
@@ -438,7 +440,8 @@ router.post('/:id/stop', async (req, res) => {
   } catch (err: any) {
     logger.error({ err }, 'Stop failed');
     serverStore.update(server.id, { status: 'error' });
-    res.status(500).json({ error: 'Failed to stop container', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to stop container', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
   }
 });
 
@@ -453,7 +456,8 @@ router.post('/:id/restart', async (req, res) => {
   } catch (err: any) {
     logger.error({ err }, 'Restart failed');
     serverStore.update(server.id, { status: 'error' });
-    res.status(500).json({ error: 'Failed to restart container', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to restart container', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
   }
 });
 
@@ -466,7 +470,8 @@ router.get('/:id/logs', async (req, res) => {
     logStream.pipe(res);
   } catch (err: any) {
     logger.error({ err }, 'Logs failed');
-    res.status(500).json({ error: 'Failed to stream logs', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to stream logs', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
   }
 });
 
@@ -479,7 +484,8 @@ router.get('/:id/metrics', async (req, res) => {
   } catch (err: any) {
     logger.error({ err }, 'Metrics failed');
     const statusCode = err?.statusCode === 404 ? 404 : 500;
-    res.status(statusCode).json({ error: 'Failed to read metrics', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to read metrics', status: statusCode });
+    res.status(apiErr.status).json(apiErr.body);
   }
 });
 
@@ -502,7 +508,8 @@ router.post('/:id/prepare', async (req, res) => {
   } catch (err: any) {
     logger.error({ err }, 'Prepare failed');
     serverStore.update(server.id, { status: 'error' });
-    res.status(500).json({ error: 'Failed to prepare server pack', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to prepare server pack', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
   } finally {
     preparing.delete(server.id);
   }
@@ -517,7 +524,8 @@ router.delete('/:id/container', async (req, res) => {
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Remove container failed');
-    res.status(500).json({ error: 'Failed to delete container', details: err?.message });
+    const apiErr = toApiError(err, { error: 'Failed to delete container', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
   }
 });
 

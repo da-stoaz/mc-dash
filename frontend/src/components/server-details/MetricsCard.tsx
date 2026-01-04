@@ -27,7 +27,7 @@ function SparklineCard({ label, values, stroke, fill }: SparklineProps) {
         {hasData ? (
           <svg viewBox="0 0 100 36" className="h-full w-full" preserveAspectRatio="none">
             <path d={areaPath} fill={fill} />
-            <path d={linePath} fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d={linePath} fill="none" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         ) : (
           <div className="flex h-full items-center justify-center text-xs muted">Waiting for data</div>

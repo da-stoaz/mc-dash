@@ -24,6 +24,7 @@ import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
+import { getApiErrorMessage } from '../../../lib/apiErrors';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -54,7 +55,7 @@ export default function ServerDetailsPage() {
     if (!serverId) return;
     try {
       const res = await fetch(`${API_BASE}/servers/${serverId}`);
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load server'));
       const data = await res.json();
       setServer(data);
       serverErrorRef.current = false;
@@ -125,7 +126,7 @@ export default function ServerDetailsPage() {
           },
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
       await fetchServer();
       setShowEdit(null);
       notify('Updated', 'Changes saved. Restart if required.', 'success');
@@ -153,7 +154,7 @@ export default function ServerDetailsPage() {
           ipBlacklist: toList(changes.ipBlacklist),
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
       await fetchServer();
       setShowFirewall(null);
       notify('Firewall updated', 'Access lists saved. Restart if required.', 'success');
@@ -166,8 +167,8 @@ export default function ServerDetailsPage() {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? `${action} failed`);
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
+      await res.json().catch(() => null);
       await fetchServer();
       notify(action.charAt(0).toUpperCase() + action.slice(1), 'Command sent.', 'success');
     } catch (err: any) {
@@ -185,8 +186,8 @@ export default function ServerDetailsPage() {
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
+      await res.json().catch(() => null);
       await fetchServer();
       notify('Container deleted', 'World data is still on disk.', 'success');
     } catch (err: any) {
@@ -204,8 +205,8 @@ export default function ServerDetailsPage() {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
       const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Delete failed');
+      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
+      await res.json().catch(() => null);
       notify('Server deleted', undefined, 'success');
       setServer(null);
     } catch (err: any) {
