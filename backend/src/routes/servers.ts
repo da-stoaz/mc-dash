@@ -279,7 +279,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
     const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
     await fs.promises.rename(req.file.path, target);
 
-    const updated = serverStore.update(server.id, { serverPackUrl: target, status: 'stopped' }) ?? server;
+    const updated = serverStore.update(server.id, { serverPackUrl: target, effectiveJavaImage: null, status: 'stopped' }) ?? server;
     res.status(201).json(updated);
   } catch (err) {
     if (createdId) {
@@ -333,6 +333,7 @@ router.patch('/:id', async (req, res, next) => {
       ...parsed,
       serverPort: resolvedPort ?? parsed.serverPort,
       ...(parsed.subdomain !== undefined ? { subdomain: resolvedSubdomain } : {}),
+      ...(parsed.javaImage !== undefined ? { effectiveJavaImage: null } : {}),
     };
 
     let updated = serverStore.update(req.params.id, updatePayload);
@@ -373,8 +374,10 @@ router.patch('/:id', async (req, res, next) => {
 
     if (portChanged && updated.containerId) {
       try {
-        const { containerId } = await recreateContainer(updated);
-        updated = serverStore.update(req.params.id, { containerId, status: 'stopped', restartRequired: false }) ?? updated;
+        const { containerId, image } = await recreateContainer(updated);
+        updated =
+          serverStore.update(req.params.id, { containerId, effectiveJavaImage: image, status: 'stopped', restartRequired: false }) ??
+          updated;
       } catch (err: any) {
         recreateError = err;
       }
@@ -502,8 +505,8 @@ router.post('/:id/prepare', async (req, res) => {
   try {
     preparing.add(server.id);
     serverStore.update(server.id, { status: 'creating' });
-    const { containerId } = await prepareServer(server);
-    const updated = serverStore.update(server.id, { status: 'stopped', containerId, restartRequired: false });
+    const { containerId, image } = await prepareServer(server);
+    const updated = serverStore.update(server.id, { status: 'stopped', containerId, effectiveJavaImage: image, restartRequired: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Prepare failed');

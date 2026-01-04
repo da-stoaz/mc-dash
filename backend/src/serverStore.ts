@@ -14,6 +14,7 @@ db.prepare(
     subdomain TEXT,
     serverPackUrl TEXT,
     javaImage TEXT,
+    effectiveJavaImage TEXT,
     containerId TEXT,
     serverPort INTEGER NOT NULL,
     whitelist TEXT,
@@ -38,6 +39,9 @@ if (!columns.find((col) => col.name === 'restartRequired')) {
 }
 if (!columns.find((col) => col.name === 'javaImage')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN javaImage TEXT`).run();
+}
+if (!columns.find((col) => col.name === 'effectiveJavaImage')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN effectiveJavaImage TEXT`).run();
 }
 if (!columns.find((col) => col.name === 'whitelist')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN whitelist TEXT`).run();
@@ -70,6 +74,7 @@ type ServerRow = {
   subdomain?: string | null;
   serverPackUrl?: string;
   javaImage?: string | null;
+  effectiveJavaImage?: string | null;
   containerId?: string | null;
   serverPort?: number | null;
   whitelist?: string | null;
@@ -175,6 +180,7 @@ function mapRow(row: ServerRow): ServerRecord {
     subdomain: normalizeSubdomain(row.subdomain) ?? undefined,
     serverPackUrl: row.serverPackUrl,
     javaImage: row.javaImage ?? undefined,
+    effectiveJavaImage: row.effectiveJavaImage ?? undefined,
     containerId: row.containerId ?? undefined,
     serverPort: row.serverPort ?? config.serverPort,
     whitelist,
@@ -214,9 +220,9 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, subdomain, serverPackUrl, javaImage, containerId, serverPort, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, subdomain, serverPackUrl, javaImage, effectiveJavaImage, containerId, serverPort, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, @serverPort, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, NULL, @serverPort, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
@@ -275,6 +281,9 @@ export class ServerStore {
     }
     if (updates.javaImage !== undefined) {
       next.javaImage = updates.javaImage ?? null;
+    }
+    if (updates.effectiveJavaImage !== undefined) {
+      next.effectiveJavaImage = updates.effectiveJavaImage ?? null;
     }
     if (updates.serverPort !== undefined) {
       next.serverPort = updates.serverPort;

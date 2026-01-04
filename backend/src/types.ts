@@ -28,6 +28,7 @@ export interface ServerRecord {
   subdomain?: string;
   serverPackUrl?: string;
   javaImage?: string;
+  effectiveJavaImage?: string;
   containerId?: string;
   serverPort: number;
   whitelist?: string[];
@@ -67,6 +68,7 @@ export interface ServerUpdateInput {
   containerId?: string | null;
   serverPackUrl?: string;
   javaImage?: string | null;
+  effectiveJavaImage?: string | null;
   serverPort?: number;
   subdomain?: string | null;
   whitelist?: string[];

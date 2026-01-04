@@ -15,6 +15,7 @@ export type ServerRecord = {
   subdomain?: string;
   serverPackUrl?: string;
   javaImage?: string;
+  effectiveJavaImage?: string;
   containerId?: string;
   serverPort: number;
   whitelist?: string[];

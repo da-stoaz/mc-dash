@@ -29,7 +29,14 @@ export function ConfigurationCard({ server }: ConfigurationCardProps) {
           </div>
           {hostname && <div className="muted">Hostname: {hostname}</div>}
           <div className="muted">Port: {server.serverPort}</div>
-          <div className="muted">Java image: {server.javaImage ?? 'Auto'}</div>
+          <div className="muted">
+            Java image:{' '}
+            {server.javaImage
+              ? server.javaImage
+              : server.effectiveJavaImage
+                ? `Auto → ${server.effectiveJavaImage}`
+                : 'Auto'}
+          </div>
           <div className="muted">Container: {server.containerId ?? '-'}</div>
         </div>
         <Divider className="bg-white/10" />

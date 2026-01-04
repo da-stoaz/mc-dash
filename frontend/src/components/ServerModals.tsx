@@ -18,6 +18,25 @@ import { FirewallState, FormState, GameMode, ServerRecord, emptyForm } from '../
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 
+const JAVA_IMAGE_PRESETS: { key: string; label: string }[] = [
+  { key: '', label: 'Auto' },
+  { key: 'eclipse-temurin:21-jre', label: 'Java 21 (eclipse-temurin:21-jre)' },
+  { key: 'eclipse-temurin:17-jre', label: 'Java 17 (eclipse-temurin:17-jre)' },
+  { key: 'eclipse-temurin:8-jre', label: 'Java 8 (eclipse-temurin:8-jre)' },
+  { key: '__custom__', label: 'Custom…' },
+];
+
+function isKnownPreset(value: string) {
+  return JAVA_IMAGE_PRESETS.some((preset) => preset.key === value);
+}
+
+function defaultJavaSelection(javaImage: string) {
+  const trimmed = javaImage.trim();
+  if (!trimmed) return '';
+  if (isKnownPreset(trimmed)) return trimmed;
+  return '__custom__';
+}
+
 type CreateProps = {
   open: boolean;
   onClose: () => void;
@@ -42,6 +61,12 @@ export function CreateModal({
   uploadProgress,
 }: CreateProps) {
   const progressValue = Math.min(100, Math.max(0, uploadProgress ?? 0));
+  const [javaSelection, setJavaSelection] = useState<string>(defaultJavaSelection(form.javaImage));
+
+  useEffect(() => {
+    if (!open) return;
+    setJavaSelection(defaultJavaSelection(form.javaImage));
+  }, [open]);
 
   return (
     <Modal isOpen={open} onClose={onClose} placement="center" size="4xl" scrollBehavior="inside">
@@ -101,13 +126,31 @@ export function CreateModal({
                 <div className="text-xs muted mt-1">Auto-assign uses the configured port range on the backend.</div>
               </div>
               <div>
-                <Input
-                  label="Java image override"
-                  placeholder="eclipse-temurin:21-jre (leave blank for auto)"
-                  value={form.javaImage}
-                  onChange={(e) => setForm({ ...form, javaImage: e.target.value })}
+                <Select
+                  label="Java image"
+                  selectedKeys={[javaSelection]}
+                  onSelectionChange={(keys) => {
+                    const key = String(Array.from(keys)[0] ?? '');
+                    setJavaSelection(key);
+                    if (key === '__custom__') return;
+                    setForm({ ...form, javaImage: key });
+                  }}
                   isDisabled={isCreating}
-                />
+                >
+                  {JAVA_IMAGE_PRESETS.map((preset) => (
+                    <SelectItem key={preset.key}>{preset.label}</SelectItem>
+                  ))}
+                </Select>
+                {javaSelection === '__custom__' && (
+                  <Input
+                    className="mt-2"
+                    label="Custom Java image"
+                    placeholder="eclipse-temurin:<major>-jre"
+                    value={form.javaImage}
+                    onChange={(e) => setForm({ ...form, javaImage: e.target.value })}
+                    isDisabled={isCreating}
+                  />
+                )}
               </div>
               <Divider />
               <div className="grid gap-3 md:grid-cols-3">
@@ -184,6 +227,7 @@ type EditProps = {
 
 export function EditModal({ server, onClose, onSave }: EditProps) {
   const [local, setLocal] = useState<FormState | null>(null);
+  const [javaSelection, setJavaSelection] = useState<string>('');
 
   useEffect(() => {
     if (server) {
@@ -199,6 +243,7 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
         gameMode: server.game.gameMode ?? emptyForm.gameMode,
         seed: server.game.seed ?? '',
       });
+      setJavaSelection(defaultJavaSelection(server.javaImage ?? ''));
     } else {
       setLocal(null);
     }
@@ -235,12 +280,31 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                     />
                     <div className="text-xs muted mt-1">Changing the port recreates the container while stopped.</div>
                   </div>
-                  <Input
-                    label="Java image override"
-                    placeholder="eclipse-temurin:21-jre (leave blank for auto)"
-                    value={local.javaImage}
-                    onChange={(e) => setLocal({ ...local, javaImage: e.target.value })}
-                  />
+                  <div>
+                    <Select
+                      label="Java image"
+                      selectedKeys={[javaSelection]}
+                      onSelectionChange={(keys) => {
+                        const key = String(Array.from(keys)[0] ?? '');
+                        setJavaSelection(key);
+                        if (key === '__custom__') return;
+                        setLocal({ ...local, javaImage: key });
+                      }}
+                    >
+                      {JAVA_IMAGE_PRESETS.map((preset) => (
+                        <SelectItem key={preset.key}>{preset.label}</SelectItem>
+                      ))}
+                    </Select>
+                    {javaSelection === '__custom__' && (
+                      <Input
+                        className="mt-2"
+                        label="Custom Java image"
+                        placeholder="eclipse-temurin:<major>-jre"
+                        value={local.javaImage}
+                        onChange={(e) => setLocal({ ...local, javaImage: e.target.value })}
+                      />
+                    )}
+                  </div>
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <Input

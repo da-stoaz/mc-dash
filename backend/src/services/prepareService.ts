@@ -166,7 +166,7 @@ async function buildContainerFromPack(
   serverRoot: string,
   workingDir: string,
   varsResult: { recommendedJavaVersion?: string }
-): Promise<{ containerId: string; script: string }> {
+): Promise<{ containerId: string; script: string; image: string }> {
   const scriptPath = await ensureStartScript(workingDir);
   if (!scriptPath) {
     throw new Error('Could not find a start script or server.jar inside the server pack');
@@ -192,7 +192,7 @@ async function buildContainerFromPack(
     nanoCpus,
   });
 
-  return { containerId, script: scriptPath };
+  return { containerId, script: scriptPath, image };
 }
 
 async function applyVariablesTxt(workingDir: string, server: ServerRecord): Promise<{ recommendedJavaVersion?: string }> {
@@ -204,7 +204,8 @@ async function applyVariablesTxt(workingDir: string, server: ServerRecord): Prom
     lines.forEach((line) => {
       if (!line || line.startsWith('#') || !line.includes('=')) return;
       const idx = line.indexOf('=');
-      const key = line.slice(0, idx).trim();
+      const rawKey = line.slice(0, idx).trim();
+      const key = rawKey.toLowerCase().startsWith('export ') ? rawKey.slice('export '.length).trim() : rawKey;
       const value = line.slice(idx + 1).trim();
       map[key] = value;
     });
@@ -237,7 +238,15 @@ async function applyVariablesTxt(workingDir: string, server: ServerRecord): Prom
     });
 
     await fs.writeFile(varsPath, newLines.join('\n'));
-    return { recommendedJavaVersion: map['RECOMMENDED_JAVA_VERSION'] };
+    const recommendedJavaVersion =
+      map['RECOMMENDED_JAVA_VERSION'] ??
+      map['JAVA_VERSION'] ??
+      map['JAVA_MAJOR_VERSION'] ??
+      map['MINIMUM_JAVA_VERSION'] ??
+      map['MIN_JAVA_VERSION'] ??
+      map['MIN_JAVA'] ??
+      map['JAVA'];
+    return { recommendedJavaVersion };
   } catch (err) {
     logger.warn({ err }, 'variables.txt not updated (file may be missing)');
     return {};
@@ -370,20 +379,44 @@ function chooseJavaImage(serverJavaImage?: string, recommended?: string): string
   if (process.env.JAVA_IMAGE && process.env.JAVA_IMAGE.trim().length > 0) {
     return process.env.JAVA_IMAGE.trim();
   }
-  if (recommended) {
-    // Try to derive major from patterns like 1.21.x or 21
-    const match21 = recommended.match(/1\.21|^21/);
-    const match20 = recommended.match(/1\.20|^20/);
-    const match19 = recommended.match(/1\.19|^19/);
-    const match17 = recommended.match(/1\.17|^17/);
-    const match8 = recommended.match(/1\.8|^8/);
-    if (match21) return 'eclipse-temurin:21-jre';
-    if (match20) return 'eclipse-temurin:21-jre'; // Java 21 is fine for 20+ in most cases
-    if (match19) return 'eclipse-temurin:19-jre';
-    if (match17) return 'eclipse-temurin:17-jre';
-    if (match8) return 'eclipse-temurin:8-jre';
+
+  const recommendedMajor = parseRecommendedJavaMajor(recommended);
+  if (recommendedMajor) {
+    return `eclipse-temurin:${recommendedMajor}-jre`;
   }
+
   return config.javaImage;
+}
+
+function parseRecommendedJavaMajor(recommended?: string): number | undefined {
+  if (!recommended) return undefined;
+  const normalized = recommended.replace(/['"]/g, '').trim().toLowerCase();
+  if (!normalized) return undefined;
+
+  // Common patterns: "21", "21.0.2", "java 21", "temurin-21"
+  const explicitJava = normalized.match(/\bjava[^0-9]*([0-9]{1,2})\b/);
+  if (explicitJava) {
+    const major = Number(explicitJava[1]);
+    if (Number.isFinite(major) && major > 0) return major;
+  }
+
+  // Some packs use Minecraft version-ish strings; map to the Java major Minecraft expects.
+  const minecraft = normalized.match(/\b1\.(\d{1,2})\b/);
+  if (minecraft) {
+    const minor = Number(minecraft[1]);
+    if (minor >= 21) return 21;
+    if (minor >= 18) return 17;
+    if (minor === 17) return 16;
+    return 8;
+  }
+
+  const firstNumber = normalized.match(/\b([0-9]{1,2})\b/);
+  if (firstNumber) {
+    const major = Number(firstNumber[1]);
+    if (Number.isFinite(major) && major > 0) return major;
+  }
+
+  return undefined;
 }
 
 async function getServerPackArchive(serverPackUrl: string, downloadsDir: string): Promise<string> {
@@ -402,7 +435,7 @@ async function getServerPackArchive(serverPackUrl: string, downloadsDir: string)
   return dest;
 }
 
-export async function prepareServer(server: ServerRecord): Promise<{ containerId: string; script: string }> {
+export async function prepareServer(server: ServerRecord): Promise<{ containerId: string; script: string; image: string }> {
   if (!server.serverPackUrl) {
     throw new Error('Server is missing an uploaded server pack');
   }
@@ -429,7 +462,7 @@ export async function prepareServer(server: ServerRecord): Promise<{ containerId
   return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
 }
 
-export async function recreateContainer(server: ServerRecord): Promise<{ containerId: string; script: string }> {
+export async function recreateContainer(server: ServerRecord): Promise<{ containerId: string; script: string; image: string }> {
   const serverRoot = path.join(config.dataRoot, 'servers', server.id);
   const packDir = path.join(serverRoot, 'pack');
 
