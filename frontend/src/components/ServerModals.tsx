@@ -444,7 +444,9 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
                 onChange={(e) => setLocal({ ...local, ipBlacklist: e.target.value })}
                 isDisabled={!local.ipBlacklistEnabled}
               />
-              <div className="text-xs muted">Use UUIDs for online-mode servers. Names use offline UUIDs.</div>
+              <div className="text-xs muted">
+                Online-mode: names are resolved to UUIDs when possible. If a name doesn&apos;t apply, paste the UUID instead.
+              </div>
             </ModalBody>
             <ModalFooter>
               <Button variant="light" onPress={onModalClose}>

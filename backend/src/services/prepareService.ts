@@ -417,26 +417,106 @@ function parseAccessEntry(raw: string) {
   return { uuid, name };
 }
 
+function parseOnlineMode(raw?: string): boolean {
+  if (!raw) return true;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return true;
+  return normalized !== 'false' && normalized !== '0' && normalized !== 'no';
+}
+
+async function readServerProperties(workingDir: string): Promise<Record<string, string>> {
+  const propsPath = path.join(workingDir, 'server.properties');
+  const props: Record<string, string> = {};
+  if (!(await pathExists(propsPath))) return props;
+
+  const content = await fs.readFile(propsPath, 'utf8');
+  content.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) return;
+    const [key, ...rest] = trimmed.split('=');
+    props[key.trim()] = rest.join('=').trim();
+  });
+  return props;
+}
+
+const mojangUuidCache = new Map<string, string>();
+async function resolveMojangUuid(username: string): Promise<string | null> {
+  const normalized = username.trim();
+  if (!normalized) return null;
+  const cacheKey = normalized.toLowerCase();
+  const cached = mojangUuidCache.get(cacheKey);
+  if (cached) return cached;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(`https://api.mojang.com/users/profiles/minecraft/${encodeURIComponent(normalized)}`, {
+      signal: controller.signal,
+      headers: { 'accept': 'application/json' },
+    });
+    if (res.status === 204 || res.status === 404) return null;
+    if (!res.ok) return null;
+    const data = (await res.json()) as { id?: string };
+    const id = data?.id?.trim();
+    if (!id || !/^[0-9a-f]{32}$/i.test(id)) return null;
+    const uuid = `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
+    mojangUuidCache.set(cacheKey, uuid);
+    return uuid;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveAccessEntries(
+  rawEntries: string[] | undefined,
+  options: { onlineMode: boolean }
+): Promise<Array<{ uuid: string; name: string }>> {
+  const parsed = (rawEntries ?? []).map(parseAccessEntry).filter((entry): entry is { uuid: string; name: string } => entry !== null);
+  const resolved: Array<{ uuid: string; name: string }> = [];
+
+  for (const entry of parsed) {
+    if (entry.uuid) {
+      resolved.push(entry);
+      continue;
+    }
+    if (options.onlineMode) {
+      const mojangUuid = await resolveMojangUuid(entry.name);
+      if (mojangUuid) {
+        resolved.push({ uuid: mojangUuid, name: entry.name });
+        continue;
+      }
+    }
+    resolved.push({ uuid: offlineUuid(entry.name), name: entry.name });
+  }
+
+  return resolved;
+}
+
 async function applyAccessLists(workingDir: string, server: ServerRecord) {
   const whitelist = server.whitelist?.map((entry) => entry.trim()).filter(Boolean);
   const blacklist = server.blacklist?.map((entry) => entry.trim()).filter(Boolean);
   const ipBlacklist = server.ipBlacklist?.map((entry) => entry.trim()).filter(Boolean);
-  const isEntry = (entry: { uuid: string; name: string } | null): entry is { uuid: string; name: string } => entry !== null;
   const now = new Date().toISOString();
   const whitelistEnabled = server.whitelistEnabled ?? (whitelist?.length ?? 0) > 0;
   const blacklistEnabled = server.blacklistEnabled ?? (blacklist?.length ?? 0) > 0;
   const ipBlacklistEnabled = server.ipBlacklistEnabled ?? (ipBlacklist?.length ?? 0) > 0;
+  const serverProps = await readServerProperties(workingDir);
+  const onlineMode = parseOnlineMode(serverProps['online-mode']);
 
   if (server.whitelist !== undefined || server.whitelistEnabled !== undefined) {
-    const entries = whitelistEnabled ? (whitelist ?? []).map(parseAccessEntry).filter(isEntry) : [];
+    const entries = whitelistEnabled ? await resolveAccessEntries(whitelist, { onlineMode }) : [];
     const whitelistPath = path.join(workingDir, 'whitelist.json');
     await fs.writeFile(whitelistPath, JSON.stringify(entries, null, 2) + '\n');
   }
 
   if (server.blacklist !== undefined || server.blacklistEnabled !== undefined) {
+    const resolved = blacklistEnabled ? await resolveAccessEntries(blacklist, { onlineMode }) : [];
     const entries = blacklistEnabled
-      ? (blacklist ?? []).map(parseAccessEntry).filter(isEntry).map((entry) => ({
-          ...entry,
+      ? resolved.map((entry) => ({
+          uuid: entry.uuid,
+          name: entry.name,
           created: now,
           source: 'mc-dash',
           expires: 'forever',
