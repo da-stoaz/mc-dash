@@ -12,3 +12,6 @@ backend/data
 frontend/.next
 frontend/out
 frontend/node_modules
+
+# Graphify knowledge-graph output (generated)
+graphify-out
