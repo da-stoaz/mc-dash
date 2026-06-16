@@ -17,9 +17,27 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 function buildDockerClient(): Docker {
   const apiVersion = config.dockerApiVersion;
-  if (config.dockerHost) {
-    return new Docker({ host: config.dockerHost, version: apiVersion });
+  const dockerHost = config.dockerHost?.trim();
+
+  if (dockerHost) {
+    // unix:///var/run/docker.sock or npipe:////./pipe/docker_engine -> socket path.
+    // dockerode wants the bare path here, not the full URL.
+    const socketMatch = dockerHost.match(/^(?:unix|npipe):\/\/(.+)$/i);
+    if (socketMatch) {
+      return new Docker({ socketPath: socketMatch[1], version: apiVersion });
+    }
+
+    // tcp://host:port, http(s)://host:port, or a bare host:port.
+    // dockerode expects host/port/protocol separately, so parse the URL
+    // instead of passing the raw string as `host` (which never connects).
+    const normalized = /^[a-z][a-z0-9+.-]*:\/\//i.test(dockerHost) ? dockerHost : `tcp://${dockerHost}`;
+    const url = new URL(normalized.replace(/^tcp:\/\//i, 'http://'));
+    const tlsVerify = !!config.dockerTlsVerify && config.dockerTlsVerify !== '0' && config.dockerTlsVerify.toLowerCase() !== 'false';
+    const protocol = url.protocol === 'https:' || tlsVerify ? 'https' : 'http';
+    const port = url.port ? Number(url.port) : protocol === 'https' ? 2376 : 2375;
+    return new Docker({ host: url.hostname, port, protocol, version: apiVersion });
   }
+
   return new Docker({
     socketPath: config.dockerSocketPath ?? '/var/run/docker.sock',
     version: apiVersion,
