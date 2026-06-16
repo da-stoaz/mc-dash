@@ -161,6 +161,31 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
   await fs.writeFile(propsPath, lines.join('\n') + '\n');
 }
 
+// ServerPackCreator start scripts download the modloader server jar (Fabric
+// launcher, NeoForge ServerStarterJar, etc.) at first run using curl or wget.
+// Bare JRE images (e.g. eclipse-temurin:*-jre) ship with neither, which makes
+// the pack crash with a misleading message like "Fabric is not available...".
+// So before running the pack's script, ensure a downloader is present. This is
+// best-effort and supports the common base-image package managers.
+function buildStartCommand(scriptName: string): string {
+  // scriptName comes from path.basename of a script we located/wrote, so it has
+  // no shell metacharacters; still, keep it in single quotes defensively.
+  const safeName = scriptName.replace(/'/g, `'\\''`);
+  return [
+    'if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then',
+    '  echo "[mc-dash] Installing curl (required by the server pack start script)...";',
+    '  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y --no-install-recommends curl ca-certificates;',
+    '  elif command -v apk >/dev/null 2>&1; then apk add --no-cache curl ca-certificates;',
+    '  elif command -v microdnf >/dev/null 2>&1; then microdnf install -y curl ca-certificates;',
+    '  elif command -v dnf >/dev/null 2>&1; then dnf install -y curl ca-certificates;',
+    '  elif command -v yum >/dev/null 2>&1; then yum install -y curl ca-certificates;',
+    '  else echo "[mc-dash] WARNING: no supported package manager found to install curl/wget; the pack may fail to download its modloader.";',
+    '  fi;',
+    'fi;',
+    `exec bash './${safeName}'`,
+  ].join('\n');
+}
+
 async function buildContainerFromPack(
   server: ServerRecord,
   serverRoot: string,
@@ -182,7 +207,7 @@ async function buildContainerFromPack(
 
   const scriptDir = path.dirname(scriptPath);
   const containerWorkdir = toPosix(path.join('/server', path.relative(serverRoot, scriptDir)));
-  const cmd = ['bash', `./${path.basename(scriptPath)}`];
+  const cmd = ['bash', '-c', buildStartCommand(path.basename(scriptPath))];
 
   const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : undefined;
   const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
