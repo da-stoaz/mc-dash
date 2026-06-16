@@ -69,29 +69,52 @@ export default function ServerDetailsPage() {
     }
   };
 
-  const fetchMetrics = async () => {
-    if (!serverId) return;
-    try {
-      const res = await fetch(`${API_BASE}/servers/${serverId}/metrics`);
-      if (!res.ok) {
-        setMetrics(null);
-        return;
-      }
-      const data = await res.json();
-      setMetrics(data);
-    } catch {
-      setMetrics(null);
-    }
-  };
-
   useEffect(() => {
-    fetchServer();
-    fetchMetrics();
-    const serverInterval = setInterval(fetchServer, 1000);
-    const metricsInterval = setInterval(fetchMetrics, 1000);
+    if (!serverId) return;
+    let es: EventSource | null = null;
+
+    const connect = () => {
+      if (es) return;
+      es = new EventSource(`${API_BASE}/servers/${serverId}/stream`);
+      es.addEventListener('server', (e) => {
+        try {
+          setServer(JSON.parse((e as MessageEvent).data));
+          serverErrorRef.current = false;
+        } catch {
+          // ignore malformed frame
+        }
+        setLoading(false);
+      });
+      es.addEventListener('metrics', (e) => {
+        try {
+          setMetrics(JSON.parse((e as MessageEvent).data));
+        } catch {
+          setMetrics(null);
+        }
+      });
+      es.onerror = () => {
+        if (!serverErrorRef.current) {
+          notify('Lost connection to server', 'Reconnecting…', 'warning');
+          serverErrorRef.current = true;
+        }
+      };
+    };
+
+    const disconnect = () => {
+      es?.close();
+      es = null;
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) disconnect();
+      else connect();
+    };
+
+    connect();
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      clearInterval(serverInterval);
-      clearInterval(metricsInterval);
+      document.removeEventListener('visibilitychange', onVisibility);
+      disconnect();
     };
   }, [serverId]);
 

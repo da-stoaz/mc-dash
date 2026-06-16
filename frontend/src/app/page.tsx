@@ -52,9 +52,46 @@ export default function Page() {
   };
 
   useEffect(() => {
-    fetchServers();
-    const interval = setInterval(fetchServers, 1000);
-    return () => clearInterval(interval);
+    let es: EventSource | null = null;
+
+    const connect = () => {
+      if (es) return;
+      setLoading(true);
+      es = new EventSource(`${API_BASE}/servers/stream`);
+      es.addEventListener('servers', (e) => {
+        try {
+          setServers(JSON.parse((e as MessageEvent).data));
+          serversErrorRef.current = false;
+        } catch {
+          // ignore malformed frame
+        }
+        setLoading(false);
+      });
+      es.onerror = () => {
+        // EventSource reconnects on its own; surface the drop only once.
+        if (!serversErrorRef.current) {
+          notify('Lost connection to server', 'Reconnecting…', 'warning');
+          serversErrorRef.current = true;
+        }
+      };
+    };
+
+    const disconnect = () => {
+      es?.close();
+      es = null;
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) disconnect();
+      else connect();
+    };
+
+    connect();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      disconnect();
+    };
   }, []);
 
   const handleCreate = async () => {
