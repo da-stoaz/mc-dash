@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Chip, Modal, ModalBody, ModalContent, ModalHeader } from '@heroui/react';
 import { ArrowDown, Expand, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 const MAX_LOG_CHARS = 200_000;
 
@@ -31,7 +32,7 @@ export function LogStream({ serverId, apiBase }: Props) {
       setConnected(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/servers/${serverId}/logs?follow=true`, {
+        const res = await apiFetch(`${apiBase}/servers/${serverId}/logs?follow=true`, {
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {

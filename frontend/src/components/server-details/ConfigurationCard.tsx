@@ -1,14 +1,15 @@
-import { Card, CardBody, CardHeader, Divider } from '@heroui/react';
-import { Server } from 'lucide-react';
+import { Button, Card, CardBody, CardHeader, Divider } from '@heroui/react';
+import { Pencil, Server } from 'lucide-react';
 import type { ServerRecord } from '../../lib/serverTypes';
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 
 type ConfigurationCardProps = {
   server: ServerRecord;
+  onEdit?: () => void;
 };
 
-export function ConfigurationCard({ server }: ConfigurationCardProps) {
+export function ConfigurationCard({ server, onEdit }: ConfigurationCardProps) {
   const hostname = server.subdomain
     ? ROUTER_DOMAIN
       ? `${server.subdomain}.${ROUTER_DOMAIN}`
@@ -17,9 +18,16 @@ export function ConfigurationCard({ server }: ConfigurationCardProps) {
 
   return (
     <Card className="bg-white/5 border border-white/10">
-      <CardHeader className="flex items-center gap-2 text-lg font-semibold">
-        <Server size={18} />
-        <span>Configuration</span>
+      <CardHeader className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-lg font-semibold">
+          <Server size={18} />
+          <span>Configuration</span>
+        </div>
+        {onEdit && (
+          <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={onEdit}>
+            Edit config
+          </Button>
+        )}
       </CardHeader>
       <CardBody className="space-y-4 text-sm">
         <div className="space-y-2">

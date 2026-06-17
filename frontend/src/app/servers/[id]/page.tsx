@@ -6,27 +6,30 @@ import {
   Button,
   Card,
   CardBody,
+  CardHeader,
   Modal,
   ModalBody,
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Tab,
+  Tabs,
 } from '@heroui/react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal, FirewallModal } from '../../../components/ServerModals';
 import { ConfigurationCard } from '../../../components/server-details/ConfigurationCard';
-import { ControlsCard } from '../../../components/server-details/ControlsCard';
 import { FirewallCard } from '../../../components/server-details/FirewallCard';
+import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
+import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+import { API_BASE, apiFetch } from '../../../lib/api';
 
 export default function ServerDetailsPage() {
   const params = useParams<{ id: string }>();
@@ -54,7 +57,7 @@ export default function ServerDetailsPage() {
   const fetchServer = async () => {
     if (!serverId) return;
     try {
-      const res = await fetch(`${API_BASE}/servers/${serverId}`);
+      const res = await apiFetch(`${API_BASE}/servers/${serverId}`);
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load server'));
       const data = await res.json();
       setServer(data);
@@ -69,29 +72,52 @@ export default function ServerDetailsPage() {
     }
   };
 
-  const fetchMetrics = async () => {
-    if (!serverId) return;
-    try {
-      const res = await fetch(`${API_BASE}/servers/${serverId}/metrics`);
-      if (!res.ok) {
-        setMetrics(null);
-        return;
-      }
-      const data = await res.json();
-      setMetrics(data);
-    } catch {
-      setMetrics(null);
-    }
-  };
-
   useEffect(() => {
-    fetchServer();
-    fetchMetrics();
-    const serverInterval = setInterval(fetchServer, 1000);
-    const metricsInterval = setInterval(fetchMetrics, 1000);
+    if (!serverId) return;
+    let es: EventSource | null = null;
+
+    const connect = () => {
+      if (es) return;
+      es = new EventSource(`${API_BASE}/servers/${serverId}/stream`, { withCredentials: true });
+      es.addEventListener('server', (e) => {
+        try {
+          setServer(JSON.parse((e as MessageEvent).data));
+          serverErrorRef.current = false;
+        } catch {
+          // ignore malformed frame
+        }
+        setLoading(false);
+      });
+      es.addEventListener('metrics', (e) => {
+        try {
+          setMetrics(JSON.parse((e as MessageEvent).data));
+        } catch {
+          setMetrics(null);
+        }
+      });
+      es.onerror = () => {
+        if (!serverErrorRef.current) {
+          notify('Lost connection to server', 'Reconnecting…', 'warning');
+          serverErrorRef.current = true;
+        }
+      };
+    };
+
+    const disconnect = () => {
+      es?.close();
+      es = null;
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) disconnect();
+      else connect();
+    };
+
+    connect();
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      clearInterval(serverInterval);
-      clearInterval(metricsInterval);
+      document.removeEventListener('visibilitychange', onVisibility);
+      disconnect();
     };
   }, [serverId]);
 
@@ -107,7 +133,7 @@ export default function ServerDetailsPage() {
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -142,7 +168,7 @@ export default function ServerDetailsPage() {
           .split('\n')
           .map((entry) => entry.trim())
           .filter(Boolean);
-      const res = await fetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -166,7 +192,7 @@ export default function ServerDetailsPage() {
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
       await res.json().catch(() => null);
       await fetchServer();
@@ -185,7 +211,7 @@ export default function ServerDetailsPage() {
   const deleteContainer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
       await res.json().catch(() => null);
       await fetchServer();
@@ -204,7 +230,7 @@ export default function ServerDetailsPage() {
   const deleteServer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
       await res.json().catch(() => null);
       notify('Server deleted', undefined, 'success');
@@ -268,7 +294,7 @@ export default function ServerDetailsPage() {
 
       <ServerTitle server={server} />
 
-      <ControlsCard
+      <LifecycleToolbar
         busy={busy}
         canPrepare={canPrepare}
         canStart={canStart}
@@ -280,27 +306,65 @@ export default function ServerDetailsPage() {
         onStart={() => invokeAction(server.id, 'start')}
         onStop={() => setConfirmState('stop')}
         onRestart={() => setConfirmState('restart')}
-        onEdit={() => setShowEdit(server)}
-        onDeleteContainer={() => setConfirmState('deleteContainer')}
-        onDeleteServer={() => setConfirmState('deleteServer')}
       />
 
-      <FirewallCard
-        whitelistEnabled={whitelistEnabled}
-        whitelistCount={whitelistCount}
-        blacklistEnabled={blacklistEnabled}
-        blacklistCount={blacklistCount}
-        ipBlacklistEnabled={ipBlacklistEnabled}
-        ipBlacklistCount={ipBlacklistCount}
-        onManage={() => setShowFirewall(server)}
-      />
+      <Tabs aria-label="Server sections" variant="underlined" size="lg" classNames={{ panel: 'pt-2' }}>
+        <Tab key="overview" title="Overview">
+          <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
+            <MetricsCard metrics={metrics} history={history} />
+            <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
+          </div>
+        </Tab>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
-        <ConfigurationCard server={server} />
-        <MetricsCard metrics={metrics} history={history} />
-      </div>
+        <Tab key="logs" title="Logs">
+          <LogsCard serverId={server.id} apiBase={API_BASE} />
+        </Tab>
 
-      <LogsCard serverId={server.id} apiBase={API_BASE} />
+        <Tab key="settings" title="Settings">
+          <div className="space-y-4">
+            <ConfigurationCard server={server} onEdit={() => setShowEdit(server)} />
+
+            <FirewallCard
+              whitelistEnabled={whitelistEnabled}
+              whitelistCount={whitelistCount}
+              blacklistEnabled={blacklistEnabled}
+              blacklistCount={blacklistCount}
+              ipBlacklistEnabled={ipBlacklistEnabled}
+              ipBlacklistCount={ipBlacklistCount}
+              onManage={() => setShowFirewall(server)}
+            />
+
+            <Card className="bg-rose-500/5 border border-rose-500/30">
+              <CardHeader className="flex flex-col items-start gap-0.5">
+                <div className="text-lg font-semibold text-rose-100">Danger zone</div>
+                <div className="text-xs muted">Destructive actions for this server. World data stays on disk.</div>
+              </CardHeader>
+              <CardBody className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  startContent={<Trash2 size={14} />}
+                  onPress={() => setConfirmState('deleteContainer')}
+                  isDisabled={controlsDisabled || busy === 'delete'}
+                >
+                  Delete container
+                </Button>
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  startContent={<Trash2 size={14} />}
+                  onPress={() => setConfirmState('deleteServer')}
+                  isDisabled={controlsDisabled || busy === 'deleteServer'}
+                >
+                  Delete server
+                </Button>
+              </CardBody>
+            </Card>
+          </div>
+        </Tab>
+      </Tabs>
 
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
       <FirewallModal server={showFirewall} onClose={() => setShowFirewall(null)} onSave={handleFirewallUpdate} />

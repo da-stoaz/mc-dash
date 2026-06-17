@@ -29,6 +29,12 @@ const routerDefaultSubdomain = process.env.MC_ROUTER_DEFAULT_SUBDOMAIN
   ? process.env.MC_ROUTER_DEFAULT_SUBDOMAIN.trim().toLowerCase()
   : undefined;
 
+const SESSION_TTL_DAYS = Number(process.env.MC_DASH_SESSION_TTL_DAYS ?? 7);
+const frontendOrigins = (process.env.MC_DASH_FRONTEND_ORIGIN ?? 'http://localhost:3000,http://localhost:3001')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   sqlitePath: process.env.SQLITE_PATH ? path.resolve(process.cwd(), process.env.SQLITE_PATH) : defaultSqlitePath,
@@ -46,6 +52,12 @@ export const config = {
   routerPort: Number.isFinite(routerPort) ? routerPort : 25565,
   routerTargetHost,
   routerDefaultSubdomain,
+  // Auth: when MC_DASH_PASSWORD is set, the API requires a login session.
+  authPassword: process.env.MC_DASH_PASSWORD || undefined,
+  sessionSecret: process.env.MC_DASH_SESSION_SECRET || undefined,
+  sessionTtlMs: (Number.isFinite(SESSION_TTL_DAYS) ? SESSION_TTL_DAYS : 7) * 24 * 60 * 60 * 1000,
+  cookieSecure: String(process.env.MC_DASH_COOKIE_SECURE ?? '').toLowerCase() === 'true',
+  frontendOrigins,
 };
 
 // Ensure the data directory exists for SQLite

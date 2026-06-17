@@ -11,6 +11,8 @@ import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
+import { preparing } from '../state';
+import { addStatusClient, addDetailClient } from '../services/serverEvents';
 
 const resourceSchema = z.object({
   minRamMb: z.number().int().positive(),
@@ -90,7 +92,6 @@ const updateServerSchema = z.object({
 
 const router = Router();
 const uploadDir = path.join(config.dataRoot, 'uploads');
-const preparing = new Set<string>();
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -225,10 +226,20 @@ router.get('/', async (_req, res) => {
   res.json(refreshed);
 });
 
+// SSE: live server list. Registered before '/:id' so it isn't captured as an id.
+router.get('/stream', (req, res) => {
+  addStatusClient(res);
+});
+
 router.get('/:id', (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   res.json(server);
+});
+
+// SSE: live record + metrics for a single server.
+router.get('/:id/stream', (req, res) => {
+  addDetailClient(req.params.id, res);
 });
 
 router.post('/', upload.single('file'), async (req, res, next) => {
