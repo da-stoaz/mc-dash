@@ -15,7 +15,7 @@ import {
   Tab,
   Tabs,
 } from '@heroui/react';
-import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal, FirewallModal } from '../../../components/ServerModals';
@@ -24,6 +24,7 @@ import { FirewallCard } from '../../../components/server-details/FirewallCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
+import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
@@ -312,7 +313,7 @@ export default function ServerDetailsPage() {
         <Tab key="overview" title="Overview">
           <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
             <MetricsCard metrics={metrics} history={history} />
-            <ConfigurationCard server={server} />
+            <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
           </div>
         </Tab>
 
@@ -322,17 +323,7 @@ export default function ServerDetailsPage() {
 
         <Tab key="settings" title="Settings">
           <div className="space-y-4">
-            <Card className="bg-white/5 border border-white/10">
-              <CardHeader className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-semibold">Configuration</div>
-                  <div className="text-xs muted">Resources, game rules, Java image, port</div>
-                </div>
-                <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
-                  Edit config
-                </Button>
-              </CardHeader>
-            </Card>
+            <ConfigurationCard server={server} onEdit={() => setShowEdit(server)} />
 
             <FirewallCard
               whitelistEnabled={whitelistEnabled}
