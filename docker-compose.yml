@@ -1,0 +1,60 @@
+# MC Dash — deployment stack for a Linux host.
+#
+# Copy .env.example to .env and fill it in, then:
+#   docker compose up -d --build
+#
+# Notes specific to MC Dash:
+# - The backend mounts the host Docker socket so it can spawn the per-server
+#   Minecraft containers as SIBLINGS on the host (not docker-in-docker).
+# - Those containers bind-mount paths under DATA_ROOT. Docker resolves bind
+#   mounts on the HOST, so DATA_ROOT must be an absolute path that is mounted
+#   to the *same* path inside the backend container (see the volumes below).
+# - The backend uses host networking so the built-in handshake router can reach
+#   the spawned servers on 127.0.0.1:<port>, and so server ports are published
+#   directly on the host.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: mc-dash-backend
+    restart: unless-stopped
+    # Host networking: backend on :4000, optional router on :25565, and the
+    # spawned MC server ports are all published directly on the host.
+    network_mode: host
+    environment:
+      PORT: "4000"
+      # MUST be an absolute path, mounted to the identical path below.
+      DATA_ROOT: ${MC_DASH_DATA_DIR:-/opt/mc-dash/data}
+      # Auth — set a password to require login. Leave SESSION_SECRET stable so
+      # sessions survive restarts.
+      MC_DASH_PASSWORD: ${MC_DASH_PASSWORD:-}
+      MC_DASH_SESSION_SECRET: ${MC_DASH_SESSION_SECRET:-}
+      # Allowed browser origin(s) for credentialed CORS (the frontend URL).
+      MC_DASH_FRONTEND_ORIGIN: ${MC_DASH_FRONTEND_ORIGIN:-http://localhost:3000}
+      # Plain HTTP on a LAN: keep this false or the session cookie is dropped.
+      MC_DASH_COOKIE_SECURE: ${MC_DASH_COOKIE_SECURE:-false}
+      # Port range auto-assigned to servers.
+      MC_SERVER_PORT_MIN: ${MC_SERVER_PORT_MIN:-25565}
+      MC_SERVER_PORT_MAX: ${MC_SERVER_PORT_MAX:-25665}
+      # Optional wildcard-subdomain router (off by default).
+      MC_ROUTER_ENABLED: ${MC_ROUTER_ENABLED:-false}
+      MC_ROUTER_DOMAIN: ${MC_ROUTER_DOMAIN:-}
+      MC_ROUTER_PORT: ${MC_ROUTER_PORT:-25565}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Identical host:container path so bind mounts the backend constructs
+      # resolve correctly on the host.
+      - ${MC_DASH_DATA_DIR:-/opt/mc-dash/data}:${MC_DASH_DATA_DIR:-/opt/mc-dash/data}
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle at build time — point at the backend URL
+        # the browser will use (your host's LAN IP), e.g. http://192.168.1.50:4000
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000}
+    image: mc-dash-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
