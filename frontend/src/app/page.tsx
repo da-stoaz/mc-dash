@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
-import { Plus } from 'lucide-react';
+import { LogOut, Plus } from 'lucide-react';
 import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { StatusBar } from '../components/StatusBar';
 import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal } from '../components/ServerModals';
+import { useAuth } from '../components/AuthGate';
 import { extractApiErrorMessageFromText, getApiErrorMessage } from '../lib/apiErrors';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+import { API_BASE, apiFetch } from '../lib/api';
 
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
@@ -22,6 +22,7 @@ export default function Page() {
   const [creating, setCreating] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const serversErrorRef = useRef(false);
+  const { authRequired, logout } = useAuth();
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -36,7 +37,7 @@ export default function Page() {
   const fetchServers = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/servers`);
+      const res = await apiFetch(`${API_BASE}/servers`);
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load servers'));
       const data = await res.json();
       setServers(data);
@@ -57,7 +58,7 @@ export default function Page() {
     const connect = () => {
       if (es) return;
       setLoading(true);
-      es = new EventSource(`${API_BASE}/servers/stream`);
+      es = new EventSource(`${API_BASE}/servers/stream`, { withCredentials: true });
       es.addEventListener('servers', (e) => {
         try {
           setServers(JSON.parse((e as MessageEvent).data));
@@ -121,6 +122,7 @@ export default function Page() {
       const resText = await new Promise<string>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', `${API_BASE}/servers`);
+        xhr.withCredentials = true;
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
             const percent = Math.round((event.loaded / event.total) * 100);
@@ -161,7 +163,7 @@ export default function Page() {
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -192,7 +194,7 @@ export default function Page() {
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
       await res.json().catch(() => null);
       await fetchServers();
@@ -211,7 +213,7 @@ export default function Page() {
   const deleteContainer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
       await res.json().catch(() => null);
       await fetchServers();
@@ -230,7 +232,7 @@ export default function Page() {
   const deleteServer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
       await res.json().catch(() => null);
       await fetchServers();
@@ -275,9 +277,16 @@ export default function Page() {
             <div className="brand text-lg">MC Dash</div>
             <div className="muted text-sm">Minecraft server manager</div>
           </div>
-          <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>
-            New server
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>
+              New server
+            </Button>
+            {authRequired && (
+              <Button variant="flat" startContent={<LogOut size={16} />} onPress={logout} aria-label="Log out">
+                Log out
+              </Button>
+            )}
+          </div>
         </div>
 
         <StatusBar counts={statusCounts} restartRequiredCount={restartRequiredCount} loading={loading} onRefresh={fetchServers} />

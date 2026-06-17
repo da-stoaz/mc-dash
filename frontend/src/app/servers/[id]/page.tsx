@@ -29,8 +29,7 @@ import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+import { API_BASE, apiFetch } from '../../../lib/api';
 
 export default function ServerDetailsPage() {
   const params = useParams<{ id: string }>();
@@ -58,7 +57,7 @@ export default function ServerDetailsPage() {
   const fetchServer = async () => {
     if (!serverId) return;
     try {
-      const res = await fetch(`${API_BASE}/servers/${serverId}`);
+      const res = await apiFetch(`${API_BASE}/servers/${serverId}`);
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load server'));
       const data = await res.json();
       setServer(data);
@@ -79,7 +78,7 @@ export default function ServerDetailsPage() {
 
     const connect = () => {
       if (es) return;
-      es = new EventSource(`${API_BASE}/servers/${serverId}/stream`);
+      es = new EventSource(`${API_BASE}/servers/${serverId}/stream`, { withCredentials: true });
       es.addEventListener('server', (e) => {
         try {
           setServer(JSON.parse((e as MessageEvent).data));
@@ -134,7 +133,7 @@ export default function ServerDetailsPage() {
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -169,7 +168,7 @@ export default function ServerDetailsPage() {
           .split('\n')
           .map((entry) => entry.trim())
           .filter(Boolean);
-      const res = await fetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -193,7 +192,7 @@ export default function ServerDetailsPage() {
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
       await res.json().catch(() => null);
       await fetchServer();
@@ -212,7 +211,7 @@ export default function ServerDetailsPage() {
   const deleteContainer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'delete' }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
       await res.json().catch(() => null);
       await fetchServer();
@@ -231,7 +230,7 @@ export default function ServerDetailsPage() {
   const deleteServer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
-      const res = await fetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`${API_BASE}/servers/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
       await res.json().catch(() => null);
       notify('Server deleted', undefined, 'success');

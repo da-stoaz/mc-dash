@@ -1,20 +1,24 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import serversRouter from './routes/servers';
+import authRouter from './routes/auth';
+import { requireAuth } from './auth';
 import { config } from './config';
 import { logger } from './logger';
 import { routerService } from './services/routerService';
 
 const app = express();
 
-app.use(cors());
+// Credentialed CORS so the session cookie flows from the frontend origin(s).
+app.use(cors({ origin: config.frontendOrigins, credentials: true }));
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.use('/servers', serversRouter);
+app.use('/auth', authRouter);
+app.use('/servers', requireAuth, serversRouter);
 
 // Simple error handler
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
