@@ -6,19 +6,22 @@ import {
   Button,
   Card,
   CardBody,
+  CardHeader,
   Modal,
   ModalBody,
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Tab,
+  Tabs,
 } from '@heroui/react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal, FirewallModal } from '../../../components/ServerModals';
 import { ConfigurationCard } from '../../../components/server-details/ConfigurationCard';
-import { ControlsCard } from '../../../components/server-details/ControlsCard';
 import { FirewallCard } from '../../../components/server-details/FirewallCard';
+import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
@@ -291,7 +294,7 @@ export default function ServerDetailsPage() {
 
       <ServerTitle server={server} />
 
-      <ControlsCard
+      <LifecycleToolbar
         busy={busy}
         canPrepare={canPrepare}
         canStart={canStart}
@@ -303,27 +306,75 @@ export default function ServerDetailsPage() {
         onStart={() => invokeAction(server.id, 'start')}
         onStop={() => setConfirmState('stop')}
         onRestart={() => setConfirmState('restart')}
-        onEdit={() => setShowEdit(server)}
-        onDeleteContainer={() => setConfirmState('deleteContainer')}
-        onDeleteServer={() => setConfirmState('deleteServer')}
       />
 
-      <FirewallCard
-        whitelistEnabled={whitelistEnabled}
-        whitelistCount={whitelistCount}
-        blacklistEnabled={blacklistEnabled}
-        blacklistCount={blacklistCount}
-        ipBlacklistEnabled={ipBlacklistEnabled}
-        ipBlacklistCount={ipBlacklistCount}
-        onManage={() => setShowFirewall(server)}
-      />
+      <Tabs aria-label="Server sections" variant="underlined" size="lg" classNames={{ panel: 'pt-2' }}>
+        <Tab key="overview" title="Overview">
+          <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
+            <MetricsCard metrics={metrics} history={history} />
+            <ConfigurationCard server={server} />
+          </div>
+        </Tab>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
-        <ConfigurationCard server={server} />
-        <MetricsCard metrics={metrics} history={history} />
-      </div>
+        <Tab key="logs" title="Logs">
+          <LogsCard serverId={server.id} apiBase={API_BASE} />
+        </Tab>
 
-      <LogsCard serverId={server.id} apiBase={API_BASE} />
+        <Tab key="settings" title="Settings">
+          <div className="space-y-4">
+            <Card className="bg-white/5 border border-white/10">
+              <CardHeader className="flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-semibold">Configuration</div>
+                  <div className="text-xs muted">Resources, game rules, Java image, port</div>
+                </div>
+                <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
+                  Edit config
+                </Button>
+              </CardHeader>
+            </Card>
+
+            <FirewallCard
+              whitelistEnabled={whitelistEnabled}
+              whitelistCount={whitelistCount}
+              blacklistEnabled={blacklistEnabled}
+              blacklistCount={blacklistCount}
+              ipBlacklistEnabled={ipBlacklistEnabled}
+              ipBlacklistCount={ipBlacklistCount}
+              onManage={() => setShowFirewall(server)}
+            />
+
+            <Card className="bg-rose-500/5 border border-rose-500/30">
+              <CardHeader className="flex flex-col items-start gap-0.5">
+                <div className="text-lg font-semibold text-rose-100">Danger zone</div>
+                <div className="text-xs muted">Destructive actions for this server. World data stays on disk.</div>
+              </CardHeader>
+              <CardBody className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  startContent={<Trash2 size={14} />}
+                  onPress={() => setConfirmState('deleteContainer')}
+                  isDisabled={controlsDisabled || busy === 'delete'}
+                >
+                  Delete container
+                </Button>
+                <Button
+                  size="sm"
+                  color="danger"
+                  variant="flat"
+                  startContent={<Trash2 size={14} />}
+                  onPress={() => setConfirmState('deleteServer')}
+                  isDisabled={controlsDisabled || busy === 'deleteServer'}
+                >
+                  Delete server
+                </Button>
+              </CardBody>
+            </Card>
+          </div>
+        </Tab>
+      </Tabs>
 
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
       <FirewallModal server={showFirewall} onClose={() => setShowFirewall(null)} onSave={handleFirewallUpdate} />
