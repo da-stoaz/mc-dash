@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "echo \"lint not configured\"",
-    "test": "echo \"No automated tests yet\" && exit 0"
+    "test": "node -r ts-node/register --test \"src/**/*.test.ts\""
   },
   "keywords": [],
   "author": "",
