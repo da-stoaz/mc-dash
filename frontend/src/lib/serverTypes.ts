@@ -31,6 +31,18 @@ export type ServerRecord = {
   game: { renderDistance?: number; gameMode?: GameMode; seed?: string };
 };
 
+export type SnapshotKind = 'manual' | 'auto-pre-restore';
+
+export type Snapshot = {
+  id: string;
+  serverId: string;
+  label: string | null;
+  fileName: string;
+  sizeBytes: number;
+  kind: SnapshotKind;
+  createdAt: string;
+};
+
 export type ServerMetrics = {
   cpuPercent: number;
   memoryBytes: number;

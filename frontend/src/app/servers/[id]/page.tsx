@@ -25,6 +25,7 @@ import { LifecycleToolbar } from '../../../components/server-details/LifecycleTo
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
+import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
@@ -314,6 +315,10 @@ export default function ServerDetailsPage() {
 
         <Tab key="logs" title="Logs">
           <LogsCard serverId={server.id} apiBase={API_BASE} />
+        </Tab>
+
+        <Tab key="snapshots" title="Snapshots">
+          <SnapshotsCard serverId={server.id} status={server.status} onRestored={() => fetchServer()} />
         </Tab>
 
         <Tab key="settings" title="Settings">
