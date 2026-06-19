@@ -6,6 +6,11 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord, ServerStatus } from '../types';
 
+// Fixed in-container RCON port. We never publish it to the host: the backend
+// runs with host networking and reaches each server container directly on its
+// bridge IP, so a single constant port is fine across all servers.
+export const RCON_PORT = 25575;
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -213,6 +218,35 @@ export class DockerService {
     } catch (err) {
       logger.error({ err }, 'Failed to restart container');
       throw err;
+    }
+  }
+
+  // Resolve the RCON endpoint for a running server: its container bridge IP plus
+  // the fixed RCON port. Returns null when the container isn't running or has no
+  // reachable IP, so callers can fall back to restart-based config application.
+  async rconAddress(server: ServerRecord): Promise<{ host: string; port: number } | null> {
+    try {
+      const container = await this.getContainer(server);
+      const inspect = await container.inspect();
+      if (!inspect.State?.Running) return null;
+
+      const netSettings = inspect.NetworkSettings;
+      let ip = netSettings?.IPAddress?.trim() ?? '';
+      if (!ip && netSettings?.Networks) {
+        for (const entry of Object.values(netSettings.Networks)) {
+          const candidate = (entry as { IPAddress?: string })?.IPAddress?.trim();
+          if (candidate) {
+            ip = candidate;
+            break;
+          }
+        }
+      }
+      if (!ip) return null;
+      return { host: ip, port: RCON_PORT };
+    } catch (err: any) {
+      if (err?.statusCode === 404) return null;
+      logger.warn({ err }, 'Unable to resolve RCON address');
+      return null;
     }
   }
 

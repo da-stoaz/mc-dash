@@ -9,6 +9,7 @@ import { serverStore } from '../serverStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
+import { syncBlacklistLive } from '../services/accessControlService';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
@@ -362,16 +363,42 @@ router.patch('/:id', async (req, res, next) => {
       parsed.whitelistEnabled !== undefined ||
       parsed.blacklistEnabled !== undefined;
     const hasResourceChanges = !!parsed.resources;
+    const blacklistChanged = parsed.blacklist !== undefined || parsed.blacklistEnabled !== undefined;
+    // True when the blacklist is the *only* thing that changed -- in that case a
+    // successful live RCON sync means no restart is needed at all.
+    const onlyBlacklistChanged =
+      blacklistChanged &&
+      !parsed.resources &&
+      !parsed.game &&
+      parsed.javaImage === undefined &&
+      parsed.serverPort === undefined &&
+      parsed.whitelist === undefined &&
+      parsed.whitelistEnabled === undefined;
 
     let configError: Error | null = null;
     let resourceError: Error | null = null;
     let recreateError: Error | null = null;
+    let liveBanApplied = false;
 
     if (hasConfigChanges) {
       try {
         await applyConfigFiles(updated);
       } catch (err: any) {
         configError = err;
+      }
+    }
+
+    if (!configError && blacklistChanged) {
+      const result = await syncBlacklistLive(updated, {
+        blacklist: existing.blacklist,
+        blacklistEnabled: existing.blacklistEnabled,
+      });
+      liveBanApplied = result.applied;
+      if (!result.applied) {
+        logger.info(
+          { serverId: updated.id, reason: result.reason },
+          'Blacklist not applied live; it will take effect on the next server start'
+        );
       }
     }
 
@@ -403,7 +430,10 @@ router.patch('/:id', async (req, res, next) => {
     }
 
     if (hasConfigChanges && !(portChanged || javaImageChanged)) {
-      updated = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
+      // A live-applied, blacklist-only change needs no restart; everything else
+      // still does (file-based config only takes effect on (re)start).
+      const restartRequired = !(onlyBlacklistChanged && liveBanApplied);
+      updated = serverStore.update(req.params.id, { restartRequired }) ?? updated;
     }
 
     if (configError || resourceError || recreateError) {

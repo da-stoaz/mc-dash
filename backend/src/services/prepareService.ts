@@ -4,7 +4,7 @@ import AdmZip from 'adm-zip';
 import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
-import { dockerService } from './dockerService';
+import { dockerService, RCON_PORT } from './dockerService';
 import fsSync from 'fs';
 import crypto from 'crypto';
 
@@ -156,6 +156,17 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
     props['white-list'] = enabled ? 'true' : 'false';
     props['enforce-whitelist'] = enabled ? 'true' : 'false';
   }
+
+  // Enable RCON so MC Dash can push bans / access-list changes to a running
+  // server without a restart. The password is generated once and preserved on
+  // subsequent writes. RCON only becomes active after the server next (re)starts
+  // with these properties, which is the one-time bootstrap for live bans.
+  props['enable-rcon'] = 'true';
+  props['rcon.port'] = String(RCON_PORT);
+  if (!props['rcon.password']?.trim()) {
+    props['rcon.password'] = crypto.randomBytes(24).toString('hex');
+  }
+  props['broadcast-rcon-to-ops'] = 'false';
 
   const lines = Object.entries(props).map(([key, value]) => `${key}=${value}`);
   await fs.writeFile(propsPath, lines.join('\n') + '\n');
@@ -412,7 +423,7 @@ function offlineUuid(name: string) {
   return formatUuid(hash);
 }
 
-function parseAccessEntry(raw: string) {
+export function parseAccessEntry(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
@@ -449,7 +460,7 @@ function parseOnlineMode(raw?: string): boolean {
   return normalized !== 'false' && normalized !== '0' && normalized !== 'no';
 }
 
-async function readServerProperties(workingDir: string): Promise<Record<string, string>> {
+export async function readServerProperties(workingDir: string): Promise<Record<string, string>> {
   const propsPath = path.join(workingDir, 'server.properties');
   const props: Record<string, string> = {};
   if (!(await pathExists(propsPath))) return props;
@@ -702,6 +713,14 @@ export async function recreateContainer(server: ServerRecord): Promise<{
   await applyAccessLists(workingDir, server);
 
   return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
+}
+
+// Resolve a prepared server's working directory (the folder that actually holds
+// server.properties / banned-players.json), or null if the pack isn't prepared.
+export async function locateWorkingDir(server: ServerRecord): Promise<string | null> {
+  const packDir = path.join(config.dataRoot, 'servers', server.id, 'pack');
+  if (!(await pathExists(packDir))) return null;
+  return detectWorkingDir(packDir);
 }
 
 export async function applyConfigFiles(server: ServerRecord): Promise<void> {
