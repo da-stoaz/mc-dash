@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-import { execFileSync } from 'child_process';
+import * as tar from 'tar';
 
 // Point the app's data root at a throwaway dir BEFORE loading config/store, then
 // require the modules so they read this env. (require runs here, after the env
@@ -74,8 +74,12 @@ test('snapshot excludes the snapshots/ directory (no self-inclusion)', async () 
   const second = await createSnapshot(fakeServer(id), { label: 'second' });
 
   const archive = path.join(serverRoot(id), 'snapshots', second.fileName);
-  const listing = execFileSync('tar', ['--force-local', '-tzf', archive]).toString();
-  assert.ok(!/(^|\/)snapshots\//m.test(listing), `archive must not contain snapshots/:\n${listing}`);
+  const paths: string[] = [];
+  await tar.list({ file: archive, onentry: (entry) => paths.push(entry.path) });
+  assert.ok(
+    !paths.some((p) => p.replace(/^\.\//, '').split('/')[0] === 'snapshots'),
+    `archive must not contain snapshots/:\n${paths.join('\n')}`
+  );
 });
 
 test('delete removes both the DB row and the archive file', async () => {

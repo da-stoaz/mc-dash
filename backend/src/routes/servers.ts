@@ -623,8 +623,10 @@ router.post('/:id/snapshots', async (req, res, next) => {
     const parsed = snapshotCreateSchema.parse(req.body ?? {});
     const snapshot = await createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' });
     res.status(201).json(snapshot);
-  } catch (err) {
-    next(err);
+  } catch (err: any) {
+    if (err?.name === 'ZodError') return next(err);
+    logger.error({ err, serverId: req.params.id }, 'Snapshot creation failed');
+    res.status(500).json({ error: err?.message ?? 'Snapshot failed' });
   }
 });
 
@@ -658,7 +660,8 @@ router.post('/:id/snapshots/:snapshotId/restore', async (req, res, next) => {
     if (err?.message === 'Snapshot not found' || err?.message === 'Snapshot archive is missing on disk') {
       return res.status(404).json({ error: err.message });
     }
-    next(err);
+    logger.error({ err, serverId: req.params.id }, 'Snapshot restore failed');
+    res.status(500).json({ error: err?.message ?? 'Restore failed' });
   }
 });
 

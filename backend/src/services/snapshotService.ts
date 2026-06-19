@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs/promises';
-import { spawn } from 'child_process';
+import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';
@@ -32,33 +32,12 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-// GNU tar (Linux prod and the MSYS build used in dev) accepts forward slashes;
-// normalize so Windows backslash paths don't confuse its filename parsing. No-op
-// on POSIX paths.
-function toTarPath(p: string): string {
-  return p.replace(/\\/g, '/');
-}
-
-// Run `tar` with explicit args (no shell) and reject on a non-zero exit.
-function runTar(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('tar', args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.on('error', (err) => reject(err));
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`tar exited with code ${code}: ${stderr.trim()}`));
-    });
-  });
-}
-
 /**
  * Archive a server's entire data folder into a gzipped tarball under its
- * snapshots/ directory and record it. Streams through `tar` so large modpack
- * worlds don't have to fit in memory. The snapshots/ folder itself is excluded.
+ * snapshots/ directory and record it. Uses the pure-JS `tar` (gzip via Node's
+ * zlib) so it needs no system tar/gzip and streams large modpack worlds without
+ * loading them into memory. The snapshots/ folder itself is excluded, and a file
+ * changing mid-read (e.g. on a running server) does not abort the archive.
  */
 export async function createSnapshot(
   server: ServerRecord,
@@ -72,14 +51,16 @@ export async function createSnapshot(
   const dir = snapshotsDir(server.id);
   await fs.mkdir(dir, { recursive: true });
 
+  // Archive every top-level entry except the snapshots/ history itself.
+  const entries = (await fs.readdir(root)).filter((entry) => entry !== SNAPSHOTS_DIRNAME);
+  if (entries.length === 0) {
+    throw new Error('Server folder is empty; nothing to snapshot yet');
+  }
+
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tar.gz`;
   const archivePath = path.join(dir, fileName);
 
-  // -C root + "." archives the folder contents with relative paths; excluding
-  // ./snapshots keeps the archive (and prior snapshots) out of the tarball.
-  // --force-local: treat an archive path containing ':' as a local file (e.g. a
-  // Windows drive letter) rather than a remote host. No-op for Linux paths.
-  await runTar(['--force-local', '-czf', toTarPath(archivePath), '-C', toTarPath(root), `--exclude=./${SNAPSHOTS_DIRNAME}`, '.']);
+  await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
 
   const stat = await fs.stat(archivePath);
   const record = serverStore.createSnapshot({
@@ -126,7 +107,7 @@ export async function restoreSnapshot(
       .map((entry) => fs.rm(path.join(root, entry), { recursive: true, force: true }))
   );
 
-  await runTar(['--force-local', '-xzf', toTarPath(archivePath), '-C', toTarPath(root)]);
+  await tar.extract({ file: archivePath, cwd: root });
   logger.info({ serverId: server.id, snapshotId, safetySnapshotId: safetySnapshot.id }, 'Restored snapshot');
   return { restored: record, safetySnapshot };
 }
