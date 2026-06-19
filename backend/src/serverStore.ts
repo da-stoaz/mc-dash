@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { config } from './config';
-import { GameConfig, ResourceConfig, ServerCreateInput, ServerRecord, ServerStatus, ServerUpdateInput } from './types';
+import { GameConfig, ResourceConfig, ServerCreateInput, ServerRecord, ServerStatus, ServerUpdateInput, SnapshotCreateInput, SnapshotRecord } from './types';
 
 const db = new Database(config.sqlitePath);
 db.pragma('journal_mode = WAL');
@@ -79,6 +79,18 @@ if (!columns.find((col) => col.name === 'serverPort')) {
 if (!columns.find((col) => col.name === 'subdomain')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN subdomain TEXT`).run();
 }
+
+db.prepare(
+  `CREATE TABLE IF NOT EXISTS snapshots (
+    id TEXT PRIMARY KEY,
+    serverId TEXT NOT NULL,
+    label TEXT,
+    fileName TEXT NOT NULL,
+    sizeBytes INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  )`
+).run();
 
 type ServerRow = {
   id: string;
@@ -350,6 +362,42 @@ export class ServerStore {
   delete(id: string): boolean {
     const stmt = db.prepare(`DELETE FROM servers WHERE id = ?`);
     const result = stmt.run(id);
+    return result.changes > 0;
+  }
+
+  listSnapshots(serverId: string): SnapshotRecord[] {
+    const stmt = db.prepare<[string]>(`SELECT * FROM snapshots WHERE serverId = ? ORDER BY createdAt DESC`);
+    return stmt.all(serverId) as SnapshotRecord[];
+  }
+
+  getSnapshot(id: string): SnapshotRecord | null {
+    const stmt = db.prepare<[string]>(`SELECT * FROM snapshots WHERE id = ?`);
+    const row = stmt.get(id) as SnapshotRecord | undefined;
+    return row ?? null;
+  }
+
+  createSnapshot(input: SnapshotCreateInput): SnapshotRecord {
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO snapshots (id, serverId, label, fileName, sizeBytes, kind, createdAt)
+       VALUES (@id, @serverId, @label, @fileName, @sizeBytes, @kind, @createdAt)`
+    ).run({
+      id,
+      serverId: input.serverId,
+      label: input.label ?? null,
+      fileName: input.fileName,
+      sizeBytes: input.sizeBytes,
+      kind: input.kind,
+      createdAt,
+    });
+    const created = this.getSnapshot(id);
+    if (!created) throw new Error('Failed to fetch created snapshot');
+    return created;
+  }
+
+  deleteSnapshot(id: string): boolean {
+    const result = db.prepare(`DELETE FROM snapshots WHERE id = ?`).run(id);
     return result.changes > 0;
   }
 }

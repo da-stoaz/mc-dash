@@ -10,6 +10,7 @@ import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
 import { syncBlacklistLive } from '../services/accessControlService';
+import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath } from '../services/snapshotService';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
@@ -603,6 +604,74 @@ router.delete('/:id', async (req, res) => {
   const removed = serverStore.delete(server.id);
   if (!removed) return notFound(res);
   res.json({ ok: true });
+});
+
+const snapshotCreateSchema = z.object({
+  label: z.string().trim().max(200).optional(),
+});
+
+router.get('/:id/snapshots', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  res.json(serverStore.listSnapshots(server.id));
+});
+
+router.post('/:id/snapshots', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const parsed = snapshotCreateSchema.parse(req.body ?? {});
+    const snapshot = await createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' });
+    res.status(201).json(snapshot);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id/snapshots/:snapshotId/download', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  const snapshot = serverStore.getSnapshot(req.params.snapshotId);
+  if (!snapshot || snapshot.serverId !== server.id) {
+    return res.status(404).json({ error: 'Snapshot not found' });
+  }
+  const filePath = snapshotFilePath(server.id, snapshot.fileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Snapshot archive is missing on disk' });
+  }
+  const safeName = `${server.name}-${snapshot.createdAt}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
+  res.download(filePath, `${safeName}.tar.gz`);
+});
+
+router.post('/:id/snapshots/:snapshotId/restore', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const status = await dockerService.status(server);
+    if (['running', 'starting', 'restarting', 'stopping'].includes(status)) {
+      return res.status(409).json({ error: 'Stop the server before restoring a snapshot.' });
+    }
+    const result = await restoreSnapshot(server, req.params.snapshotId);
+    const updated = serverStore.update(server.id, { restartRequired: false }) ?? server;
+    res.json({ ok: true, restored: result.restored, safetySnapshot: result.safetySnapshot, server: updated });
+  } catch (err: any) {
+    if (err?.message === 'Snapshot not found' || err?.message === 'Snapshot archive is missing on disk') {
+      return res.status(404).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+router.delete('/:id/snapshots/:snapshotId', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const removed = await deleteSnapshot(server, req.params.snapshotId);
+    if (!removed) return res.status(404).json({ error: 'Snapshot not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

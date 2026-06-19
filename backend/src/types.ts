@@ -79,3 +79,23 @@ export interface ServerUpdateInput {
   blacklistEnabled?: boolean;
   restartRequired?: boolean;
 }
+
+export type SnapshotKind = 'manual' | 'auto-pre-restore';
+
+export interface SnapshotRecord {
+  id: string;
+  serverId: string;
+  label: string | null;
+  fileName: string;
+  sizeBytes: number;
+  kind: SnapshotKind;
+  createdAt: string;
+}
+
+export interface SnapshotCreateInput {
+  serverId: string;
+  label?: string | null;
+  fileName: string;
+  sizeBytes: number;
+  kind: SnapshotKind;
+}
