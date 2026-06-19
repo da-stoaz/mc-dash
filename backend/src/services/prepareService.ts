@@ -522,11 +522,9 @@ async function resolveAccessEntries(
 async function applyAccessLists(workingDir: string, server: ServerRecord) {
   const whitelist = server.whitelist?.map((entry) => entry.trim()).filter(Boolean);
   const blacklist = server.blacklist?.map((entry) => entry.trim()).filter(Boolean);
-  const ipBlacklist = server.ipBlacklist?.map((entry) => entry.trim()).filter(Boolean);
   const now = new Date().toISOString();
   const whitelistEnabled = server.whitelistEnabled ?? (whitelist?.length ?? 0) > 0;
   const blacklistEnabled = server.blacklistEnabled ?? (blacklist?.length ?? 0) > 0;
-  const ipBlacklistEnabled = server.ipBlacklistEnabled ?? (ipBlacklist?.length ?? 0) > 0;
   const serverProps = await readServerProperties(workingDir);
   const onlineMode = parseOnlineMode(serverProps['online-mode']);
 
@@ -549,20 +547,6 @@ async function applyAccessLists(workingDir: string, server: ServerRecord) {
         }))
       : [];
     const blacklistPath = path.join(workingDir, 'banned-players.json');
-    await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
-  }
-
-  if (server.ipBlacklist !== undefined || server.ipBlacklistEnabled !== undefined) {
-    const entries = ipBlacklistEnabled
-      ? (ipBlacklist ?? []).map((ip) => ({
-          ip,
-          created: now,
-          source: 'mc-dash',
-          expires: 'forever',
-          reason: 'Banned via MC Dash',
-        }))
-      : [];
-    const blacklistPath = path.join(workingDir, 'banned-ips.json');
     await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
   }
 }

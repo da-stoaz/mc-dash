@@ -381,14 +381,11 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
     if (server) {
       const whitelist = server.whitelist ?? [];
       const blacklist = server.blacklist ?? [];
-      const ipBlacklist = server.ipBlacklist ?? [];
       setLocal({
         whitelistEnabled: server.whitelistEnabled ?? whitelist.length > 0,
         whitelist: whitelist.join('\n'),
         blacklistEnabled: server.blacklistEnabled ?? blacklist.length > 0,
         blacklist: blacklist.join('\n'),
-        ipBlacklistEnabled: server.ipBlacklistEnabled ?? ipBlacklist.length > 0,
-        ipBlacklist: ipBlacklist.join('\n'),
       });
     } else {
       setLocal(null);
@@ -404,15 +401,12 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
           <>
             <ModalHeader>Firewall settings</ModalHeader>
             <ModalBody className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <Switch isSelected={local.whitelistEnabled} onValueChange={(value) => setLocal({ ...local, whitelistEnabled: value })}>
                   Enable whitelist
                 </Switch>
                 <Switch isSelected={local.blacklistEnabled} onValueChange={(value) => setLocal({ ...local, blacklistEnabled: value })}>
                   Enable player blacklist
-                </Switch>
-                <Switch isSelected={local.ipBlacklistEnabled} onValueChange={(value) => setLocal({ ...local, ipBlacklistEnabled: value })}>
-                  Enable IP blacklist
                 </Switch>
               </div>
 
@@ -436,14 +430,6 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
                   isDisabled={!local.blacklistEnabled}
                 />
               </div>
-              <Textarea
-                label="IP blacklist"
-                placeholder="One IP per line"
-                minRows={4}
-                value={local.ipBlacklist}
-                onChange={(e) => setLocal({ ...local, ipBlacklist: e.target.value })}
-                isDisabled={!local.ipBlacklistEnabled}
-              />
               <div className="text-xs muted">
                 Online-mode: names are resolved to UUIDs when possible. If a name doesn&apos;t apply, paste the UUID instead.
               </div>

@@ -174,10 +174,8 @@ export default function ServerDetailsPage() {
         body: JSON.stringify({
           whitelistEnabled: changes.whitelistEnabled,
           blacklistEnabled: changes.blacklistEnabled,
-          ipBlacklistEnabled: changes.ipBlacklistEnabled,
           whitelist: toList(changes.whitelist),
           blacklist: toList(changes.blacklist),
-          ipBlacklist: toList(changes.ipBlacklist),
         }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
@@ -255,10 +253,8 @@ export default function ServerDetailsPage() {
   const controlsDisabled = !server || !!busy;
   const whitelistCount = server?.whitelist?.length ?? 0;
   const blacklistCount = server?.blacklist?.length ?? 0;
-  const ipBlacklistCount = server?.ipBlacklist?.length ?? 0;
   const whitelistEnabled = server?.whitelistEnabled ?? whitelistCount > 0;
   const blacklistEnabled = server?.blacklistEnabled ?? blacklistCount > 0;
-  const ipBlacklistEnabled = server?.ipBlacklistEnabled ?? ipBlacklistCount > 0;
 
   if (loading && !server) {
     return (
@@ -329,8 +325,6 @@ export default function ServerDetailsPage() {
               whitelistCount={whitelistCount}
               blacklistEnabled={blacklistEnabled}
               blacklistCount={blacklistCount}
-              ipBlacklistEnabled={ipBlacklistEnabled}
-              ipBlacklistCount={ipBlacklistCount}
               onManage={() => setShowFirewall(server)}
             />
 

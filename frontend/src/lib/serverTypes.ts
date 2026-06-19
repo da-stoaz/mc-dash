@@ -23,10 +23,8 @@ export type ServerRecord = {
   serverPort: number;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   status: ServerStatus;
   restartRequired?: boolean;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
@@ -67,8 +65,6 @@ export type FirewallState = {
   whitelist: string;
   blacklistEnabled: boolean;
   blacklist: string;
-  ipBlacklistEnabled: boolean;
-  ipBlacklist: string;
 };
 
 export const emptyForm: FormState = {

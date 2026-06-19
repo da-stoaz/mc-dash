@@ -69,10 +69,8 @@ const createServerSchema = z.object({
   seed: z.preprocess(emptyToUndefined, z.string().optional()),
   whitelist: z.preprocess(parseList, z.array(z.string()).optional()),
   blacklist: z.preprocess(parseList, z.array(z.string()).optional()),
-  ipBlacklist: z.preprocess(parseList, z.array(z.string()).optional()),
   whitelistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
   blacklistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
-  ipBlacklistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
 });
 
 const updateServerSchema = z.object({
@@ -84,10 +82,8 @@ const updateServerSchema = z.object({
   subdomain: subdomainSchema,
   whitelist: z.array(z.string()).optional(),
   blacklist: z.array(z.string()).optional(),
-  ipBlacklist: z.array(z.string()).optional(),
   whitelistEnabled: z.boolean().optional(),
   blacklistEnabled: z.boolean().optional(),
-  ipBlacklistEnabled: z.boolean().optional(),
 });
 
 const router = Router();
@@ -269,10 +265,8 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       serverPort,
       whitelist: parsed.whitelist,
       blacklist: parsed.blacklist,
-      ipBlacklist: parsed.ipBlacklist,
       whitelistEnabled: parsed.whitelistEnabled === undefined ? undefined : parsed.whitelistEnabled === 1,
       blacklistEnabled: parsed.blacklistEnabled === undefined ? undefined : parsed.blacklistEnabled === 1,
-      ipBlacklistEnabled: parsed.ipBlacklistEnabled === undefined ? undefined : parsed.ipBlacklistEnabled === 1,
       resources: {
         minRamMb: parsed.minRamMb,
         maxRamMb: parsed.maxRamMb,
@@ -365,10 +359,8 @@ router.patch('/:id', async (req, res, next) => {
       parsed.serverPort !== undefined ||
       parsed.whitelist !== undefined ||
       parsed.blacklist !== undefined ||
-      parsed.ipBlacklist !== undefined ||
       parsed.whitelistEnabled !== undefined ||
-      parsed.blacklistEnabled !== undefined ||
-      parsed.ipBlacklistEnabled !== undefined;
+      parsed.blacklistEnabled !== undefined;
     const hasResourceChanges = !!parsed.resources;
 
     let configError: Error | null = null;

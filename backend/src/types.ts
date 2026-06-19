@@ -36,10 +36,8 @@ export interface ServerRecord {
   serverPort: number;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   status: ServerStatus;
   resources: ResourceConfig;
   game: GameConfig;
@@ -56,10 +54,8 @@ export interface ServerCreateInput {
   serverPort?: number;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   resources: ResourceConfig;
   game: GameConfig;
 }
@@ -79,9 +75,7 @@ export interface ServerUpdateInput {
   subdomain?: string | null;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   restartRequired?: boolean;
 }
