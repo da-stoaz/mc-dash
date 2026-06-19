@@ -497,9 +497,10 @@ async function resolveMojangUuid(username: string): Promise<string | null> {
 async function resolveAccessEntries(
   rawEntries: string[] | undefined,
   options: { onlineMode: boolean }
-): Promise<Array<{ uuid: string; name: string }>> {
+): Promise<{ resolved: Array<{ uuid: string; name: string }>; unresolved: string[] }> {
   const parsed = (rawEntries ?? []).map(parseAccessEntry).filter((entry): entry is { uuid: string; name: string } => entry !== null);
   const resolved: Array<{ uuid: string; name: string }> = [];
+  const unresolved: string[] = [];
 
   for (const entry of parsed) {
     if (entry.uuid) {
@@ -510,13 +511,18 @@ async function resolveAccessEntries(
       const mojangUuid = await resolveMojangUuid(entry.name);
       if (mojangUuid) {
         resolved.push({ uuid: mojangUuid, name: entry.name });
-        continue;
+      } else {
+        // Online-mode server: never fall back to the offline UUID for a name we
+        // can't resolve. It would never match how the player actually connects,
+        // silently producing an ineffective ban/whitelist. Skip and report it.
+        unresolved.push(entry.name);
       }
+      continue;
     }
     resolved.push({ uuid: offlineUuid(entry.name), name: entry.name });
   }
 
-  return resolved;
+  return { resolved, unresolved };
 }
 
 async function applyAccessLists(workingDir: string, server: ServerRecord) {
@@ -528,26 +534,43 @@ async function applyAccessLists(workingDir: string, server: ServerRecord) {
   const serverProps = await readServerProperties(workingDir);
   const onlineMode = parseOnlineMode(serverProps['online-mode']);
 
+  const unresolved: string[] = [];
+
   if (server.whitelist !== undefined || server.whitelistEnabled !== undefined) {
-    const entries = whitelistEnabled ? await resolveAccessEntries(whitelist, { onlineMode }) : [];
+    const { resolved, unresolved: u } = whitelistEnabled
+      ? await resolveAccessEntries(whitelist, { onlineMode })
+      : { resolved: [], unresolved: [] };
+    unresolved.push(...u);
     const whitelistPath = path.join(workingDir, 'whitelist.json');
-    await fs.writeFile(whitelistPath, JSON.stringify(entries, null, 2) + '\n');
+    await fs.writeFile(whitelistPath, JSON.stringify(resolved, null, 2) + '\n');
   }
 
   if (server.blacklist !== undefined || server.blacklistEnabled !== undefined) {
-    const resolved = blacklistEnabled ? await resolveAccessEntries(blacklist, { onlineMode }) : [];
-    const entries = blacklistEnabled
-      ? resolved.map((entry) => ({
-          uuid: entry.uuid,
-          name: entry.name,
-          created: now,
-          source: 'mc-dash',
-          expires: 'forever',
-          reason: 'Banned via MC Dash',
-        }))
-      : [];
+    const { resolved, unresolved: u } = blacklistEnabled
+      ? await resolveAccessEntries(blacklist, { onlineMode })
+      : { resolved: [], unresolved: [] };
+    unresolved.push(...u);
+    const entries = resolved.map((entry) => ({
+      uuid: entry.uuid,
+      name: entry.name,
+      created: now,
+      source: 'mc-dash',
+      expires: 'forever',
+      reason: 'Banned via MC Dash',
+    }));
     const blacklistPath = path.join(workingDir, 'banned-players.json');
     await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
+  }
+
+  // Resolved entries were written above so valid bans/whitelist still apply.
+  // Surface any names we couldn't resolve so the save reports them instead of
+  // silently dropping the entry.
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Could not resolve a Minecraft UUID for: ${unresolved.join(', ')}. ` +
+        `On an online-mode server these entries were skipped (the offline UUID would never match). ` +
+        `Check the spelling or paste the player's UUID directly.`
+    );
   }
 }
 
