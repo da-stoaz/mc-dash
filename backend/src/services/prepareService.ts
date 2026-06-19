@@ -417,7 +417,7 @@ function parseAccessEntry(raw: string) {
   if (!trimmed) return null;
 
   let name = trimmed;
-  let uuid: string | null = null;
+  let uuid = '';
 
   if (trimmed.includes(':')) {
     const [first, second] = trimmed.split(':').map((part) => part.trim());
@@ -435,10 +435,10 @@ function parseAccessEntry(raw: string) {
     name = trimmed;
   }
 
-  if (!uuid) {
-    uuid = offlineUuid(name);
-  }
-
+  // Leave uuid empty for name-only entries so resolveAccessEntries can pick the
+  // correct UUID: the real Mojang UUID on online-mode servers, the offline
+  // (md5-derived) UUID otherwise. Filling offlineUuid() here would shadow that
+  // logic and write a UUID that never matches how a premium player connects.
   return { uuid, name };
 }
 
