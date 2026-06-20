@@ -165,7 +165,13 @@ export class RouterService {
         const subdomain = extractSubdomain(hostname);
         const target = findServerBySubdomain(subdomain);
 
+        logger.info(
+          { remoteAddress: socket.remoteAddress, remotePort: socket.remotePort, hostname, subdomain, targetId: target?.id },
+          'Router parsed handshake'
+        );
+
         if (!target) {
+          logger.warn({ hostname, subdomain }, 'Router could not resolve target subdomain');
           socket.end();
           cleanup();
           return;
@@ -178,6 +184,7 @@ export class RouterService {
         if (fallback) {
           resolved = true;
           clearTimeout(timeout);
+          logger.info({ fallbackId: fallback.id }, 'Router using default fallback subdomain');
           upstream = this.connectUpstream(socket, buffered, fallback);
           return;
         }
