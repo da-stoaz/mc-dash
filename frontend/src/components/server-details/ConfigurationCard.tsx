@@ -66,6 +66,7 @@ export function ConfigurationCard({ server, onEdit }: ConfigurationCardProps) {
         <div className="space-y-2">
           <div className="text-base font-semibold">Game</div>
           <div className="muted">Mode: {server.game.gameMode ?? '-'}</div>
+          <div className="muted">Difficulty: {server.game.difficulty ?? '-'}</div>
           <div className="muted">Render distance: {server.game.renderDistance ?? '-'} chunks</div>
           <div className="muted break-all">Seed: {server.game.seed || '-'}</div>
         </div>

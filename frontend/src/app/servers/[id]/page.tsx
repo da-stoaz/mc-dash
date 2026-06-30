@@ -149,14 +149,20 @@ export default function ServerDetailsPage() {
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
             gameMode: changes.gameMode,
+            difficulty: changes.difficulty,
             seed: changes.seed,
           },
         }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
+      const updated = await res.json().catch(() => null);
       await fetchServer();
       setShowEdit(null);
-      notify('Updated', 'Changes saved. Restart if required.', 'success');
+      if (updated?.restartRequired) {
+        notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else {
+        notify('Saved', 'Changes applied live — no restart needed.', 'success');
+      }
     } catch (err: any) {
       notify('Update failed', err?.message ?? 'Update failed', 'danger');
     }
@@ -180,9 +186,14 @@ export default function ServerDetailsPage() {
         }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
+      const updated = await res.json().catch(() => null);
       await fetchServer();
       setShowFirewall(null);
-      notify('Firewall updated', 'Access lists saved. Restart if required.', 'success');
+      if (updated?.restartRequired) {
+        notify('Firewall saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else {
+        notify('Firewall saved', 'Bans applied live — no restart needed.', 'success');
+      }
     } catch (err: any) {
       notify('Firewall update failed', err?.message ?? 'Update failed', 'danger');
     }
