@@ -8,6 +8,26 @@ export type ServerStatus =
   | 'exited'
   | 'error';
 export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
+export type Difficulty = 'peaceful' | 'easy' | 'normal' | 'hard';
+
+export const DIFFICULTIES: Difficulty[] = ['peaceful', 'easy', 'normal', 'hard'];
+
+export const difficultyLabel: Record<Difficulty, string> = {
+  peaceful: 'Peaceful',
+  easy: 'Easy',
+  normal: 'Normal',
+  hard: 'Hard',
+};
+
+// Returned by GET /servers/:id/difficulty -- the modes a specific server can
+// actually use plus its current value (a hardcore server is locked to Hard).
+export type DifficultyOptions = {
+  available: Difficulty[];
+  current: Difficulty | null;
+  locked: boolean;
+  lockedReason?: string;
+  source: 'server.properties' | 'config';
+};
 
 export type ServerRecord = {
   id: string;
@@ -28,7 +48,7 @@ export type ServerRecord = {
   status: ServerStatus;
   restartRequired?: boolean;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
-  game: { renderDistance?: number; gameMode?: GameMode; seed?: string };
+  game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
 
 export type SnapshotKind = 'manual' | 'auto-pre-restore';
@@ -69,6 +89,7 @@ export type FormState = {
   cpuLimit: string;
   renderDistance: number;
   gameMode: GameMode;
+  difficulty: Difficulty;
   seed: string;
 };
 
@@ -89,6 +110,7 @@ export const emptyForm: FormState = {
   cpuLimit: '',
   renderDistance: 10,
   gameMode: 'survival',
+  difficulty: 'normal',
   seed: '',
 };
 

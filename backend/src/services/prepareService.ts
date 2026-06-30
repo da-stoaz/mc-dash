@@ -5,6 +5,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
 import { dockerService, RCON_PORT } from './dockerService';
+import { formatDifficulty, usesNumericFormat } from './difficulty';
 import fsSync from 'fs';
 import crypto from 'crypto';
 
@@ -144,6 +145,11 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
     };
     props['gamemode'] = modeMap[server.game.gameMode];
     props['force-gamemode'] = 'true';
+  }
+  if (server.game.difficulty) {
+    // Mirror the format already in the file: numeric (0-3) for pre-1.13 packs,
+    // names otherwise. A 1.13+ server rejects numeric difficulty and vice-versa.
+    props['difficulty'] = formatDifficulty(server.game.difficulty, usesNumericFormat(props['difficulty']));
   }
   if (server.game.seed) {
     props['level-seed'] = server.game.seed;

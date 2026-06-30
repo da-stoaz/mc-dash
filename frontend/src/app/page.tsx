@@ -112,6 +112,7 @@ export default function Page() {
       payload.append('minRamMb', String(form.minRamMb));
       payload.append('maxRamMb', String(form.maxRamMb));
       payload.append('gameMode', form.gameMode);
+      payload.append('difficulty', form.difficulty);
 
       if (form.javaImage) payload.append('javaImage', form.javaImage);
       if (form.serverPort) payload.append('serverPort', form.serverPort);
@@ -178,14 +179,20 @@ export default function Page() {
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
             gameMode: changes.gameMode,
+            difficulty: changes.difficulty,
             seed: changes.seed,
           },
         }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
+      const updated = await res.json().catch(() => null);
       await fetchServers();
       setShowEdit(null);
-      notify('Updated', 'Changes saved. Restart if required.', 'success');
+      if (updated?.restartRequired) {
+        notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else {
+        notify('Saved', 'Changes applied live — no restart needed.', 'success');
+      }
     } catch (err: any) {
       notify('Update failed', err?.message ?? 'Update failed', 'danger');
     }
