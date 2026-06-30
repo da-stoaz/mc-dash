@@ -15,3 +15,7 @@ frontend/node_modules
 
 # Graphify knowledge-graph output (generated)
 graphify-out
+
+# Generated TypeScript / Next.js files (regenerated on build)
+next-env.d.ts
+*.tsbuildinfo
