@@ -13,6 +13,8 @@ frontend/.next
 frontend/out
 frontend/node_modules
 
+.DS_Store
+
 # Graphify knowledge-graph output (generated)
 graphify-out
 
