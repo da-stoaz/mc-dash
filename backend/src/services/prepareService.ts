@@ -4,7 +4,8 @@ import AdmZip from 'adm-zip';
 import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
-import { dockerService } from './dockerService';
+import { dockerService, RCON_PORT } from './dockerService';
+import { formatDifficulty, usesNumericFormat } from './difficulty';
 import fsSync from 'fs';
 import crypto from 'crypto';
 
@@ -145,6 +146,11 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
     props['gamemode'] = modeMap[server.game.gameMode];
     props['force-gamemode'] = 'true';
   }
+  if (server.game.difficulty) {
+    // Mirror the format already in the file: numeric (0-3) for pre-1.13 packs,
+    // names otherwise. A 1.13+ server rejects numeric difficulty and vice-versa.
+    props['difficulty'] = formatDifficulty(server.game.difficulty, usesNumericFormat(props['difficulty']));
+  }
   if (server.game.seed) {
     props['level-seed'] = server.game.seed;
   }
@@ -156,6 +162,17 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
     props['white-list'] = enabled ? 'true' : 'false';
     props['enforce-whitelist'] = enabled ? 'true' : 'false';
   }
+
+  // Enable RCON so MC Dash can push bans / access-list changes to a running
+  // server without a restart. The password is generated once and preserved on
+  // subsequent writes. RCON only becomes active after the server next (re)starts
+  // with these properties, which is the one-time bootstrap for live bans.
+  props['enable-rcon'] = 'true';
+  props['rcon.port'] = String(RCON_PORT);
+  if (!props['rcon.password']?.trim()) {
+    props['rcon.password'] = crypto.randomBytes(24).toString('hex');
+  }
+  props['broadcast-rcon-to-ops'] = 'false';
 
   const lines = Object.entries(props).map(([key, value]) => `${key}=${value}`);
   await fs.writeFile(propsPath, lines.join('\n') + '\n');
@@ -412,12 +429,12 @@ function offlineUuid(name: string) {
   return formatUuid(hash);
 }
 
-function parseAccessEntry(raw: string) {
+export function parseAccessEntry(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
   let name = trimmed;
-  let uuid: string | null = null;
+  let uuid = '';
 
   if (trimmed.includes(':')) {
     const [first, second] = trimmed.split(':').map((part) => part.trim());
@@ -435,10 +452,10 @@ function parseAccessEntry(raw: string) {
     name = trimmed;
   }
 
-  if (!uuid) {
-    uuid = offlineUuid(name);
-  }
-
+  // Leave uuid empty for name-only entries so resolveAccessEntries can pick the
+  // correct UUID: the real Mojang UUID on online-mode servers, the offline
+  // (md5-derived) UUID otherwise. Filling offlineUuid() here would shadow that
+  // logic and write a UUID that never matches how a premium player connects.
   return { uuid, name };
 }
 
@@ -449,7 +466,7 @@ function parseOnlineMode(raw?: string): boolean {
   return normalized !== 'false' && normalized !== '0' && normalized !== 'no';
 }
 
-async function readServerProperties(workingDir: string): Promise<Record<string, string>> {
+export async function readServerProperties(workingDir: string): Promise<Record<string, string>> {
   const propsPath = path.join(workingDir, 'server.properties');
   const props: Record<string, string> = {};
   if (!(await pathExists(propsPath))) return props;
@@ -497,9 +514,10 @@ async function resolveMojangUuid(username: string): Promise<string | null> {
 async function resolveAccessEntries(
   rawEntries: string[] | undefined,
   options: { onlineMode: boolean }
-): Promise<Array<{ uuid: string; name: string }>> {
+): Promise<{ resolved: Array<{ uuid: string; name: string }>; unresolved: string[] }> {
   const parsed = (rawEntries ?? []).map(parseAccessEntry).filter((entry): entry is { uuid: string; name: string } => entry !== null);
   const resolved: Array<{ uuid: string; name: string }> = [];
+  const unresolved: string[] = [];
 
   for (const entry of parsed) {
     if (entry.uuid) {
@@ -510,60 +528,66 @@ async function resolveAccessEntries(
       const mojangUuid = await resolveMojangUuid(entry.name);
       if (mojangUuid) {
         resolved.push({ uuid: mojangUuid, name: entry.name });
-        continue;
+      } else {
+        // Online-mode server: never fall back to the offline UUID for a name we
+        // can't resolve. It would never match how the player actually connects,
+        // silently producing an ineffective ban/whitelist. Skip and report it.
+        unresolved.push(entry.name);
       }
+      continue;
     }
     resolved.push({ uuid: offlineUuid(entry.name), name: entry.name });
   }
 
-  return resolved;
+  return { resolved, unresolved };
 }
 
 async function applyAccessLists(workingDir: string, server: ServerRecord) {
   const whitelist = server.whitelist?.map((entry) => entry.trim()).filter(Boolean);
   const blacklist = server.blacklist?.map((entry) => entry.trim()).filter(Boolean);
-  const ipBlacklist = server.ipBlacklist?.map((entry) => entry.trim()).filter(Boolean);
   const now = new Date().toISOString();
   const whitelistEnabled = server.whitelistEnabled ?? (whitelist?.length ?? 0) > 0;
   const blacklistEnabled = server.blacklistEnabled ?? (blacklist?.length ?? 0) > 0;
-  const ipBlacklistEnabled = server.ipBlacklistEnabled ?? (ipBlacklist?.length ?? 0) > 0;
   const serverProps = await readServerProperties(workingDir);
   const onlineMode = parseOnlineMode(serverProps['online-mode']);
 
+  const unresolved: string[] = [];
+
   if (server.whitelist !== undefined || server.whitelistEnabled !== undefined) {
-    const entries = whitelistEnabled ? await resolveAccessEntries(whitelist, { onlineMode }) : [];
+    const { resolved, unresolved: u } = whitelistEnabled
+      ? await resolveAccessEntries(whitelist, { onlineMode })
+      : { resolved: [], unresolved: [] };
+    unresolved.push(...u);
     const whitelistPath = path.join(workingDir, 'whitelist.json');
-    await fs.writeFile(whitelistPath, JSON.stringify(entries, null, 2) + '\n');
+    await fs.writeFile(whitelistPath, JSON.stringify(resolved, null, 2) + '\n');
   }
 
   if (server.blacklist !== undefined || server.blacklistEnabled !== undefined) {
-    const resolved = blacklistEnabled ? await resolveAccessEntries(blacklist, { onlineMode }) : [];
-    const entries = blacklistEnabled
-      ? resolved.map((entry) => ({
-          uuid: entry.uuid,
-          name: entry.name,
-          created: now,
-          source: 'mc-dash',
-          expires: 'forever',
-          reason: 'Banned via MC Dash',
-        }))
-      : [];
+    const { resolved, unresolved: u } = blacklistEnabled
+      ? await resolveAccessEntries(blacklist, { onlineMode })
+      : { resolved: [], unresolved: [] };
+    unresolved.push(...u);
+    const entries = resolved.map((entry) => ({
+      uuid: entry.uuid,
+      name: entry.name,
+      created: now,
+      source: 'mc-dash',
+      expires: 'forever',
+      reason: 'Banned via MC Dash',
+    }));
     const blacklistPath = path.join(workingDir, 'banned-players.json');
     await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
   }
 
-  if (server.ipBlacklist !== undefined || server.ipBlacklistEnabled !== undefined) {
-    const entries = ipBlacklistEnabled
-      ? (ipBlacklist ?? []).map((ip) => ({
-          ip,
-          created: now,
-          source: 'mc-dash',
-          expires: 'forever',
-          reason: 'Banned via MC Dash',
-        }))
-      : [];
-    const blacklistPath = path.join(workingDir, 'banned-ips.json');
-    await fs.writeFile(blacklistPath, JSON.stringify(entries, null, 2) + '\n');
+  // Resolved entries were written above so valid bans/whitelist still apply.
+  // Surface any names we couldn't resolve so the save reports them instead of
+  // silently dropping the entry.
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Could not resolve a Minecraft UUID for: ${unresolved.join(', ')}. ` +
+        `On an online-mode server these entries were skipped (the offline UUID would never match). ` +
+        `Check the spelling or paste the player's UUID directly.`
+    );
   }
 }
 
@@ -695,6 +719,14 @@ export async function recreateContainer(server: ServerRecord): Promise<{
   await applyAccessLists(workingDir, server);
 
   return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
+}
+
+// Resolve a prepared server's working directory (the folder that actually holds
+// server.properties / banned-players.json), or null if the pack isn't prepared.
+export async function locateWorkingDir(server: ServerRecord): Promise<string | null> {
+  const packDir = path.join(config.dataRoot, 'servers', server.id, 'pack');
+  if (!(await pathExists(packDir))) return null;
+  return detectWorkingDir(packDir);
 }
 
 export async function applyConfigFiles(server: ServerRecord): Promise<void> {

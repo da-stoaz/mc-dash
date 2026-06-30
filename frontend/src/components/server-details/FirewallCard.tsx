@@ -5,8 +5,6 @@ type FirewallCardProps = {
   whitelistCount: number;
   blacklistEnabled: boolean;
   blacklistCount: number;
-  ipBlacklistEnabled: boolean;
-  ipBlacklistCount: number;
   onManage: () => void;
 };
 
@@ -15,8 +13,6 @@ export function FirewallCard({
   whitelistCount,
   blacklistEnabled,
   blacklistCount,
-  ipBlacklistEnabled,
-  ipBlacklistCount,
   onManage,
 }: FirewallCardProps) {
   return (
@@ -27,7 +23,7 @@ export function FirewallCard({
           Manage firewall
         </Button>
       </CardHeader>
-      <CardBody className="grid gap-4 md:grid-cols-3 text-sm">
+      <CardBody className="grid gap-4 md:grid-cols-2 text-sm">
         <div className="rounded-lg border border-white/10 bg-white/5 p-3">
           <div className="text-xs uppercase tracking-wide muted">Whitelist</div>
           <div className="mt-2 text-lg font-semibold">{whitelistEnabled ? 'Enabled' : 'Disabled'}</div>
@@ -37,11 +33,6 @@ export function FirewallCard({
           <div className="text-xs uppercase tracking-wide muted">Player blacklist</div>
           <div className="mt-2 text-lg font-semibold">{blacklistEnabled ? 'Enabled' : 'Disabled'}</div>
           <div className="text-xs muted">{blacklistCount} blocked</div>
-        </div>
-        <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-          <div className="text-xs uppercase tracking-wide muted">IP blacklist</div>
-          <div className="mt-2 text-lg font-semibold">{ipBlacklistEnabled ? 'Enabled' : 'Disabled'}</div>
-          <div className="text-xs muted">{ipBlacklistCount} blocked</div>
         </div>
       </CardBody>
     </Card>

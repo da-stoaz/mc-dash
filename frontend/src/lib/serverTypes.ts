@@ -8,6 +8,26 @@ export type ServerStatus =
   | 'exited'
   | 'error';
 export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
+export type Difficulty = 'peaceful' | 'easy' | 'normal' | 'hard';
+
+export const DIFFICULTIES: Difficulty[] = ['peaceful', 'easy', 'normal', 'hard'];
+
+export const difficultyLabel: Record<Difficulty, string> = {
+  peaceful: 'Peaceful',
+  easy: 'Easy',
+  normal: 'Normal',
+  hard: 'Hard',
+};
+
+// Returned by GET /servers/:id/difficulty -- the modes a specific server can
+// actually use plus its current value (a hardcore server is locked to Hard).
+export type DifficultyOptions = {
+  available: Difficulty[];
+  current: Difficulty | null;
+  locked: boolean;
+  lockedReason?: string;
+  source: 'server.properties' | 'config';
+};
 
 export type ServerRecord = {
   id: string;
@@ -23,14 +43,24 @@ export type ServerRecord = {
   serverPort: number;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   status: ServerStatus;
   restartRequired?: boolean;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
-  game: { renderDistance?: number; gameMode?: GameMode; seed?: string };
+  game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
+};
+
+export type SnapshotKind = 'manual' | 'auto-pre-restore';
+
+export type Snapshot = {
+  id: string;
+  serverId: string;
+  label: string | null;
+  fileName: string;
+  sizeBytes: number;
+  kind: SnapshotKind;
+  createdAt: string;
 };
 
 export type ServerMetrics = {
@@ -59,6 +89,7 @@ export type FormState = {
   cpuLimit: string;
   renderDistance: number;
   gameMode: GameMode;
+  difficulty: Difficulty;
   seed: string;
 };
 
@@ -67,8 +98,6 @@ export type FirewallState = {
   whitelist: string;
   blacklistEnabled: boolean;
   blacklist: string;
-  ipBlacklistEnabled: boolean;
-  ipBlacklist: string;
 };
 
 export const emptyForm: FormState = {
@@ -81,6 +110,7 @@ export const emptyForm: FormState = {
   cpuLimit: '',
   renderDistance: 10,
   gameMode: 'survival',
+  difficulty: 'normal',
   seed: '',
 };
 

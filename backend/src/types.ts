@@ -10,6 +10,8 @@ export type ServerStatus =
 
 export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
 
+export type Difficulty = 'peaceful' | 'easy' | 'normal' | 'hard';
+
 export interface ResourceConfig {
   minRamMb: number;
   maxRamMb: number;
@@ -19,6 +21,7 @@ export interface ResourceConfig {
 export interface GameConfig {
   renderDistance?: number;
   gameMode?: GameMode;
+  difficulty?: Difficulty;
   seed?: string;
 }
 
@@ -36,10 +39,8 @@ export interface ServerRecord {
   serverPort: number;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   status: ServerStatus;
   resources: ResourceConfig;
   game: GameConfig;
@@ -56,10 +57,8 @@ export interface ServerCreateInput {
   serverPort?: number;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   resources: ResourceConfig;
   game: GameConfig;
 }
@@ -79,9 +78,27 @@ export interface ServerUpdateInput {
   subdomain?: string | null;
   whitelist?: string[];
   blacklist?: string[];
-  ipBlacklist?: string[];
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
-  ipBlacklistEnabled?: boolean;
   restartRequired?: boolean;
+}
+
+export type SnapshotKind = 'manual' | 'auto-pre-restore';
+
+export interface SnapshotRecord {
+  id: string;
+  serverId: string;
+  label: string | null;
+  fileName: string;
+  sizeBytes: number;
+  kind: SnapshotKind;
+  createdAt: string;
+}
+
+export interface SnapshotCreateInput {
+  serverId: string;
+  label?: string | null;
+  fileName: string;
+  sizeBytes: number;
+  kind: SnapshotKind;
 }

@@ -25,6 +25,7 @@ import { LifecycleToolbar } from '../../../components/server-details/LifecycleTo
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
+import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
@@ -148,14 +149,20 @@ export default function ServerDetailsPage() {
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
             gameMode: changes.gameMode,
+            difficulty: changes.difficulty,
             seed: changes.seed,
           },
         }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
+      const updated = await res.json().catch(() => null);
       await fetchServer();
       setShowEdit(null);
-      notify('Updated', 'Changes saved. Restart if required.', 'success');
+      if (updated?.restartRequired) {
+        notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else {
+        notify('Saved', 'Changes applied live — no restart needed.', 'success');
+      }
     } catch (err: any) {
       notify('Update failed', err?.message ?? 'Update failed', 'danger');
     }
@@ -174,16 +181,19 @@ export default function ServerDetailsPage() {
         body: JSON.stringify({
           whitelistEnabled: changes.whitelistEnabled,
           blacklistEnabled: changes.blacklistEnabled,
-          ipBlacklistEnabled: changes.ipBlacklistEnabled,
           whitelist: toList(changes.whitelist),
           blacklist: toList(changes.blacklist),
-          ipBlacklist: toList(changes.ipBlacklist),
         }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
+      const updated = await res.json().catch(() => null);
       await fetchServer();
       setShowFirewall(null);
-      notify('Firewall updated', 'Access lists saved. Restart if required.', 'success');
+      if (updated?.restartRequired) {
+        notify('Firewall saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else {
+        notify('Firewall saved', 'Bans applied live — no restart needed.', 'success');
+      }
     } catch (err: any) {
       notify('Firewall update failed', err?.message ?? 'Update failed', 'danger');
     }
@@ -255,10 +265,8 @@ export default function ServerDetailsPage() {
   const controlsDisabled = !server || !!busy;
   const whitelistCount = server?.whitelist?.length ?? 0;
   const blacklistCount = server?.blacklist?.length ?? 0;
-  const ipBlacklistCount = server?.ipBlacklist?.length ?? 0;
   const whitelistEnabled = server?.whitelistEnabled ?? whitelistCount > 0;
   const blacklistEnabled = server?.blacklistEnabled ?? blacklistCount > 0;
-  const ipBlacklistEnabled = server?.ipBlacklistEnabled ?? ipBlacklistCount > 0;
 
   if (loading && !server) {
     return (
@@ -320,6 +328,10 @@ export default function ServerDetailsPage() {
           <LogsCard serverId={server.id} apiBase={API_BASE} />
         </Tab>
 
+        <Tab key="snapshots" title="Snapshots">
+          <SnapshotsCard serverId={server.id} status={server.status} onRestored={() => fetchServer()} />
+        </Tab>
+
         <Tab key="settings" title="Settings">
           <div className="space-y-4">
             <ConfigurationCard server={server} onEdit={() => setShowEdit(server)} />
@@ -329,8 +341,6 @@ export default function ServerDetailsPage() {
               whitelistCount={whitelistCount}
               blacklistEnabled={blacklistEnabled}
               blacklistCount={blacklistCount}
-              ipBlacklistEnabled={ipBlacklistEnabled}
-              ipBlacklistCount={ipBlacklistCount}
               onManage={() => setShowFirewall(server)}
             />
 

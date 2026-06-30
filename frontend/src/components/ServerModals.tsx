@@ -14,7 +14,18 @@ import {
   Switch,
   Textarea,
 } from '@heroui/react';
-import { FirewallState, FormState, GameMode, ServerRecord, emptyForm } from '../lib/serverTypes';
+import {
+  DIFFICULTIES,
+  Difficulty,
+  DifficultyOptions,
+  FirewallState,
+  FormState,
+  GameMode,
+  ServerRecord,
+  difficultyLabel,
+  emptyForm,
+} from '../lib/serverTypes';
+import { API_BASE, apiFetch } from '../lib/api';
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 
@@ -111,7 +122,7 @@ export function CreateModal({
                   {packFile ? `Selected: ${packFile.name}` : 'Required. Use the server pack zip you downloaded.'}
                 </div>
                 {isCreating && (
-                  <Progress size="sm" value={progressValue} showValueLabel className="mt-2" />
+                  <Progress aria-label="Upload progress" size="sm" value={progressValue} showValueLabel className="mt-2" />
                 )}
               </div>
               <div>
@@ -196,6 +207,16 @@ export function CreateModal({
                   <SelectItem key="adventure">Adventure</SelectItem>
                   <SelectItem key="spectator">Spectator</SelectItem>
                 </Select>
+                <Select
+                  label="Difficulty"
+                  selectedKeys={[form.difficulty]}
+                  onSelectionChange={(keys) => setForm({ ...form, difficulty: Array.from(keys)[0] as Difficulty })}
+                  isDisabled={isCreating}
+                >
+                  {DIFFICULTIES.map((value) => (
+                    <SelectItem key={value}>{difficultyLabel[value]}</SelectItem>
+                  ))}
+                </Select>
                 <Input
                   label="World seed"
                   value={form.seed}
@@ -228,6 +249,7 @@ type EditProps = {
 export function EditModal({ server, onClose, onSave }: EditProps) {
   const [local, setLocal] = useState<FormState | null>(null);
   const [javaSelection, setJavaSelection] = useState<string>('');
+  const [difficultyOptions, setDifficultyOptions] = useState<DifficultyOptions | null>(null);
 
   useEffect(() => {
     if (server) {
@@ -241,6 +263,7 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
         cpuLimit: server.resources.cpuLimit?.toString() ?? '',
         renderDistance: server.game.renderDistance ?? emptyForm.renderDistance,
         gameMode: server.game.gameMode ?? emptyForm.gameMode,
+        difficulty: server.game.difficulty ?? emptyForm.difficulty,
         seed: server.game.seed ?? '',
       });
       setJavaSelection(defaultJavaSelection(server.javaImage ?? ''));
@@ -249,7 +272,39 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
     }
   }, [server]);
 
+  // Ask the backend which difficulties this specific server can use (and what
+  // it's actually set to). Reflects a hardcore lock and the on-disk value.
+  useEffect(() => {
+    if (!server) {
+      setDifficultyOptions(null);
+      return;
+    }
+    let cancelled = false;
+    setDifficultyOptions(null);
+    apiFetch(`${API_BASE}/servers/${server.id}/difficulty`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((options: DifficultyOptions | null) => {
+        if (cancelled || !options) return;
+        setDifficultyOptions(options);
+        // Seed the form with the server's real current difficulty so saving
+        // doesn't silently overwrite it with a stale default.
+        if (options.current) {
+          setLocal((prev) => (prev ? { ...prev, difficulty: options.current as Difficulty } : prev));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [server]);
+
   if (!server || !local) return null;
+
+  const availableDifficulties = difficultyOptions?.available ?? DIFFICULTIES;
+  const difficultyLocked = difficultyOptions?.locked ?? false;
+  // The seed only drives world generation, which happens once. After the pack
+  // is prepared (a container exists) the world is fixed, so editing it is inert.
+  const seedLocked = Boolean(server.containerId);
 
   return (
     <Modal isOpen onClose={onClose} placement="center" size="3xl" scrollBehavior="inside">
@@ -344,7 +399,26 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                   <SelectItem key="adventure">Adventure</SelectItem>
                   <SelectItem key="spectator">Spectator</SelectItem>
                 </Select>
-                <Input label="World seed" value={local.seed} onChange={(e) => setLocal({ ...local, seed: e.target.value })} />
+                <div>
+                  <Select
+                    label="Difficulty"
+                    selectedKeys={[local.difficulty]}
+                    onSelectionChange={(keys) => setLocal({ ...local, difficulty: Array.from(keys)[0] as Difficulty })}
+                    isDisabled={difficultyLocked}
+                    description={difficultyLocked ? difficultyOptions?.lockedReason : undefined}
+                  >
+                    {availableDifficulties.map((value) => (
+                      <SelectItem key={value}>{difficultyLabel[value]}</SelectItem>
+                    ))}
+                  </Select>
+                </div>
+                <Input
+                  label="World seed"
+                  value={local.seed}
+                  onChange={(e) => setLocal({ ...local, seed: e.target.value })}
+                  isDisabled={seedLocked}
+                  description={seedLocked ? 'Locked after preparation.' : undefined}
+                />
               </div>
             </ModalBody>
             <ModalFooter>
@@ -381,14 +455,11 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
     if (server) {
       const whitelist = server.whitelist ?? [];
       const blacklist = server.blacklist ?? [];
-      const ipBlacklist = server.ipBlacklist ?? [];
       setLocal({
         whitelistEnabled: server.whitelistEnabled ?? whitelist.length > 0,
         whitelist: whitelist.join('\n'),
         blacklistEnabled: server.blacklistEnabled ?? blacklist.length > 0,
         blacklist: blacklist.join('\n'),
-        ipBlacklistEnabled: server.ipBlacklistEnabled ?? ipBlacklist.length > 0,
-        ipBlacklist: ipBlacklist.join('\n'),
       });
     } else {
       setLocal(null);
@@ -404,15 +475,12 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
           <>
             <ModalHeader>Firewall settings</ModalHeader>
             <ModalBody className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <Switch isSelected={local.whitelistEnabled} onValueChange={(value) => setLocal({ ...local, whitelistEnabled: value })}>
                   Enable whitelist
                 </Switch>
                 <Switch isSelected={local.blacklistEnabled} onValueChange={(value) => setLocal({ ...local, blacklistEnabled: value })}>
                   Enable player blacklist
-                </Switch>
-                <Switch isSelected={local.ipBlacklistEnabled} onValueChange={(value) => setLocal({ ...local, ipBlacklistEnabled: value })}>
-                  Enable IP blacklist
                 </Switch>
               </div>
 
@@ -436,14 +504,6 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
                   isDisabled={!local.blacklistEnabled}
                 />
               </div>
-              <Textarea
-                label="IP blacklist"
-                placeholder="One IP per line"
-                minRows={4}
-                value={local.ipBlacklist}
-                onChange={(e) => setLocal({ ...local, ipBlacklist: e.target.value })}
-                isDisabled={!local.ipBlacklistEnabled}
-              />
               <div className="text-xs muted">
                 Online-mode: names are resolved to UUIDs when possible. If a name doesn&apos;t apply, paste the UUID instead.
               </div>

@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { config } from './config';
-import { GameConfig, ResourceConfig, ServerCreateInput, ServerRecord, ServerStatus, ServerUpdateInput } from './types';
+import { GameConfig, ResourceConfig, ServerCreateInput, ServerRecord, ServerStatus, ServerUpdateInput, SnapshotCreateInput, SnapshotRecord } from './types';
 
 const db = new Database(config.sqlitePath);
 db.pragma('journal_mode = WAL');
@@ -22,10 +22,8 @@ db.prepare(
     serverPort INTEGER NOT NULL,
     whitelist TEXT,
     blacklist TEXT,
-    ipBlacklist TEXT,
     whitelistEnabled INTEGER NOT NULL DEFAULT 0,
     blacklistEnabled INTEGER NOT NULL DEFAULT 0,
-    ipBlacklistEnabled INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     resources TEXT NOT NULL,
     game TEXT NOT NULL,
@@ -61,17 +59,19 @@ if (!columns.find((col) => col.name === 'whitelist')) {
 if (!columns.find((col) => col.name === 'blacklist')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN blacklist TEXT`).run();
 }
-if (!columns.find((col) => col.name === 'ipBlacklist')) {
-  db.prepare(`ALTER TABLE servers ADD COLUMN ipBlacklist TEXT`).run();
-}
 if (!columns.find((col) => col.name === 'whitelistEnabled')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN whitelistEnabled INTEGER NOT NULL DEFAULT 0`).run();
 }
 if (!columns.find((col) => col.name === 'blacklistEnabled')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN blacklistEnabled INTEGER NOT NULL DEFAULT 0`).run();
 }
-if (!columns.find((col) => col.name === 'ipBlacklistEnabled')) {
-  db.prepare(`ALTER TABLE servers ADD COLUMN ipBlacklistEnabled INTEGER NOT NULL DEFAULT 0`).run();
+// IP blacklist was removed (ineffective behind the TCP router, which masks
+// client IPs). Drop the legacy columns if an older DB still has them.
+if (columns.find((col) => col.name === 'ipBlacklist')) {
+  db.prepare(`ALTER TABLE servers DROP COLUMN ipBlacklist`).run();
+}
+if (columns.find((col) => col.name === 'ipBlacklistEnabled')) {
+  db.prepare(`ALTER TABLE servers DROP COLUMN ipBlacklistEnabled`).run();
 }
 if (!columns.find((col) => col.name === 'serverPort')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN serverPort INTEGER NOT NULL DEFAULT ${config.serverPort}`).run();
@@ -79,6 +79,18 @@ if (!columns.find((col) => col.name === 'serverPort')) {
 if (!columns.find((col) => col.name === 'subdomain')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN subdomain TEXT`).run();
 }
+
+db.prepare(
+  `CREATE TABLE IF NOT EXISTS snapshots (
+    id TEXT PRIMARY KEY,
+    serverId TEXT NOT NULL,
+    label TEXT,
+    fileName TEXT NOT NULL,
+    sizeBytes INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  )`
+).run();
 
 type ServerRow = {
   id: string;
@@ -94,10 +106,8 @@ type ServerRow = {
   serverPort?: number | null;
   whitelist?: string | null;
   blacklist?: string | null;
-  ipBlacklist?: string | null;
   whitelistEnabled?: number | null;
   blacklistEnabled?: number | null;
-  ipBlacklistEnabled?: number | null;
   status: ServerStatus;
   resources: string;
   game: string;
@@ -188,7 +198,6 @@ function parseStringList(value?: string | null): string[] | undefined {
 function mapRow(row: ServerRow): ServerRecord {
   const whitelist = parseStringList(row.whitelist);
   const blacklist = parseStringList(row.blacklist);
-  const ipBlacklist = parseStringList(row.ipBlacklist);
   return {
     id: row.id,
     name: row.name,
@@ -203,10 +212,8 @@ function mapRow(row: ServerRow): ServerRecord {
     serverPort: row.serverPort ?? config.serverPort,
     whitelist,
     blacklist,
-    ipBlacklist,
     whitelistEnabled: row.whitelistEnabled != null ? row.whitelistEnabled === 1 : (whitelist?.length ?? 0) > 0,
     blacklistEnabled: row.blacklistEnabled != null ? row.blacklistEnabled === 1 : (blacklist?.length ?? 0) > 0,
-    ipBlacklistEnabled: row.ipBlacklistEnabled != null ? row.ipBlacklistEnabled === 1 : (ipBlacklist?.length ?? 0) > 0,
     status: row.status,
     resources: parseJsonField<ResourceConfig>(row.resources),
     game: parseJsonField<GameConfig>(row.game),
@@ -238,15 +245,14 @@ export class ServerStore {
 
     const stmt = db.prepare(
       `INSERT INTO servers (
-        id, name, subdomain, serverPackUrl, javaImage, effectiveJavaImage, effectiveJavaSource, packRecommendedJava, packRecommendedJavaMajor, containerId, serverPort, whitelist, blacklist, ipBlacklist, whitelistEnabled, blacklistEnabled, ipBlacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
+        id, name, subdomain, serverPackUrl, javaImage, effectiveJavaImage, effectiveJavaSource, packRecommendedJava, packRecommendedJavaMajor, containerId, serverPort, whitelist, blacklist, whitelistEnabled, blacklistEnabled, status, resources, game, notes, restartRequired, createdAt, updatedAt
       ) VALUES (
-        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, NULL, NULL, NULL, NULL, @serverPort, @whitelist, @blacklist, @ipBlacklist, @whitelistEnabled, @blacklistEnabled, @ipBlacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
+        @id, @name, @subdomain, @serverPackUrl, @javaImage, NULL, NULL, NULL, NULL, NULL, @serverPort, @whitelist, @blacklist, @whitelistEnabled, @blacklistEnabled, @status, @resources, @game, NULL, @restartRequired, @createdAt, @updatedAt
       )`
     );
 
     const whitelistEnabled = input.whitelistEnabled ?? (input.whitelist?.length ?? 0) > 0;
     const blacklistEnabled = input.blacklistEnabled ?? (input.blacklist?.length ?? 0) > 0;
-    const ipBlacklistEnabled = input.ipBlacklistEnabled ?? (input.ipBlacklist?.length ?? 0) > 0;
 
     stmt.run({
       id,
@@ -257,10 +263,8 @@ export class ServerStore {
       serverPort: input.serverPort ?? config.serverPort,
       whitelist: input.whitelist !== undefined ? JSON.stringify(input.whitelist) : null,
       blacklist: input.blacklist !== undefined ? JSON.stringify(input.blacklist) : null,
-      ipBlacklist: input.ipBlacklist !== undefined ? JSON.stringify(input.ipBlacklist) : null,
       whitelistEnabled: whitelistEnabled ? 1 : 0,
       blacklistEnabled: blacklistEnabled ? 1 : 0,
-      ipBlacklistEnabled: ipBlacklistEnabled ? 1 : 0,
       status: defaultStatus,
       resources: JSON.stringify(input.resources),
       game: JSON.stringify(input.game),
@@ -324,17 +328,11 @@ export class ServerStore {
     if (updates.blacklist !== undefined) {
       next.blacklist = JSON.stringify(updates.blacklist);
     }
-    if (updates.ipBlacklist !== undefined) {
-      next.ipBlacklist = JSON.stringify(updates.ipBlacklist);
-    }
     if (updates.whitelistEnabled !== undefined) {
       next.whitelistEnabled = updates.whitelistEnabled ? 1 : 0;
     }
     if (updates.blacklistEnabled !== undefined) {
       next.blacklistEnabled = updates.blacklistEnabled ? 1 : 0;
-    }
-    if (updates.ipBlacklistEnabled !== undefined) {
-      next.ipBlacklistEnabled = updates.ipBlacklistEnabled ? 1 : 0;
     }
     if (updates.restartRequired !== undefined) {
       next.restartRequired = updates.restartRequired ? 1 : 0;
@@ -364,6 +362,42 @@ export class ServerStore {
   delete(id: string): boolean {
     const stmt = db.prepare(`DELETE FROM servers WHERE id = ?`);
     const result = stmt.run(id);
+    return result.changes > 0;
+  }
+
+  listSnapshots(serverId: string): SnapshotRecord[] {
+    const stmt = db.prepare<[string]>(`SELECT * FROM snapshots WHERE serverId = ? ORDER BY createdAt DESC`);
+    return stmt.all(serverId) as SnapshotRecord[];
+  }
+
+  getSnapshot(id: string): SnapshotRecord | null {
+    const stmt = db.prepare<[string]>(`SELECT * FROM snapshots WHERE id = ?`);
+    const row = stmt.get(id) as SnapshotRecord | undefined;
+    return row ?? null;
+  }
+
+  createSnapshot(input: SnapshotCreateInput): SnapshotRecord {
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO snapshots (id, serverId, label, fileName, sizeBytes, kind, createdAt)
+       VALUES (@id, @serverId, @label, @fileName, @sizeBytes, @kind, @createdAt)`
+    ).run({
+      id,
+      serverId: input.serverId,
+      label: input.label ?? null,
+      fileName: input.fileName,
+      sizeBytes: input.sizeBytes,
+      kind: input.kind,
+      createdAt,
+    });
+    const created = this.getSnapshot(id);
+    if (!created) throw new Error('Failed to fetch created snapshot');
+    return created;
+  }
+
+  deleteSnapshot(id: string): boolean {
+    const result = db.prepare(`DELETE FROM snapshots WHERE id = ?`).run(id);
     return result.changes > 0;
   }
 }

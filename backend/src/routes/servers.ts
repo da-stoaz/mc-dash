@@ -9,6 +9,9 @@ import { serverStore } from '../serverStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
+import { syncBlacklistLive } from '../services/accessControlService';
+import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
+import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath } from '../services/snapshotService';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
@@ -23,6 +26,7 @@ const resourceSchema = z.object({
 const gameSchema = z.object({
   renderDistance: z.number().int().min(2).max(32).optional(),
   gameMode: z.enum(['survival', 'creative', 'adventure', 'spectator']).optional(),
+  difficulty: z.enum(['peaceful', 'easy', 'normal', 'hard']).optional(),
   seed: z.string().optional(),
 });
 
@@ -66,13 +70,12 @@ const createServerSchema = z.object({
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
   renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
   gameMode: z.preprocess(emptyToUndefined, z.enum(['survival', 'creative', 'adventure', 'spectator']).optional()),
+  difficulty: z.preprocess(emptyToUndefined, z.enum(['peaceful', 'easy', 'normal', 'hard']).optional()),
   seed: z.preprocess(emptyToUndefined, z.string().optional()),
   whitelist: z.preprocess(parseList, z.array(z.string()).optional()),
   blacklist: z.preprocess(parseList, z.array(z.string()).optional()),
-  ipBlacklist: z.preprocess(parseList, z.array(z.string()).optional()),
   whitelistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
   blacklistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
-  ipBlacklistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
 });
 
 const updateServerSchema = z.object({
@@ -84,10 +87,8 @@ const updateServerSchema = z.object({
   subdomain: subdomainSchema,
   whitelist: z.array(z.string()).optional(),
   blacklist: z.array(z.string()).optional(),
-  ipBlacklist: z.array(z.string()).optional(),
   whitelistEnabled: z.boolean().optional(),
   blacklistEnabled: z.boolean().optional(),
-  ipBlacklistEnabled: z.boolean().optional(),
 });
 
 const router = Router();
@@ -242,6 +243,20 @@ router.get('/:id/stream', (req, res) => {
   addDetailClient(req.params.id, res);
 });
 
+// Which difficulties this specific server can be set to (and its current one).
+// Read from the prepared server.properties so a hardcore lock is reflected
+// accurately rather than guessed.
+router.get('/:id/difficulty', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const options = await getDifficultyOptions(server);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/', upload.single('file'), async (req, res, next) => {
   let createdId: string | null = null;
   try {
@@ -269,10 +284,8 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       serverPort,
       whitelist: parsed.whitelist,
       blacklist: parsed.blacklist,
-      ipBlacklist: parsed.ipBlacklist,
       whitelistEnabled: parsed.whitelistEnabled === undefined ? undefined : parsed.whitelistEnabled === 1,
       blacklistEnabled: parsed.blacklistEnabled === undefined ? undefined : parsed.blacklistEnabled === 1,
-      ipBlacklistEnabled: parsed.ipBlacklistEnabled === undefined ? undefined : parsed.ipBlacklistEnabled === 1,
       resources: {
         minRamMb: parsed.minRamMb,
         maxRamMb: parsed.maxRamMb,
@@ -281,6 +294,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       game: {
         renderDistance: parsed.renderDistance,
         gameMode: parsed.gameMode,
+        difficulty: parsed.difficulty,
         seed: parsed.seed,
       },
     });
@@ -365,21 +379,84 @@ router.patch('/:id', async (req, res, next) => {
       parsed.serverPort !== undefined ||
       parsed.whitelist !== undefined ||
       parsed.blacklist !== undefined ||
-      parsed.ipBlacklist !== undefined ||
       parsed.whitelistEnabled !== undefined ||
-      parsed.blacklistEnabled !== undefined ||
-      parsed.ipBlacklistEnabled !== undefined;
+      parsed.blacklistEnabled !== undefined;
     const hasResourceChanges = !!parsed.resources;
+    const blacklistChanged = parsed.blacklist !== undefined || parsed.blacklistEnabled !== undefined;
+    // True when the blacklist is the *only* thing that changed -- in that case a
+    // successful live RCON sync means no restart is needed at all.
+    const onlyBlacklistChanged =
+      blacklistChanged &&
+      !parsed.resources &&
+      !parsed.game &&
+      parsed.javaImage === undefined &&
+      parsed.serverPort === undefined &&
+      parsed.whitelist === undefined &&
+      parsed.whitelistEnabled === undefined;
+
+    // The edit form always sends the full game/resources objects, so compare by
+    // value to tell what actually changed. Difficulty can be applied live over
+    // RCON; the other game fields and JVM heap only take effect on (re)start.
+    const game = parsed.game;
+    const difficultyChanged = !!game && game.difficulty !== existing.game.difficulty;
+    const gameModeChanged = !!game && game.gameMode !== existing.game.gameMode;
+    const renderDistanceChanged = !!game && game.renderDistance !== existing.game.renderDistance;
+    const seedChanged = !!game && (game.seed ?? '') !== (existing.game.seed ?? '');
+    const incomingResources = parsed.resources;
+    const resourcesChanged =
+      !!incomingResources &&
+      (incomingResources.minRamMb !== existing.resources.minRamMb ||
+        incomingResources.maxRamMb !== existing.resources.maxRamMb ||
+        (incomingResources.cpuLimit ?? null) !== (existing.resources.cpuLimit ?? null));
+    const onlyDifficultyChanged =
+      difficultyChanged &&
+      !gameModeChanged &&
+      !renderDistanceChanged &&
+      !seedChanged &&
+      !resourcesChanged &&
+      !portChanged &&
+      !javaImageChanged &&
+      parsed.whitelist === undefined &&
+      parsed.whitelistEnabled === undefined &&
+      parsed.blacklist === undefined &&
+      parsed.blacklistEnabled === undefined;
 
     let configError: Error | null = null;
     let resourceError: Error | null = null;
     let recreateError: Error | null = null;
+    let liveBanApplied = false;
+    let liveDifficultyApplied = false;
 
     if (hasConfigChanges) {
       try {
         await applyConfigFiles(updated);
       } catch (err: any) {
         configError = err;
+      }
+    }
+
+    if (!configError && blacklistChanged) {
+      const result = await syncBlacklistLive(updated, {
+        blacklist: existing.blacklist,
+        blacklistEnabled: existing.blacklistEnabled,
+      });
+      liveBanApplied = result.applied;
+      if (!result.applied) {
+        logger.info(
+          { serverId: updated.id, reason: result.reason },
+          'Blacklist not applied live; it will take effect on the next server start'
+        );
+      }
+    }
+
+    if (!configError && difficultyChanged) {
+      const result = await syncDifficultyLive(updated, existing.game.difficulty);
+      liveDifficultyApplied = result.applied;
+      if (!result.applied) {
+        logger.info(
+          { serverId: updated.id, reason: result.reason },
+          'Difficulty not applied live; it will take effect on the next server start'
+        );
       }
     }
 
@@ -411,7 +488,14 @@ router.patch('/:id', async (req, res, next) => {
     }
 
     if (hasConfigChanges && !(portChanged || javaImageChanged)) {
-      updated = serverStore.update(req.params.id, { restartRequired: true }) ?? updated;
+      // A change that was fully applied live needs no restart -- that covers a
+      // blacklist-only sync and a difficulty-only sync. Everything else still
+      // does (file-based config only takes effect on (re)start).
+      const restartRequired = !(
+        (onlyBlacklistChanged && liveBanApplied) ||
+        (onlyDifficultyChanged && liveDifficultyApplied)
+      );
+      updated = serverStore.update(req.params.id, { restartRequired }) ?? updated;
     }
 
     if (configError || resourceError || recreateError) {
@@ -581,6 +665,77 @@ router.delete('/:id', async (req, res) => {
   const removed = serverStore.delete(server.id);
   if (!removed) return notFound(res);
   res.json({ ok: true });
+});
+
+const snapshotCreateSchema = z.object({
+  label: z.string().trim().max(200).optional(),
+});
+
+router.get('/:id/snapshots', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  res.json(serverStore.listSnapshots(server.id));
+});
+
+router.post('/:id/snapshots', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const parsed = snapshotCreateSchema.parse(req.body ?? {});
+    const snapshot = await createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' });
+    res.status(201).json(snapshot);
+  } catch (err: any) {
+    if (err?.name === 'ZodError') return next(err);
+    logger.error({ err, serverId: req.params.id }, 'Snapshot creation failed');
+    res.status(500).json({ error: err?.message ?? 'Snapshot failed' });
+  }
+});
+
+router.get('/:id/snapshots/:snapshotId/download', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  const snapshot = serverStore.getSnapshot(req.params.snapshotId);
+  if (!snapshot || snapshot.serverId !== server.id) {
+    return res.status(404).json({ error: 'Snapshot not found' });
+  }
+  const filePath = snapshotFilePath(server.id, snapshot.fileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Snapshot archive is missing on disk' });
+  }
+  const safeName = `${server.name}-${snapshot.createdAt}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
+  res.download(filePath, `${safeName}.tar.gz`);
+});
+
+router.post('/:id/snapshots/:snapshotId/restore', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const status = await dockerService.status(server);
+    if (['running', 'starting', 'restarting', 'stopping'].includes(status)) {
+      return res.status(409).json({ error: 'Stop the server before restoring a snapshot.' });
+    }
+    const result = await restoreSnapshot(server, req.params.snapshotId);
+    const updated = serverStore.update(server.id, { restartRequired: false }) ?? server;
+    res.json({ ok: true, restored: result.restored, safetySnapshot: result.safetySnapshot, server: updated });
+  } catch (err: any) {
+    if (err?.message === 'Snapshot not found' || err?.message === 'Snapshot archive is missing on disk') {
+      return res.status(404).json({ error: err.message });
+    }
+    logger.error({ err, serverId: req.params.id }, 'Snapshot restore failed');
+    res.status(500).json({ error: err?.message ?? 'Restore failed' });
+  }
+});
+
+router.delete('/:id/snapshots/:snapshotId', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const removed = await deleteSnapshot(server, req.params.snapshotId);
+    if (!removed) return res.status(404).json({ error: 'Snapshot not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

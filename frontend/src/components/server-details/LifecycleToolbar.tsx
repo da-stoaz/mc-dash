@@ -38,7 +38,13 @@ export function LifecycleToolbar({
         onPress={onPrepare}
         isDisabled={controlsDisabled || !canPrepare}
       >
-        {busy === 'prepare' ? 'Preparing...' : 'Prepare'}
+        {busy === 'prepare'
+          ? hasContainer
+            ? 'Rebuilding...'
+            : 'Preparing...'
+          : hasContainer
+            ? 'Rebuild'
+            : 'Prepare'}
       </Button>
       <Button
         size="sm"

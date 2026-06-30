@@ -10,6 +10,7 @@ type QuickSettingsCardProps = {
 export function QuickSettingsCard({ server, onEdit }: QuickSettingsCardProps) {
   const items: { label: string; value: string; capitalize?: boolean }[] = [
     { label: 'Game mode', value: server.game.gameMode ?? 'survival', capitalize: true },
+    { label: 'Difficulty', value: server.game.difficulty ?? 'normal', capitalize: true },
     { label: 'Render distance', value: `${server.game.renderDistance ?? 10} chunks` },
     { label: 'Max RAM', value: `${server.resources.maxRamMb} MB` },
     { label: 'CPU cap', value: server.resources.cpuLimit ? `${server.resources.cpuLimit} cores` : 'Unlimited' },

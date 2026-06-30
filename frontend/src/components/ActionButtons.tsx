@@ -49,7 +49,13 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContaine
         onPress={() => onAction(server.id, 'prepare')}
         isDisabled={disabled || busy === 'prepare' || !canPrepare}
       >
-        {busy === 'prepare' ? 'Preparing…' : 'Prepare'}
+        {busy === 'prepare'
+          ? server.containerId
+            ? 'Rebuilding…'
+            : 'Preparing…'
+          : server.containerId
+            ? 'Rebuild'
+            : 'Prepare'}
       </Button>
       {canStart && (
         <Button

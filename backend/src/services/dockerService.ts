@@ -6,6 +6,11 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord, ServerStatus } from '../types';
 
+// Fixed in-container RCON port. We never publish it to the host: the backend
+// runs with host networking and reaches each server container directly on its
+// bridge IP, so a single constant port is fine across all servers.
+export const RCON_PORT = 25575;
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -13,6 +18,21 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// Strip the 8-byte multiplexing frame headers Docker prepends to each chunk of
+// non-TTY log output. This is the buffer equivalent of modem.demuxStream, used
+// when container.logs() resolves with a Buffer (no follow) instead of a stream.
+function demuxDockerLogBuffer(buffer: Buffer): string {
+  let output = '';
+  let offset = 0;
+  while (offset + 8 <= buffer.length) {
+    const frameSize = buffer.readUInt32BE(offset + 4);
+    offset += 8;
+    output += buffer.toString('utf8', offset, offset + frameSize);
+    offset += frameSize;
+  }
+  return output;
 }
 
 function buildDockerClient(): Docker {
@@ -216,6 +236,35 @@ export class DockerService {
     }
   }
 
+  // Resolve the RCON endpoint for a running server: its container bridge IP plus
+  // the fixed RCON port. Returns null when the container isn't running or has no
+  // reachable IP, so callers can fall back to restart-based config application.
+  async rconAddress(server: ServerRecord): Promise<{ host: string; port: number } | null> {
+    try {
+      const container = await this.getContainer(server);
+      const inspect = await container.inspect();
+      if (!inspect.State?.Running) return null;
+
+      const netSettings = inspect.NetworkSettings;
+      let ip = netSettings?.IPAddress?.trim() ?? '';
+      if (!ip && netSettings?.Networks) {
+        for (const entry of Object.values(netSettings.Networks)) {
+          const candidate = (entry as { IPAddress?: string })?.IPAddress?.trim();
+          if (candidate) {
+            ip = candidate;
+            break;
+          }
+        }
+      }
+      if (!ip) return null;
+      return { host: ip, port: RCON_PORT };
+    } catch (err: any) {
+      if (err?.statusCode === 404) return null;
+      logger.warn({ err }, 'Unable to resolve RCON address');
+      return null;
+    }
+  }
+
   async updateResources(server: ServerRecord): Promise<void> {
     const container = await this.getContainer(server);
     const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : 0;
@@ -347,8 +396,17 @@ export class DockerService {
   ): Promise<string> {
     const isTty = inspect?.Config?.Tty === true;
     const since = startedAt ? Math.floor(startedAt / 1000) : undefined;
-    const stream = await container.logs({ stdout: true, stderr: true, tail, since });
-    return new Promise((resolve, reject) => {
+    const result = await container.logs({ stdout: true, stderr: true, tail, since });
+
+    // Without `follow: true`, dockerode resolves with a Buffer (the whole log
+    // dump) rather than a stream. Handle that directly instead of treating it
+    // as a stream, which would throw "stream.on is not a function".
+    if (Buffer.isBuffer(result)) {
+      return isTty ? result.toString('utf8') : demuxDockerLogBuffer(result);
+    }
+
+    const stream = result as NodeJS.ReadableStream;
+    return new Promise<string>((resolve, reject) => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
       let output = '';
