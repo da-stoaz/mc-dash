@@ -20,6 +20,21 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+// Strip the 8-byte multiplexing frame headers Docker prepends to each chunk of
+// non-TTY log output. This is the buffer equivalent of modem.demuxStream, used
+// when container.logs() resolves with a Buffer (no follow) instead of a stream.
+function demuxDockerLogBuffer(buffer: Buffer): string {
+  let output = '';
+  let offset = 0;
+  while (offset + 8 <= buffer.length) {
+    const frameSize = buffer.readUInt32BE(offset + 4);
+    offset += 8;
+    output += buffer.toString('utf8', offset, offset + frameSize);
+    offset += frameSize;
+  }
+  return output;
+}
+
 function buildDockerClient(): Docker {
   const apiVersion = config.dockerApiVersion;
   const dockerHost = config.dockerHost?.trim();
@@ -381,8 +396,17 @@ export class DockerService {
   ): Promise<string> {
     const isTty = inspect?.Config?.Tty === true;
     const since = startedAt ? Math.floor(startedAt / 1000) : undefined;
-    const stream = await container.logs({ stdout: true, stderr: true, tail, since });
-    return new Promise((resolve, reject) => {
+    const result = await container.logs({ stdout: true, stderr: true, tail, since });
+
+    // Without `follow: true`, dockerode resolves with a Buffer (the whole log
+    // dump) rather than a stream. Handle that directly instead of treating it
+    // as a stream, which would throw "stream.on is not a function".
+    if (Buffer.isBuffer(result)) {
+      return isTty ? result.toString('utf8') : demuxDockerLogBuffer(result);
+    }
+
+    const stream = result as NodeJS.ReadableStream;
+    return new Promise<string>((resolve, reject) => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
       let output = '';
