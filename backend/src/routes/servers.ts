@@ -10,6 +10,7 @@ import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
 import { syncBlacklistLive } from '../services/accessControlService';
+import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
 import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath } from '../services/snapshotService';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
@@ -25,6 +26,7 @@ const resourceSchema = z.object({
 const gameSchema = z.object({
   renderDistance: z.number().int().min(2).max(32).optional(),
   gameMode: z.enum(['survival', 'creative', 'adventure', 'spectator']).optional(),
+  difficulty: z.enum(['peaceful', 'easy', 'normal', 'hard']).optional(),
   seed: z.string().optional(),
 });
 
@@ -68,6 +70,7 @@ const createServerSchema = z.object({
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
   renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
   gameMode: z.preprocess(emptyToUndefined, z.enum(['survival', 'creative', 'adventure', 'spectator']).optional()),
+  difficulty: z.preprocess(emptyToUndefined, z.enum(['peaceful', 'easy', 'normal', 'hard']).optional()),
   seed: z.preprocess(emptyToUndefined, z.string().optional()),
   whitelist: z.preprocess(parseList, z.array(z.string()).optional()),
   blacklist: z.preprocess(parseList, z.array(z.string()).optional()),
@@ -240,6 +243,20 @@ router.get('/:id/stream', (req, res) => {
   addDetailClient(req.params.id, res);
 });
 
+// Which difficulties this specific server can be set to (and its current one).
+// Read from the prepared server.properties so a hardcore lock is reflected
+// accurately rather than guessed.
+router.get('/:id/difficulty', async (req, res, next) => {
+  try {
+    const server = serverStore.get(req.params.id);
+    if (!server) return notFound(res);
+    const options = await getDifficultyOptions(server);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/', upload.single('file'), async (req, res, next) => {
   let createdId: string | null = null;
   try {
@@ -277,6 +294,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       game: {
         renderDistance: parsed.renderDistance,
         gameMode: parsed.gameMode,
+        difficulty: parsed.difficulty,
         seed: parsed.seed,
       },
     });
@@ -376,10 +394,38 @@ router.patch('/:id', async (req, res, next) => {
       parsed.whitelist === undefined &&
       parsed.whitelistEnabled === undefined;
 
+    // The edit form always sends the full game/resources objects, so compare by
+    // value to tell what actually changed. Difficulty can be applied live over
+    // RCON; the other game fields and JVM heap only take effect on (re)start.
+    const game = parsed.game;
+    const difficultyChanged = !!game && game.difficulty !== existing.game.difficulty;
+    const gameModeChanged = !!game && game.gameMode !== existing.game.gameMode;
+    const renderDistanceChanged = !!game && game.renderDistance !== existing.game.renderDistance;
+    const seedChanged = !!game && (game.seed ?? '') !== (existing.game.seed ?? '');
+    const incomingResources = parsed.resources;
+    const resourcesChanged =
+      !!incomingResources &&
+      (incomingResources.minRamMb !== existing.resources.minRamMb ||
+        incomingResources.maxRamMb !== existing.resources.maxRamMb ||
+        (incomingResources.cpuLimit ?? null) !== (existing.resources.cpuLimit ?? null));
+    const onlyDifficultyChanged =
+      difficultyChanged &&
+      !gameModeChanged &&
+      !renderDistanceChanged &&
+      !seedChanged &&
+      !resourcesChanged &&
+      !portChanged &&
+      !javaImageChanged &&
+      parsed.whitelist === undefined &&
+      parsed.whitelistEnabled === undefined &&
+      parsed.blacklist === undefined &&
+      parsed.blacklistEnabled === undefined;
+
     let configError: Error | null = null;
     let resourceError: Error | null = null;
     let recreateError: Error | null = null;
     let liveBanApplied = false;
+    let liveDifficultyApplied = false;
 
     if (hasConfigChanges) {
       try {
@@ -399,6 +445,17 @@ router.patch('/:id', async (req, res, next) => {
         logger.info(
           { serverId: updated.id, reason: result.reason },
           'Blacklist not applied live; it will take effect on the next server start'
+        );
+      }
+    }
+
+    if (!configError && difficultyChanged) {
+      const result = await syncDifficultyLive(updated, existing.game.difficulty);
+      liveDifficultyApplied = result.applied;
+      if (!result.applied) {
+        logger.info(
+          { serverId: updated.id, reason: result.reason },
+          'Difficulty not applied live; it will take effect on the next server start'
         );
       }
     }
@@ -431,9 +488,13 @@ router.patch('/:id', async (req, res, next) => {
     }
 
     if (hasConfigChanges && !(portChanged || javaImageChanged)) {
-      // A live-applied, blacklist-only change needs no restart; everything else
-      // still does (file-based config only takes effect on (re)start).
-      const restartRequired = !(onlyBlacklistChanged && liveBanApplied);
+      // A change that was fully applied live needs no restart -- that covers a
+      // blacklist-only sync and a difficulty-only sync. Everything else still
+      // does (file-based config only takes effect on (re)start).
+      const restartRequired = !(
+        (onlyBlacklistChanged && liveBanApplied) ||
+        (onlyDifficultyChanged && liveDifficultyApplied)
+      );
       updated = serverStore.update(req.params.id, { restartRequired }) ?? updated;
     }
 

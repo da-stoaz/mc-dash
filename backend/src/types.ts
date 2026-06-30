@@ -10,6 +10,8 @@ export type ServerStatus =
 
 export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
 
+export type Difficulty = 'peaceful' | 'easy' | 'normal' | 'hard';
+
 export interface ResourceConfig {
   minRamMb: number;
   maxRamMb: number;
@@ -19,6 +21,7 @@ export interface ResourceConfig {
 export interface GameConfig {
   renderDistance?: number;
   gameMode?: GameMode;
+  difficulty?: Difficulty;
   seed?: string;
 }
 
