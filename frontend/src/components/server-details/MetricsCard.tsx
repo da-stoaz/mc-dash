@@ -55,11 +55,11 @@ export function MetricsCard({ metrics, history }: MetricsCardProps) {
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <div className="text-sm muted mb-2">CPU</div>
-            <Progress size="sm" value={metrics?.cpuPercent ?? 0} showValueLabel />
+            <Progress aria-label="CPU usage" size="sm" value={metrics?.cpuPercent ?? 0} showValueLabel />
           </div>
           <div>
             <div className="text-sm muted mb-2">Memory</div>
-            <Progress size="sm" value={metrics?.memoryPercent ?? 0} showValueLabel />
+            <Progress aria-label="Memory usage" size="sm" value={metrics?.memoryPercent ?? 0} showValueLabel />
             <div className="text-xs muted mt-1">
               {formatBytes(metrics?.memoryBytes)} / {formatBytes(metrics?.memoryLimitBytes)}
             </div>

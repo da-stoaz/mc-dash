@@ -122,7 +122,7 @@ export function CreateModal({
                   {packFile ? `Selected: ${packFile.name}` : 'Required. Use the server pack zip you downloaded.'}
                 </div>
                 {isCreating && (
-                  <Progress size="sm" value={progressValue} showValueLabel className="mt-2" />
+                  <Progress aria-label="Upload progress" size="sm" value={progressValue} showValueLabel className="mt-2" />
                 )}
               </div>
               <div>
