@@ -28,7 +28,7 @@ import { QuickSettingsCard } from '../../../components/server-details/QuickSetti
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
-import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
+import { FirewallState, FormState, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
 
@@ -37,6 +37,7 @@ export default function ServerDetailsPage() {
   const serverId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
+  const [players, setPlayers] = useState<PlayerInfo | null>(null);
   const [history, setHistory] = useState<{ cpu: number[]; memory: number[] }>({ cpu: [], memory: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
@@ -94,6 +95,13 @@ export default function ServerDetailsPage() {
           setMetrics(JSON.parse((e as MessageEvent).data));
         } catch {
           setMetrics(null);
+        }
+      });
+      es.addEventListener('players', (e) => {
+        try {
+          setPlayers(JSON.parse((e as MessageEvent).data));
+        } catch {
+          setPlayers(null);
         }
       });
       es.onerror = () => {
@@ -344,7 +352,13 @@ export default function ServerDetailsPage() {
       <Tabs aria-label="Server sections" variant="underlined" size="lg" classNames={{ panel: 'pt-2' }}>
         <Tab key="overview" title="Overview">
           <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
-            <MetricsCard serverId={serverId} metrics={metrics} history={history} />
+            <MetricsCard
+              serverId={serverId}
+              metrics={metrics}
+              players={players}
+              status={server.status}
+              history={history}
+            />
             <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
           </div>
         </Tab>

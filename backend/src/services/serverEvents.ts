@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import { dockerService } from './dockerService';
+import { getPlayerCount } from './playerService';
 import { serverStore } from '../serverStore';
 import { metricsCollector } from './metricsCollector';
 import { preparing } from '../state';
@@ -107,7 +108,12 @@ async function refreshDetail(id: string) {
       }
     }
     for (const res of room.clients) send(res, 'server', current);
+
     // Live metrics are pushed by the collector's watcher, not polled here.
+    // The player count is a separate RCON poll on this tick; null = explicit
+    // "unknown" (server stopped, RCON not active, or query failed).
+    const players = await getPlayerCount(current);
+    for (const res of room.clients) send(res, 'players', players);
   } catch (err) {
     logger.warn({ err, id }, 'detail stream tick failed');
   } finally {

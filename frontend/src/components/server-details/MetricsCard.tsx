@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Card, CardBody, CardHeader, Divider, Progress } from '@heroui/react';
-import { Cpu, HardDrive, MemoryStick, Network } from 'lucide-react';
-import type { ServerMetrics } from '../../lib/serverTypes';
+import { Cpu, HardDrive, MemoryStick, Network, Users } from 'lucide-react';
+import type { PlayerInfo, ServerMetrics, ServerStatus } from '../../lib/serverTypes';
 import { API_BASE, apiFetch } from '../../lib/api';
 import {
   buildSparklineArea,
@@ -33,11 +33,13 @@ type ChartProps = {
   /** y-axis ceiling; 100 for percentages, series peak for rates. */
   max?: number;
   avgLabel: string;
+  /** Shown when there aren't enough points to draw a line. */
+  emptyLabel?: string;
 };
 
 // Draws the max as a translucent band with the avg as a solid line on top, so a
 // single glance shows both typical load and the spikes that cause lag/GC/OOM.
-function Chart({ label, values, band, stroke, fill, max = 100, avgLabel }: ChartProps) {
+function Chart({ label, values, band, stroke, fill, max = 100, avgLabel, emptyLabel = 'Collecting data…' }: ChartProps) {
   const linePath = buildSparklinePath(values, 100, 36, max);
   const areaPath = buildSparklineArea(band ?? values, 100, 36, max);
   const hasData = values.length > 1;
@@ -55,7 +57,7 @@ function Chart({ label, values, band, stroke, fill, max = 100, avgLabel }: Chart
             <path d={linePath} fill="none" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         ) : (
-          <div className="flex h-full items-center justify-center text-xs muted">Collecting data…</div>
+          <div className="flex h-full items-center justify-center text-xs muted">{emptyLabel}</div>
         )}
       </div>
     </div>
@@ -138,10 +140,42 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
 type MetricsCardProps = {
   serverId: string;
   metrics: ServerMetrics | null;
+  players: PlayerInfo | null;
+  status: ServerStatus | null;
   history: { cpu: number[]; memory: number[] };
 };
 
-export function MetricsCard({ serverId, metrics, history }: MetricsCardProps) {
+// A live count is only expected while the server is up. When it's knowingly
+// offline we say so; while it's coming up we say "Starting…"; only a running
+// server that fails to answer over RCON is genuinely "Unknown".
+function playerFallbackLabel(status: ServerStatus | null): string {
+  switch (status) {
+    case 'starting':
+    case 'restarting':
+      return 'Starting…';
+    case 'running':
+      return 'Unknown';
+    default:
+      // stopped, exited, stopping, creating, error, or unknown status
+      return 'Offline';
+  }
+}
+
+// Empty live-chart label. A stopped server will never stream samples, so
+// promising "Collecting data…" is a lie — only say that while it's actually up.
+function liveChartEmptyLabel(status: ServerStatus | null): string {
+  switch (status) {
+    case 'starting':
+    case 'restarting':
+      return 'Starting…';
+    case 'running':
+      return 'Collecting data…';
+    default:
+      return 'Offline';
+  }
+}
+
+export function MetricsCard({ serverId, metrics, players, status, history }: MetricsCardProps) {
   const uptimeLabel = formatUptime(metrics?.uptimeSeconds ?? null);
   const [tab, setTab] = useState<'live' | MetricRange>('live');
   const [rangeData, setRangeData] = useState<MetricsHistory | null>(null);
@@ -183,6 +217,37 @@ export function MetricsCard({ serverId, metrics, history }: MetricsCardProps) {
         <span>Metrics</span>
       </CardHeader>
       <CardBody className="space-y-4">
+        <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Users size={16} />
+              <span>Players online</span>
+            </div>
+            <div className="text-lg font-semibold tabular-nums">
+              {players ? (
+                <>
+                  {players.online}
+                  <span className="muted text-sm"> / {players.max}</span>
+                </>
+              ) : (
+                <span className="muted text-sm">{playerFallbackLabel(status)}</span>
+              )}
+            </div>
+          </div>
+          {players && players.names.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {players.names.map((name) => (
+                <span
+                  key={name}
+                  className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs"
+                >
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <div className="text-sm muted mb-2">CPU</div>
@@ -218,8 +283,22 @@ export function MetricsCard({ serverId, metrics, history }: MetricsCardProps) {
 
           {tab === 'live' ? (
             <div className="grid gap-3 md:grid-cols-2">
-              <Chart label="CPU usage" values={history.cpu} stroke={CPU_STROKE} fill={CPU_FILL} avgLabel={cpuAvgLive} />
-              <Chart label="Memory usage" values={history.memory} stroke={MEM_STROKE} fill={MEM_FILL} avgLabel={memAvgLive} />
+              <Chart
+                label="CPU usage"
+                values={history.cpu}
+                stroke={CPU_STROKE}
+                fill={CPU_FILL}
+                avgLabel={cpuAvgLive}
+                emptyLabel={liveChartEmptyLabel(status)}
+              />
+              <Chart
+                label="Memory usage"
+                values={history.memory}
+                stroke={MEM_STROKE}
+                fill={MEM_FILL}
+                avgLabel={memAvgLive}
+                emptyLabel={liveChartEmptyLabel(status)}
+              />
             </div>
           ) : rangeError ? (
             <div className="flex h-16 items-center justify-center text-xs muted">Failed to load history</div>
