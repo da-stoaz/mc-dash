@@ -1,11 +1,8 @@
-import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { config } from './config';
+import { db } from './db';
 import { GameConfig, ResourceConfig, ServerCreateInput, ServerRecord, ServerStatus, ServerUpdateInput, SnapshotCreateInput, SnapshotRecord } from './types';
-
-const db = new Database(config.sqlitePath);
-db.pragma('journal_mode = WAL');
 
 db.prepare(
   `CREATE TABLE IF NOT EXISTS servers (

@@ -6,6 +6,7 @@ import fs from 'fs';
 import { z } from 'zod';
 import { dockerService } from '../services/dockerService';
 import { serverStore } from '../serverStore';
+import { metricsStore, MetricRange } from '../metricsStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
@@ -601,6 +602,20 @@ router.get('/:id/metrics', async (req, res) => {
     const apiErr = toApiError(err, { error: 'Failed to read metrics', status: statusCode });
     res.status(apiErr.status).json(apiErr.body);
   }
+});
+
+const METRIC_RANGES: MetricRange[] = ['1h', '1d', '7d'];
+
+// Persisted rollups for the 1h / 1d / 7d graph tabs. Served straight from
+// SQLite so a freshly connected client gets full history immediately.
+router.get('/:id/metrics/history', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  const range = req.query.range as MetricRange;
+  if (!METRIC_RANGES.includes(range)) {
+    return res.status(400).json({ error: `range must be one of ${METRIC_RANGES.join(', ')}` });
+  }
+  res.json({ range, resolution: metricsStore.resolutionFor(range), points: metricsStore.query(server.id, range) });
 });
 
 router.post('/:id/prepare', async (req, res) => {
