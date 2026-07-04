@@ -79,6 +79,12 @@ export type ServerMetrics = {
   uptimeSeconds: number | null;
 };
 
+export type PlayerInfo = {
+  online: number;
+  max: number;
+  names: string[];
+};
+
 export type FormState = {
   name: string;
   subdomain: string;
