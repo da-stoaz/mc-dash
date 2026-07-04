@@ -1,13 +1,16 @@
 import type { Response } from 'express';
 import { dockerService } from './dockerService';
 import { serverStore } from '../serverStore';
+import { metricsCollector } from './metricsCollector';
 import { preparing } from '../state';
 import { logger } from '../logger';
 
 // How often the shared loops poll Docker. One loop serves every connected
 // client, so Docker load is O(servers) regardless of how many tabs are open.
+// Live metrics no longer poll here: the detail room subscribes to the metrics
+// collector, which samples at 1s while a client is connected.
 const STATUS_INTERVAL_MS = 2000;
-const METRICS_INTERVAL_MS = 2000;
+const DETAIL_INTERVAL_MS = 2000;
 const HEARTBEAT_MS = 25000;
 
 function initSse(res: Response) {
@@ -80,7 +83,7 @@ export function addStatusClient(res: Response) {
 // ---------------------------------------------------------------------------
 // Detail stream: per-server room broadcasting the record + live metrics.
 // ---------------------------------------------------------------------------
-type DetailRoom = { clients: Set<Response>; timer: NodeJS.Timeout | null; running: boolean };
+type DetailRoom = { clients: Set<Response>; timer: NodeJS.Timeout | null; running: boolean; unwatch: (() => void) | null };
 const detailRooms = new Map<string, DetailRoom>();
 
 async function refreshDetail(id: string) {
@@ -104,14 +107,7 @@ async function refreshDetail(id: string) {
       }
     }
     for (const res of room.clients) send(res, 'server', current);
-
-    let metrics: Awaited<ReturnType<typeof dockerService.metrics>> | null = null;
-    try {
-      metrics = await dockerService.metrics(current);
-    } catch {
-      metrics = null;
-    }
-    for (const res of room.clients) send(res, 'metrics', metrics);
+    // Live metrics are pushed by the collector's watcher, not polled here.
   } catch (err) {
     logger.warn({ err, id }, 'detail stream tick failed');
   } finally {
@@ -123,14 +119,20 @@ export function addDetailClient(id: string, res: Response) {
   initSse(res);
   let room = detailRooms.get(id);
   if (!room) {
-    room = { clients: new Set(), timer: null, running: false };
+    const created: DetailRoom = { clients: new Set(), timer: null, running: false, unwatch: null };
+    // Subscribe once per room; the collector now samples this server at 1s
+    // (active cadence) and pushes each reading straight to the clients.
+    created.unwatch = metricsCollector.watch(id, (metrics) => {
+      for (const client of created.clients) send(client, 'metrics', metrics);
+    });
+    room = created;
     detailRooms.set(id, room);
   }
   // Immediate snapshot from the store.
   const existing = serverStore.get(id);
   send(res, 'server', existing);
   room.clients.add(res);
-  if (!room.timer) room.timer = setInterval(() => refreshDetail(id), METRICS_INTERVAL_MS);
+  if (!room.timer) room.timer = setInterval(() => refreshDetail(id), DETAIL_INTERVAL_MS);
 
   const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
   res.on('close', () => {
@@ -140,6 +142,7 @@ export function addDetailClient(id: string, res: Response) {
     current.clients.delete(res);
     if (current.clients.size === 0) {
       if (current.timer) clearInterval(current.timer);
+      current.unwatch?.();
       detailRooms.delete(id);
     }
   });

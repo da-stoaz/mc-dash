@@ -27,7 +27,7 @@ import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
-import { clampPercent, HISTORY_LIMIT } from '../../../components/server-details/metricsUtils';
+import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
@@ -131,6 +131,31 @@ export default function ServerDetailsPage() {
       memory: [...prev.memory, memory].slice(-HISTORY_LIMIT),
     }));
   }, [metrics?.cpuPercent, metrics?.memoryPercent]);
+
+  // Seed the live buffer from persisted rollups so the graph isn't empty on
+  // connect. Prepends the recent tail; live samples still stream in on top.
+  useEffect(() => {
+    if (!serverId) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await apiFetch(`${API_BASE}/servers/${serverId}/metrics/history?range=1h`);
+        if (!res.ok) return;
+        const data = (await res.json()) as MetricsHistory;
+        const tail = data.points.slice(-HISTORY_LIMIT);
+        if (!active || tail.length === 0) return;
+        setHistory((prev) => ({
+          cpu: [...tail.map((p) => clampPercent(p.cpuAvg)), ...prev.cpu].slice(-HISTORY_LIMIT),
+          memory: [...tail.map((p) => clampPercent(p.memAvg)), ...prev.memory].slice(-HISTORY_LIMIT),
+        }));
+      } catch {
+        // best-effort seed; live stream will fill in regardless
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [serverId]);
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
@@ -319,7 +344,7 @@ export default function ServerDetailsPage() {
       <Tabs aria-label="Server sections" variant="underlined" size="lg" classNames={{ panel: 'pt-2' }}>
         <Tab key="overview" title="Overview">
           <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
-            <MetricsCard metrics={metrics} history={history} />
+            <MetricsCard serverId={serverId} metrics={metrics} history={history} />
             <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
           </div>
         </Tab>

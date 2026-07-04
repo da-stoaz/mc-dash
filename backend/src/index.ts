@@ -6,6 +6,7 @@ import { requireAuth } from './auth';
 import { config } from './config';
 import { logger } from './logger';
 import { routerService } from './services/routerService';
+import { metricsCollector } from './services/metricsCollector';
 
 const app = express();
 
@@ -34,3 +35,4 @@ app.listen(config.port, () => {
 });
 
 routerService.start();
+metricsCollector.start();

@@ -31,20 +31,52 @@ export function clampPercent(value?: number | null) {
   return Math.min(100, Math.max(0, value as number));
 }
 
-export function buildSparklinePath(values: number[], width = 100, height = 36) {
+// `max` scales the y-axis: percentages pass 100, byte/sec rates pass the
+// series peak so the curve fills the box regardless of magnitude.
+export function buildSparklinePath(values: number[], width = 100, height = 36, max = 100) {
   if (values.length === 0) return '';
+  const scale = max > 0 ? max : 1;
   const step = values.length > 1 ? width / (values.length - 1) : width;
   return values
     .map((value, index) => {
       const x = index * step;
-      const y = height - (value / 100) * height;
+      const y = height - (value / scale) * height;
       return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
     })
     .join(' ');
 }
 
-export function buildSparklineArea(values: number[], width = 100, height = 36) {
-  const line = buildSparklinePath(values, width, height);
+export function buildSparklineArea(values: number[], width = 100, height = 36, max = 100) {
+  const line = buildSparklinePath(values, width, height, max);
   if (!line) return '';
   return `${line} L ${width} ${height} L 0 ${height} Z`;
 }
+
+export const METRIC_RANGES = ['1h', '1d', '7d'] as const;
+export type MetricRange = (typeof METRIC_RANGES)[number];
+
+// One consolidated bucket as returned by GET /servers/:id/metrics/history.
+export type MetricPoint = {
+  t: number; // bucket start, ms epoch
+  cpuMin: number;
+  cpuAvg: number;
+  cpuMax: number;
+  memMin: number;
+  memAvg: number;
+  memMax: number;
+  netRxAvg: number;
+  netRxMax: number;
+  netTxAvg: number;
+  netTxMax: number;
+  diskRAvg: number;
+  diskRMax: number;
+  diskWAvg: number;
+  diskWMax: number;
+  samples: number;
+};
+
+export type MetricsHistory = {
+  range: MetricRange;
+  resolution: number;
+  points: MetricPoint[];
+};
