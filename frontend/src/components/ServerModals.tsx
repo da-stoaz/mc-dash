@@ -240,6 +240,179 @@ export function CreateModal({
   );
 }
 
+export type ImportFields = {
+  name: string;
+  subdomain: string;
+  serverPort: string;
+  javaImage: string;
+  minRamMb: number;
+  maxRamMb: number;
+  cpuLimit: string;
+};
+
+const emptyImport: ImportFields = {
+  name: '',
+  subdomain: '',
+  serverPort: '',
+  javaImage: '',
+  minRamMb: emptyForm.minRamMb,
+  maxRamMb: emptyForm.maxRamMb,
+  cpuLimit: '',
+};
+
+type ImportProps = {
+  open: boolean;
+  onClose: () => void;
+  onImport: (fields: ImportFields, archive: File) => void;
+  isImporting?: boolean;
+  uploadProgress?: number | null;
+};
+
+export function ImportModal({ open, onClose, onImport, isImporting = false, uploadProgress }: ImportProps) {
+  const progressValue = Math.min(100, Math.max(0, uploadProgress ?? 0));
+  const [fields, setFields] = useState<ImportFields>({ ...emptyImport });
+  const [archive, setArchive] = useState<File | null>(null);
+  const [javaSelection, setJavaSelection] = useState<string>('');
+
+  // Reset the form each time the modal is opened fresh.
+  useEffect(() => {
+    if (!open) return;
+    setFields({ ...emptyImport });
+    setArchive(null);
+    setJavaSelection('');
+  }, [open]);
+
+  const canSubmit = fields.name.trim().length > 0 && archive !== null && !isImporting;
+
+  return (
+    <Modal isOpen={open} onClose={onClose} placement="center" size="3xl" scrollBehavior="inside">
+      <ModalContent className="max-w-4xl">
+        {(onModalClose) => (
+          <>
+            <ModalHeader>Import server from snapshot</ModalHeader>
+            <ModalBody className="space-y-4">
+              <div className="text-xs muted">
+                Upload a snapshot archive (the <code>.tar.gz</code> downloaded from any server&apos;s snapshots). The world and
+                game settings come from the archive; the fields below configure this new instance.
+              </div>
+              <Input
+                label="Name"
+                required
+                value={fields.name}
+                onChange={(e) => setFields({ ...fields, name: e.target.value })}
+                isDisabled={isImporting}
+              />
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Snapshot archive</div>
+                <input
+                  type="file"
+                  accept=".gz,.tgz,.tar.gz,application/gzip"
+                  onChange={(e) => setArchive(e.target.files?.[0] ?? null)}
+                  className="text-sm"
+                  disabled={isImporting}
+                />
+                <div className="text-xs muted">
+                  {archive ? `Selected: ${archive.name}` : 'Required. A snapshot .tar.gz exported from MC Dash.'}
+                </div>
+                {isImporting && (
+                  <Progress aria-label="Upload progress" size="sm" value={progressValue} showValueLabel className="mt-2" />
+                )}
+              </div>
+              <div>
+                <Input
+                  label="Subdomain"
+                  placeholder="server1"
+                  value={fields.subdomain}
+                  onChange={(e) => setFields({ ...fields, subdomain: e.target.value })}
+                  isDisabled={isImporting}
+                />
+                <div className="text-xs muted mt-1">
+                  {ROUTER_DOMAIN
+                    ? fields.subdomain
+                      ? `Full hostname: ${fields.subdomain}.${ROUTER_DOMAIN}`
+                      : `Full hostname: <subdomain>.${ROUTER_DOMAIN}`
+                    : 'Optional. Auto-assigned from the name if left blank.'}
+                </div>
+              </div>
+              <div>
+                <Input
+                  type="number"
+                  label="Server port"
+                  placeholder="Leave blank for auto-assign"
+                  value={fields.serverPort}
+                  onChange={(e) => setFields({ ...fields, serverPort: e.target.value })}
+                  isDisabled={isImporting}
+                />
+                <div className="text-xs muted mt-1">A fresh port is assigned so the import can run alongside its source.</div>
+              </div>
+              <div>
+                <Select
+                  label="Java image"
+                  selectedKeys={[javaSelection]}
+                  onSelectionChange={(keys) => {
+                    const key = String(Array.from(keys)[0] ?? '');
+                    setJavaSelection(key);
+                    if (key === '__custom__') return;
+                    setFields({ ...fields, javaImage: key });
+                  }}
+                  isDisabled={isImporting}
+                >
+                  {JAVA_IMAGE_PRESETS.map((preset) => (
+                    <SelectItem key={preset.key}>{preset.label}</SelectItem>
+                  ))}
+                </Select>
+                {javaSelection === '__custom__' && (
+                  <Input
+                    className="mt-2"
+                    label="Custom Java image"
+                    placeholder="eclipse-temurin:<major>-jre"
+                    value={fields.javaImage}
+                    onChange={(e) => setFields({ ...fields, javaImage: e.target.value })}
+                    isDisabled={isImporting}
+                  />
+                )}
+              </div>
+              <Divider />
+              <div className="grid gap-3 md:grid-cols-3">
+                <Input
+                  type="number"
+                  label="Min RAM (MB)"
+                  value={String(fields.minRamMb)}
+                  onChange={(e) => setFields({ ...fields, minRamMb: Number(e.target.value) })}
+                  isDisabled={isImporting}
+                />
+                <Input
+                  type="number"
+                  label="Max RAM (MB)"
+                  value={String(fields.maxRamMb)}
+                  onChange={(e) => setFields({ ...fields, maxRamMb: Number(e.target.value) })}
+                  isDisabled={isImporting}
+                />
+                <Input
+                  type="number"
+                  label="CPU cap (cores)"
+                  placeholder="Optional"
+                  value={fields.cpuLimit}
+                  onChange={(e) => setFields({ ...fields, cpuLimit: e.target.value })}
+                  isDisabled={isImporting}
+                />
+              </div>
+            </ModalBody>
+            <ModalFooter>
+              <Button variant="light" onPress={onModalClose} isDisabled={isImporting}>
+                Cancel
+              </Button>
+              <Button color="primary" onPress={() => archive && onImport(fields, archive)} isDisabled={!canSubmit}>
+                {isImporting ? 'Importing…' : 'Import'}
+              </Button>
+            </ModalFooter>
+          </>
+        )}
+      </ModalContent>
+    </Modal>
+  );
+}
+
 type EditProps = {
   server: ServerRecord | null;
   onClose: () => void;

@@ -9,10 +9,10 @@ import { serverStore } from '../serverStore';
 import { metricsStore, MetricRange } from '../metricsStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
-import { applyConfigFiles, prepareServer, recreateContainer } from '../services/prepareService';
+import { applyConfigFiles, prepareServer, recreateContainer, purgeServerData } from '../services/prepareService';
 import { syncBlacklistLive } from '../services/accessControlService';
 import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
-import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath } from '../services/snapshotService';
+import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive } from '../services/snapshotService';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
@@ -77,6 +77,19 @@ const createServerSchema = z.object({
   blacklist: z.preprocess(parseList, z.array(z.string()).optional()),
   whitelistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
   blacklistEnabled: z.preprocess(parseNumber, z.number().int().min(0).max(1)).optional(),
+});
+
+// Import reuses the create fields that describe the *instance* (name, resources,
+// networking) but not the pack/game settings — those come from the snapshot's
+// own server.properties, which we deliberately preserve.
+const importServerSchema = z.object({
+  name: z.string().min(1),
+  subdomain: subdomainSchema,
+  javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
+  serverPort: portSchema.optional(),
+  minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
 });
 
 const updateServerSchema = z.object({
@@ -317,6 +330,78 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       fs.promises.rm(req.file.path, { force: true }).catch(() => {});
     }
     next(err);
+  }
+});
+
+// Create a brand-new server from a downloaded snapshot archive. The tarball
+// already holds the extracted, configured pack (and world), so this does the
+// work of "create + prepare" in one shot: extract into a fresh server root and
+// build the container. Enables migration between MC Dash instances and recovery
+// of a deleted server.
+router.post('/import', upload.single('file'), async (req, res, next) => {
+  let createdId: string | null = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Snapshot archive required (field "file")' });
+    }
+
+    const parsed = importServerSchema.parse(req.body);
+    let serverPort: number;
+    try {
+      serverPort = await resolveServerPort(parsed.serverPort);
+    } catch (err: any) {
+      return res.status(409).json({ error: 'Port unavailable', reason: err?.message ?? 'Port unavailable' });
+    }
+    let subdomain: string;
+    try {
+      subdomain = resolveServerSubdomain(parsed.subdomain, parsed.name);
+    } catch (err: any) {
+      return res.status(409).json({ error: 'Subdomain unavailable', reason: err?.message ?? 'Subdomain unavailable' });
+    }
+
+    const server = serverStore.create({
+      name: parsed.name,
+      subdomain,
+      javaImage: parsed.javaImage,
+      serverPort,
+      resources: {
+        minRamMb: parsed.minRamMb,
+        maxRamMb: parsed.maxRamMb,
+        cpuLimit: parsed.cpuLimit,
+      },
+      game: {},
+    });
+    createdId = server.id;
+
+    preparing.add(server.id);
+    serverStore.update(server.id, { status: 'creating' });
+    await importSnapshotArchive(server.id, req.file.path);
+    const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } =
+      await recreateContainer(server);
+    const updated = serverStore.update(server.id, {
+      status: 'stopped',
+      containerId,
+      effectiveJavaImage: image,
+      effectiveJavaSource: javaSource,
+      packRecommendedJava: packRecommendedJava ?? null,
+      packRecommendedJavaMajor: packRecommendedJavaMajor ?? null,
+      restartRequired: false,
+    });
+    res.status(201).json(updated);
+  } catch (err: any) {
+    // Roll back a partially-created server so a bad import leaves nothing behind.
+    if (createdId) {
+      const partial = serverStore.get(createdId);
+      if (partial) await purgeServerData(partial).catch(() => {});
+      serverStore.delete(createdId);
+    }
+    if (err?.name === 'ZodError') return next(err);
+    logger.error({ err }, 'Snapshot import failed');
+    const apiErr = toApiError(err, { error: 'Failed to import snapshot', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
+  } finally {
+    if (createdId) preparing.delete(createdId);
+    if (req.file) fs.promises.rm(req.file.path, { force: true }).catch(() => {});
   }
 });
 
@@ -675,6 +760,14 @@ router.delete('/:id', async (req, res) => {
     }
   } catch (err: any) {
     logger.warn({ err }, 'Failed to remove container during server delete');
+  }
+
+  // Reclaim the world/pack/snapshots on disk so a deleted server leaves nothing
+  // orphaned. Best-effort: a failure here shouldn't block removing the record.
+  try {
+    await purgeServerData(server);
+  } catch (err: any) {
+    logger.warn({ err, serverId: server.id }, 'Failed to purge server data during delete');
   }
 
   const removed = serverStore.delete(server.id);

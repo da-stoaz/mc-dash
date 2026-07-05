@@ -15,7 +15,9 @@ process.env.DATA_ROOT = TMP;
 process.env.SQLITE_PATH = path.join(TMP, 'test.sqlite');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { createSnapshot, restoreSnapshot, deleteSnapshot } = require('./snapshotService');
+const { createSnapshot, restoreSnapshot, deleteSnapshot, importSnapshotArchive } = require('./snapshotService');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { purgeServerData } = require('./prepareService');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { serverStore } = require('../serverStore');
 
@@ -80,6 +82,43 @@ test('snapshot excludes the snapshots/ directory (no self-inclusion)', async () 
     !paths.some((p) => p.replace(/^\.\//, '').split('/')[0] === 'snapshots'),
     `archive must not contain snapshots/:\n${paths.join('\n')}`
   );
+});
+
+test('import extracts a snapshot archive into a fresh server root', async () => {
+  const source = 'srv-import-src';
+  writeFile(source, 'pack/server.properties', 'level-seed=42\n');
+  writeFile(source, 'pack/world/level.dat', 'WORLD');
+  const snap = await createSnapshot(fakeServer(source), { label: 'export' });
+  const archive = path.join(serverRoot(source), 'snapshots', snap.fileName);
+
+  const target = 'srv-import-dst';
+  await importSnapshotArchive(target, archive);
+
+  // World + config land under the new server root, ready for recreateContainer.
+  assert.equal(fs.readFileSync(path.join(serverRoot(target), 'pack/world/level.dat'), 'utf8'), 'WORLD');
+  assert.equal(fs.readFileSync(path.join(serverRoot(target), 'pack/server.properties'), 'utf8'), 'level-seed=42\n');
+});
+
+test('import rejects an archive that is not a server snapshot (no pack/)', async () => {
+  const bogus = path.join(TMP, 'bogus.tar.gz');
+  const stray = fs.mkdtempSync(path.join(TMP, 'stray-'));
+  fs.writeFileSync(path.join(stray, 'notes.txt'), 'hello');
+  await tar.create({ gzip: true, file: bogus, cwd: stray, portable: true }, ['notes.txt']);
+
+  await assert.rejects(() => importSnapshotArchive('srv-import-bad', bogus), /not a valid MC Dash server snapshot/);
+});
+
+test('purgeServerData removes the server root and the uploaded pack', async () => {
+  const id = 'srv-purge';
+  writeFile(id, 'pack/world/level.dat', 'W');
+  const upload = path.join(TMP, 'uploads', `${id}-pack.zip`);
+  fs.mkdirSync(path.dirname(upload), { recursive: true });
+  fs.writeFileSync(upload, 'ZIP');
+
+  await purgeServerData({ id, serverPackUrl: upload } as any);
+
+  assert.ok(!fs.existsSync(serverRoot(id)), 'server root should be gone');
+  assert.ok(!fs.existsSync(upload), 'uploaded pack should be gone');
 });
 
 test('delete removes both the DB row and the archive file', async () => {

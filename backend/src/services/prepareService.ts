@@ -721,6 +721,24 @@ export async function recreateContainer(server: ServerRecord): Promise<{
   return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
 }
 
+/**
+ * Delete everything a server owns on disk: its data root (world, pack,
+ * downloads, snapshots) and the uploaded server-pack archive. Called when a
+ * server record is deleted so worlds don't linger orphaned with no UI to
+ * reclaim them. Best-effort — missing paths are ignored.
+ */
+export async function purgeServerData(server: ServerRecord): Promise<void> {
+  const serverRoot = path.join(config.dataRoot, 'servers', server.id);
+  await fs.rm(serverRoot, { recursive: true, force: true });
+
+  // The original upload lives outside serverRoot (in the shared uploads/ dir).
+  const packUrl = server.serverPackUrl;
+  if (packUrl && !/^https?:\/\//i.test(packUrl)) {
+    const packPath = packUrl.startsWith('file://') ? new URL(packUrl).pathname : packUrl;
+    await fs.rm(packPath, { force: true }).catch(() => {});
+  }
+}
+
 // Resolve a prepared server's working directory (the folder that actually holds
 // server.properties / banned-players.json), or null if the pack isn't prepared.
 export async function locateWorkingDir(server: ServerRecord): Promise<string | null> {

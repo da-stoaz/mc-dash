@@ -112,6 +112,29 @@ export async function restoreSnapshot(
   return { restored: record, safetySnapshot };
 }
 
+/**
+ * Populate a freshly-created server's data folder from an uploaded snapshot
+ * archive (the same `.tar.gz` produced by download/createSnapshot). The archive
+ * already contains the extracted, configured pack — including the world — so the
+ * caller can build a container straight away without re-preparing a zip.
+ *
+ * Rejects if the archive doesn't look like a server snapshot (no pack/ inside),
+ * so a stray tarball can't leave a half-populated server behind.
+ */
+export async function importSnapshotArchive(serverId: string, archivePath: string): Promise<void> {
+  const root = serverRootDir(serverId);
+  await fs.mkdir(root, { recursive: true });
+
+  // `tar` strips absolute paths and `..` segments on extract, so a malicious
+  // archive can't escape the server root.
+  await tar.extract({ file: archivePath, cwd: root });
+
+  const packDir = path.join(root, 'pack');
+  if (!(await pathExists(packDir))) {
+    throw new Error('That archive is not a valid MC Dash server snapshot (no pack/ directory inside).');
+  }
+}
+
 export async function deleteSnapshot(server: ServerRecord, snapshotId: string): Promise<boolean> {
   const record = serverStore.getSnapshot(snapshotId);
   if (!record || record.serverId !== server.id) return false;
