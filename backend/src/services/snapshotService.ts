@@ -4,6 +4,7 @@ import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';
+import { runServerRcon } from './rconService';
 import { ServerRecord, SnapshotKind, SnapshotRecord } from '../types';
 
 // Subdirectory (relative to the server root) that holds the snapshot archives.
@@ -60,7 +61,26 @@ export async function createSnapshot(
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tar.gz`;
   const archivePath = path.join(dir, fileName);
 
-  await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+  // Minecraft keeps recent play (block edits, movement, inventories) in memory
+  // and only writes to disk on autosave or shutdown. For a *hot* snapshot we
+  // must force a flush over RCON first, or the archive captures a stale world.
+  // save-off pauses autosave so files don't change mid-archive; the save-all
+  // flush RCON reply only returns once the write to disk has completed. Skipped
+  // (null) for a stopped/unreachable server, whose disk is already consistent.
+  const flushed = await runServerRcon(server, ['save-off', 'save-all flush']);
+  if (!flushed && server.status === 'running') {
+    logger.warn(
+      { serverId: server.id },
+      'Could not flush world over RCON before snapshot; it may miss unsaved in-memory changes'
+    );
+  }
+
+  try {
+    await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+  } finally {
+    // Re-enable autosave whether or not the archive succeeded.
+    if (flushed) await runServerRcon(server, ['save-on']);
+  }
 
   const stat = await fs.stat(archivePath);
   const record = serverStore.createSnapshot({

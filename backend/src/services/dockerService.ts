@@ -149,11 +149,17 @@ export class DockerService {
       Cmd: options.cmd,
       ExposedPorts: {
         [`${options.port}/tcp`]: {},
+        [`${RCON_PORT}/tcp`]: {},
       },
       HostConfig: {
         Binds: [`${options.hostServerDir}:/server`],
         PortBindings: {
           [`${options.port}/tcp`]: [{ HostPort: String(options.port) }],
+          // Publish RCON on loopback with a Docker-assigned host port, so the
+          // backend can reach it via 127.0.0.1 regardless of host OS (container
+          // bridge IPs aren't routable from a macOS/Docker-Desktop host). Bound
+          // to 127.0.0.1 so RCON is never exposed on the LAN.
+          [`${RCON_PORT}/tcp`]: [{ HostIp: '127.0.0.1', HostPort: '' }],
         },
         Memory: options.memoryBytes,
         NanoCPUs: options.nanoCpus,
@@ -246,6 +252,18 @@ export class DockerService {
       if (!inspect.State?.Running) return null;
 
       const netSettings = inspect.NetworkSettings;
+
+      // Preferred: the RCON port published to the host on loopback. Works on any
+      // host OS, including macOS/Docker Desktop where container bridge IPs are
+      // not routable from the host.
+      const publishedRcon = netSettings?.Ports?.[`${RCON_PORT}/tcp`]?.[0]?.HostPort;
+      if (publishedRcon) {
+        return { host: '127.0.0.1', port: Number(publishedRcon) };
+      }
+
+      // Fallback for containers created before RCON was published: reach the
+      // container's bridge IP directly (only routable when the backend shares
+      // the host's network, e.g. a Linux host-networking deploy).
       let ip = netSettings?.IPAddress?.trim() ?? '';
       if (!ip && netSettings?.Networks) {
         for (const entry of Object.values(netSettings.Networks)) {

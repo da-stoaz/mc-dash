@@ -1,7 +1,4 @@
-import { dockerService } from './dockerService';
-import { sendRconCommands } from './rconClient';
-import { locateWorkingDir, readServerProperties } from './prepareService';
-import { logger } from '../logger';
+import { runServerRcon } from './rconService';
 import { ServerRecord } from '../types';
 
 export type PlayerInfo = {
@@ -42,27 +39,7 @@ export function parsePlayerList(raw: string): PlayerInfo | null {
  * render that as unknown rather than a stale or fabricated number.
  */
 export async function getPlayerCount(server: ServerRecord): Promise<PlayerInfo | null> {
-  const address = await dockerService.rconAddress(server);
-  if (!address) return null;
-
-  const workingDir = await locateWorkingDir(server);
-  if (!workingDir) return null;
-
-  const props = await readServerProperties(workingDir);
-  const password = props['rcon.password']?.trim();
-  const rconEnabled = props['enable-rcon']?.trim().toLowerCase() === 'true';
-  if (!rconEnabled || !password) return null;
-
-  try {
-    const [raw] = await sendRconCommands({
-      host: address.host,
-      port: address.port,
-      password,
-      commands: ['list'],
-    });
-    return parsePlayerList(raw ?? '');
-  } catch (err) {
-    logger.debug({ err, serverId: server.id }, 'Live player count query failed');
-    return null;
-  }
+  const output = await runServerRcon(server, ['list']);
+  if (!output) return null;
+  return parsePlayerList(output[0] ?? '');
 }
