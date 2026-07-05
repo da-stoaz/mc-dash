@@ -386,6 +386,7 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
       packRecommendedJava: packRecommendedJava ?? null,
       packRecommendedJavaMajor: packRecommendedJavaMajor ?? null,
       restartRequired: false,
+      packReady: true,
     });
     res.status(201).json(updated);
   } catch (err: any) {
@@ -709,14 +710,18 @@ router.post('/:id/prepare', async (req, res) => {
   if (server.status === 'running' || server.status === 'starting' || server.status === 'restarting') {
     return res.status(409).json({ error: 'Stop the server before preparing a new container' });
   }
-  if (!server.serverPackUrl) {
+  // A source zip (native server) extracts the pack; an imported server has no
+  // zip but already has the pack on disk, so we rebuild the container from it.
+  if (!server.serverPackUrl && !server.packReady) {
     return res.status(400).json({ error: 'Server entry is missing an uploaded server pack' });
   }
 
   try {
     preparing.add(server.id);
     serverStore.update(server.id, { status: 'creating' });
-    const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } = await prepareServer(server);
+    const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } = server.serverPackUrl
+      ? await prepareServer(server)
+      : await recreateContainer(server);
     const updated = serverStore.update(server.id, {
       status: 'stopped',
       containerId,
@@ -725,6 +730,7 @@ router.post('/:id/prepare', async (req, res) => {
       packRecommendedJava: packRecommendedJava ?? null,
       packRecommendedJavaMajor: packRecommendedJavaMajor ?? null,
       restartRequired: false,
+      packReady: true,
     });
     res.json(updated);
   } catch (err: any) {

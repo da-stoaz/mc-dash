@@ -76,6 +76,13 @@ if (!columns.find((col) => col.name === 'serverPort')) {
 if (!columns.find((col) => col.name === 'subdomain')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN subdomain TEXT`).run();
 }
+// Whether a pack is materialized on disk (via zip prepare or snapshot import),
+// independent of whether a source zip is still on record. Drives "can prepare".
+if (!columns.find((col) => col.name === 'packReady')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN packReady INTEGER NOT NULL DEFAULT 0`).run();
+  // Backfill: any existing server that already has a source zip has a pack.
+  db.prepare(`UPDATE servers SET packReady = 1 WHERE serverPackUrl IS NOT NULL`).run();
+}
 
 db.prepare(
   `CREATE TABLE IF NOT EXISTS snapshots (
@@ -110,6 +117,7 @@ type ServerRow = {
   game: string;
   notes?: string;
   restartRequired?: number;
+  packReady?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -218,6 +226,7 @@ function mapRow(row: ServerRow): ServerRecord {
     updatedAt: row.updatedAt,
     notes: row.notes ?? undefined,
     restartRequired: row.restartRequired === 1,
+    packReady: row.packReady === 1,
   };
 }
 
@@ -333,6 +342,9 @@ export class ServerStore {
     }
     if (updates.restartRequired !== undefined) {
       next.restartRequired = updates.restartRequired ? 1 : 0;
+    }
+    if (updates.packReady !== undefined) {
+      next.packReady = updates.packReady ? 1 : 0;
     }
 
     if (Object.keys(next).length === 0) {
