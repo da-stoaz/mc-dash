@@ -33,7 +33,11 @@ export function ConfigurationCard({ server, onEdit }: ConfigurationCardProps) {
         <div className="space-y-2">
           <div className="text-base font-semibold">Server pack</div>
           <div className="muted break-all">
-            {server.serverPackUrl ? server.serverPackUrl.split(/[\\/]/).pop() : 'Not uploaded'}
+            {server.serverPackUrl
+              ? server.serverPackUrl.split(/[\\/]/).pop()
+              : server.packReady
+                ? 'Imported from snapshot'
+                : 'Not uploaded'}
           </div>
           {hostname && <div className="muted">Hostname: {hostname}</div>}
           <div className="muted">Port: {server.serverPort}</div>

@@ -290,7 +290,7 @@ export default function ServerDetailsPage() {
   };
 
   const busy = server ? actionLoading[server.id] : undefined;
-  const hasPack = server ? Boolean(server.serverPackUrl) : false;
+  const hasPack = server ? Boolean(server.serverPackUrl) || Boolean(server.packReady) : false;
   const canPrepare = server ? ['stopped', 'exited', 'error'].includes(server.status) && hasPack : false;
   const canStart = server ? ['stopped', 'exited', 'error'].includes(server.status) : false;
   const canStop = server ? ['running', 'starting', 'restarting'].includes(server.status) : false;

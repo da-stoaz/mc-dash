@@ -48,6 +48,7 @@ export interface ServerRecord {
   updatedAt: string;
   notes?: string;
   restartRequired?: boolean;
+  packReady?: boolean;
 }
 
 export interface ServerCreateInput {
@@ -81,6 +82,7 @@ export interface ServerUpdateInput {
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
   restartRequired?: boolean;
+  packReady?: boolean;
 }
 
 export type SnapshotKind = 'manual' | 'auto-pre-restore';

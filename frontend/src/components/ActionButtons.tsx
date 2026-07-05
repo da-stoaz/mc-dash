@@ -35,7 +35,7 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContaine
   const canStart = ['stopped', 'exited', 'error'].includes(server.status);
   const canStop = ['running', 'starting', 'restarting'].includes(server.status);
   const canRestart = server.status === 'running';
-  const hasPack = Boolean(server.serverPackUrl);
+  const hasPack = Boolean(server.serverPackUrl) || Boolean(server.packReady);
   const canPrepare = ['stopped', 'exited', 'error'].includes(server.status) && hasPack;
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete' | 'deleteServer'>(null);
 

@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
-import { LogOut, Plus } from 'lucide-react';
+import { LogOut, Plus, Upload } from 'lucide-react';
 import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { StatusBar } from '../components/StatusBar';
 import { ServerTable } from '../components/ServerTable';
-import { CreateModal, EditModal } from '../components/ServerModals';
+import { CreateModal, EditModal, ImportModal, ImportFields } from '../components/ServerModals';
 import { useAuth } from '../components/AuthGate';
 import { extractApiErrorMessageFromText, getApiErrorMessage } from '../lib/apiErrors';
 import { API_BASE, apiFetch } from '../lib/api';
@@ -16,11 +16,14 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [packFile, setPackFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [importProgress, setImportProgress] = useState<number | null>(null);
   const serversErrorRef = useRef(false);
   const { authRequired, logout } = useAuth();
 
@@ -162,6 +165,60 @@ export default function Page() {
     }
   };
 
+  const handleImport = async (fields: ImportFields, archive: File) => {
+    if (importing) return;
+    try {
+      setImporting(true);
+      setImportProgress(0);
+      const payload = new FormData();
+      payload.append('file', archive);
+      payload.append('name', fields.name);
+      if (fields.subdomain) payload.append('subdomain', fields.subdomain);
+      payload.append('minRamMb', String(fields.minRamMb));
+      payload.append('maxRamMb', String(fields.maxRamMb));
+      if (fields.serverPort) payload.append('serverPort', fields.serverPort);
+      if (fields.cpuLimit) payload.append('cpuLimit', fields.cpuLimit);
+      if (fields.javaImage) payload.append('javaImage', fields.javaImage);
+
+      const resText = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_BASE}/servers/import`);
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            setImportProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setImportProgress(100);
+            resolve(xhr.responseText);
+            return;
+          }
+          reject(new Error(extractApiErrorMessageFromText(xhr.responseText || '', 'Import failed')));
+        };
+        xhr.onerror = () => reject(new Error('Import failed'));
+        xhr.send(payload);
+      });
+      if (resText) {
+        try {
+          const parsed = JSON.parse(resText);
+          if (parsed?.error) throw new Error(parsed.error);
+        } catch {
+          // Non-JSON success responses are fine.
+        }
+      }
+      setShowImport(false);
+      await fetchServers();
+      notify('Server imported', 'Snapshot restored into a new server. It is ready to start.', 'success');
+    } catch (err: any) {
+      notify('Import failed', err?.message ?? 'Import failed', 'danger');
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+    }
+  };
+
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
       const res = await apiFetch(`${API_BASE}/servers/${id}`, {
@@ -288,6 +345,9 @@ export default function Page() {
             <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>
               New server
             </Button>
+            <Button variant="flat" startContent={<Upload size={16} />} onPress={() => setShowImport(true)}>
+              Import
+            </Button>
             {authRequired && (
               <Button variant="flat" startContent={<LogOut size={16} />} onPress={logout} aria-label="Log out">
                 Log out
@@ -322,6 +382,16 @@ export default function Page() {
         onCreate={handleCreate}
         isCreating={creating}
         uploadProgress={uploadProgress}
+      />
+      <ImportModal
+        open={showImport}
+        onClose={() => {
+          if (importing) return;
+          setShowImport(false);
+        }}
+        onImport={handleImport}
+        isImporting={importing}
+        uploadProgress={importProgress}
       />
       <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
     </div>

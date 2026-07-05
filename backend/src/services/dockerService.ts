@@ -149,11 +149,17 @@ export class DockerService {
       Cmd: options.cmd,
       ExposedPorts: {
         [`${options.port}/tcp`]: {},
+        [`${RCON_PORT}/tcp`]: {},
       },
       HostConfig: {
         Binds: [`${options.hostServerDir}:/server`],
         PortBindings: {
           [`${options.port}/tcp`]: [{ HostPort: String(options.port) }],
+          // Publish RCON on loopback with a Docker-assigned host port, so the
+          // backend can reach it via 127.0.0.1 regardless of host OS (container
+          // bridge IPs aren't routable from a macOS/Docker-Desktop host). Bound
+          // to 127.0.0.1 so RCON is never exposed on the LAN.
+          [`${RCON_PORT}/tcp`]: [{ HostIp: '127.0.0.1', HostPort: '' }],
         },
         Memory: options.memoryBytes,
         NanoCPUs: options.nanoCpus,
@@ -246,6 +252,18 @@ export class DockerService {
       if (!inspect.State?.Running) return null;
 
       const netSettings = inspect.NetworkSettings;
+
+      // Preferred: the RCON port published to the host on loopback. Works on any
+      // host OS, including macOS/Docker Desktop where container bridge IPs are
+      // not routable from the host.
+      const publishedRcon = netSettings?.Ports?.[`${RCON_PORT}/tcp`]?.[0]?.HostPort;
+      if (publishedRcon) {
+        return { host: '127.0.0.1', port: Number(publishedRcon) };
+      }
+
+      // Fallback for containers created before RCON was published: reach the
+      // container's bridge IP directly (only routable when the backend shares
+      // the host's network, e.g. a Linux host-networking deploy).
       let ip = netSettings?.IPAddress?.trim() ?? '';
       if (!ip && netSettings?.Networks) {
         for (const entry of Object.values(netSettings.Networks)) {
@@ -313,7 +331,19 @@ export class DockerService {
     const cpuDelta = stats?.cpu_stats?.cpu_usage?.total_usage - stats?.precpu_stats?.cpu_usage?.total_usage;
     const systemDelta = stats?.cpu_stats?.system_cpu_usage - stats?.precpu_stats?.system_cpu_usage;
     const onlineCpus = stats?.cpu_stats?.online_cpus ?? stats?.cpu_stats?.cpu_usage?.percpu_usage?.length ?? 1;
-    const cpuPercent = systemDelta && cpuDelta && systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus * 100 : 0;
+    // Docker's raw CPU% uses 100% = one core, so a 6-core host peaks at 600%. Normalise
+    // to 0–100% of the container's CPU allocation (its cap if one is set, else host cores)
+    // so CPU reads like memory: 100% = saturated. Keeps the gauge honest and stops the
+    // history chart clipping off the top, so spike *width* reads as duration.
+    const nanoCpus = inspect.HostConfig?.NanoCpus ?? 0;
+    const quota = inspect.HostConfig?.CpuQuota ?? 0;
+    const period = inspect.HostConfig?.CpuPeriod ?? 0;
+    let allocatedCpus = onlineCpus;
+    if (nanoCpus > 0) allocatedCpus = nanoCpus / 1e9;
+    else if (quota > 0 && period > 0) allocatedCpus = quota / period;
+    allocatedCpus = Math.min(allocatedCpus || onlineCpus, onlineCpus);
+    const rawCpuPercent = systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus * 100 : 0;
+    const cpuPercent = allocatedCpus > 0 ? Math.min(100, rawCpuPercent / allocatedCpus) : 0;
 
     const memoryBytes = stats?.memory_stats?.usage ?? 0;
     const memoryLimitBytes = stats?.memory_stats?.limit ?? 0;

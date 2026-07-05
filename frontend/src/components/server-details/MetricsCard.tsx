@@ -1,16 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Card, CardBody, CardHeader, Divider, Progress } from '@heroui/react';
+import { Card, CardBody, CardHeader, Divider } from '@heroui/react';
 import { Cpu, HardDrive, MemoryStick, Network, Users } from 'lucide-react';
 import type { PlayerInfo, ServerMetrics, ServerStatus } from '../../lib/serverTypes';
 import { API_BASE, apiFetch } from '../../lib/api';
 import {
   buildSparklineArea,
   buildSparklinePath,
+  clampPercent,
   formatBytes,
   formatUptime,
   HISTORY_LIMIT,
   METRIC_RANGES,
-  MetricPoint,
   MetricRange,
   MetricsHistory,
 } from './metricsUtils';
@@ -21,6 +21,26 @@ const MEM_STROKE = '#3b82f6';
 const MEM_FILL = 'rgba(59, 130, 246, 0.18)';
 
 const RANGE_LABELS: Record<MetricRange, string> = { '1h': '1h', '1d': '1d', '7d': '7d' };
+
+// Past this, player names collapse into a "+N more" chip instead of wrapping.
+const MAX_PLAYER_CHIPS = 5;
+
+// SVG coordinate height for sparklines; the box is stretched to fit its container.
+const CHART_H = 48;
+
+// Real elapsed time since an epoch (ms), for the chart's left timeline edge.
+function formatAgo(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'now';
+  const mins = Math.round(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+// Shared tile chrome so every panel in the card reads as one system.
+const TILE = 'rounded-lg border border-white/10 bg-white/5';
 
 type ChartProps = {
   label: string;
@@ -33,33 +53,70 @@ type ChartProps = {
   /** y-axis ceiling; 100 for percentages, series peak for rates. */
   max?: number;
   avgLabel: string;
+  /** Timeline captions for the left (oldest) and right (now) edges. */
+  startLabel?: string;
+  endLabel?: string;
   /** Shown when there aren't enough points to draw a line. */
   emptyLabel?: string;
 };
 
-// Draws the max as a translucent band with the avg as a solid line on top, so a
-// single glance shows both typical load and the spikes that cause lag/GC/OOM.
-function Chart({ label, values, band, stroke, fill, max = 100, avgLabel, emptyLabel = 'Collecting data…' }: ChartProps) {
-  const linePath = buildSparklinePath(values, 100, 36, max);
-  const areaPath = buildSparklineArea(band ?? values, 100, 36, max);
+// Draws the worst-case (max) as a translucent band with the avg as a solid line
+// on top, so a glance shows both typical load and the spikes that cause lag/GC/OOM.
+// The header pairs Avg with Peak — the number that flags OOM/lag risk.
+function Chart({
+  label,
+  values,
+  band,
+  stroke,
+  fill,
+  max = 100,
+  avgLabel,
+  startLabel,
+  endLabel,
+  emptyLabel = 'Collecting data…',
+}: ChartProps) {
   const hasData = values.length > 1;
+  const series = band ?? values; // max series when available, else the line itself
+  const linePath = buildSparklinePath(values, 100, CHART_H, max);
+  const areaPath = buildSparklineArea(series, 100, CHART_H, max);
+  const peak = hasData ? series.reduce((m, v) => Math.max(m, v), 0) : null;
 
   return (
-    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+    <div className={`${TILE} p-3`}>
       <div className="flex items-center justify-between text-xs">
-        <span className="font-semibold">{label}</span>
-        <span className="muted">Avg {avgLabel}</span>
+        <span className="flex items-center gap-1.5 font-medium">
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: stroke }} />
+          {label}
+        </span>
+        <span className="muted tabular-nums">
+          Avg {avgLabel}
+          {peak != null && ` · Peak ${pct(peak)}`}
+        </span>
       </div>
-      <div className="mt-2 h-16">
+      <div className="mt-2 h-24">
         {hasData ? (
-          <svg viewBox="0 0 100 36" className="h-full w-full" preserveAspectRatio="none">
+          <svg viewBox={`0 0 100 ${CHART_H}`} className="h-full w-full" preserveAspectRatio="none">
             <path d={areaPath} fill={fill} />
-            <path d={linePath} fill="none" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d={linePath}
+              fill="none"
+              stroke={stroke}
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
           </svg>
         ) : (
           <div className="flex h-full items-center justify-center text-xs muted">{emptyLabel}</div>
         )}
       </div>
+      {hasData && (startLabel || endLabel) && (
+        <div className="mt-1.5 flex items-center justify-between text-[10px] tabular-nums text-white/35">
+          <span>{startLabel}</span>
+          <span>{endLabel}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -73,66 +130,82 @@ function mean(values: number[]) {
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
-type RateSummaryProps = { icon: ReactNode; title: string; inLabel: string; outLabel: string };
+// A live percentage gauge. The value and the fill share the metric's brand
+// colour so it lines up visually with its sparkline below.
+type GaugeProps = { icon: ReactNode; label: string; percent: number; color: string; detail?: string };
 
-function RateSummary({ icon, title, inLabel, outLabel }: RateSummaryProps) {
+function Gauge({ icon, label, percent, color, detail }: GaugeProps) {
+  const value = clampPercent(percent);
   return (
-    <div className="flex items-start gap-2">
-      {icon}
-      <div>
-        <div className="font-semibold">{title}</div>
-        <div className="muted">{inLabel}</div>
-        <div className="muted">{outLabel}</div>
+    <div className={`${TILE} flex flex-col p-4`}>
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-2 text-sm font-medium muted">
+          {icon}
+          {label}
+        </span>
+        <span className="text-2xl font-semibold leading-none tabular-nums">{Math.round(value)}%</span>
+      </div>
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full transition-[width]" style={{ width: `${value}%`, backgroundColor: color }} />
+      </div>
+      {/* Reserve the sub-line on both gauges so CPU and Memory stay the same height. */}
+      <div className="mt-2 min-h-4 text-xs tabular-nums muted">{detail ?? ''}</div>
+    </div>
+  );
+}
+
+// Icon + two-line readout used for Network / Disk / Runtime, in both the live
+// footer and the historical avg/peak view.
+type StatBlockProps = { icon: ReactNode; title: string; primary: string; secondary: string };
+
+function StatBlock({ icon, title, primary, secondary }: StatBlockProps) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/5 muted">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs uppercase tracking-wide muted">{title}</div>
+        <div className="mt-0.5 text-sm tabular-nums">{primary}</div>
+        <div className="text-sm tabular-nums">{secondary}</div>
       </div>
     </div>
   );
 }
 
-// Historical view for a persisted range (1h / 1d / 7d).
+// Historical view for a persisted range (1h / 1d / 7d): just the trend charts.
+// Current Network/Disk/Runtime live in the footer, so we don't repeat them here.
 function HistoryView({ history }: { history: MetricsHistory | null }) {
   const points = history?.points ?? [];
   const cpuAvg = points.map((p) => p.cpuAvg);
   const cpuMax = points.map((p) => p.cpuMax);
   const memAvg = points.map((p) => p.memAvg);
   const memMax = points.map((p) => p.memMax);
-
-  const peakRate = (pick: (p: MetricPoint) => number) => points.reduce((m, p) => Math.max(m, pick(p)), 0);
-  const avgRate = (pick: (p: MetricPoint) => number) => mean(points.map(pick));
+  // Left edge = age of the oldest real bucket; right edge = present.
+  const startLabel = points.length ? formatAgo(points[0].t) : undefined;
 
   return (
-    <div className="space-y-3">
-      <div className="grid gap-3 md:grid-cols-2">
-        <Chart
-          label="CPU usage"
-          values={cpuAvg}
-          band={cpuMax}
-          stroke={CPU_STROKE}
-          fill={CPU_FILL}
-          avgLabel={points.length ? pct(mean(cpuAvg)) : '--'}
-        />
-        <Chart
-          label="Memory usage"
-          values={memAvg}
-          band={memMax}
-          stroke={MEM_STROKE}
-          fill={MEM_FILL}
-          avgLabel={points.length ? pct(mean(memAvg)) : '--'}
-        />
-      </div>
-      <div className="grid gap-3 md:grid-cols-2 text-sm">
-        <RateSummary
-          icon={<Network size={16} />}
-          title="Network"
-          inLabel={`In: ${formatBytes(avgRate((p) => p.netRxAvg))}/s avg · ${formatBytes(peakRate((p) => p.netRxMax))}/s peak`}
-          outLabel={`Out: ${formatBytes(avgRate((p) => p.netTxAvg))}/s avg · ${formatBytes(peakRate((p) => p.netTxMax))}/s peak`}
-        />
-        <RateSummary
-          icon={<HardDrive size={16} />}
-          title="Disk"
-          inLabel={`Read: ${formatBytes(avgRate((p) => p.diskRAvg))}/s avg · ${formatBytes(peakRate((p) => p.diskRMax))}/s peak`}
-          outLabel={`Write: ${formatBytes(avgRate((p) => p.diskWAvg))}/s avg · ${formatBytes(peakRate((p) => p.diskWMax))}/s peak`}
-        />
-      </div>
+    <div className="grid gap-3 md:grid-cols-2">
+      <Chart
+        label="CPU usage"
+        values={cpuAvg}
+        band={cpuMax}
+        stroke={CPU_STROKE}
+        fill={CPU_FILL}
+        avgLabel={points.length ? pct(mean(cpuAvg)) : '--'}
+        startLabel={startLabel}
+        endLabel="now"
+      />
+      <Chart
+        label="Memory usage"
+        values={memAvg}
+        band={memMax}
+        stroke={MEM_STROKE}
+        fill={MEM_FILL}
+        avgLabel={points.length ? pct(mean(memAvg)) : '--'}
+        startLabel={startLabel}
+        endLabel="now"
+      />
     </div>
   );
 }
@@ -211,67 +284,69 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
   const memAvgLive = history.memory.length ? pct(mean(history.memory)) : '--';
 
   return (
-    <Card className="bg-white/5 border border-white/10">
+    <Card className={TILE}>
       <CardHeader className="flex items-center gap-2 text-lg font-semibold">
         <Cpu size={18} />
         <span>Metrics</span>
       </CardHeader>
       <CardBody className="space-y-4">
-        <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+        <div className={`${TILE} p-4`}>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-semibold">
+            <span className="flex items-center gap-2 text-sm font-medium muted">
               <Users size={16} />
-              <span>Players online</span>
-            </div>
-            <div className="text-lg font-semibold tabular-nums">
+              Players online
+            </span>
+            <div className="text-2xl font-semibold leading-none tabular-nums">
               {players ? (
                 <>
                   {players.online}
-                  <span className="muted text-sm"> / {players.max}</span>
+                  <span className="muted text-base font-normal"> / {players.max}</span>
                 </>
               ) : (
-                <span className="muted text-sm">{playerFallbackLabel(status)}</span>
+                <span className="muted text-sm font-normal">{playerFallbackLabel(status)}</span>
               )}
             </div>
           </div>
           {players && players.names.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {players.names.map((name) => (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {players.names.slice(0, MAX_PLAYER_CHIPS).map((name) => (
                 <span
                   key={name}
-                  className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs"
+                  className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs"
                 >
                   {name}
                 </span>
               ))}
+              {players.names.length > MAX_PLAYER_CHIPS && (
+                <span className="rounded-full px-2.5 py-0.5 text-xs muted">
+                  +{players.names.length - MAX_PLAYER_CHIPS} more
+                </span>
+              )}
             </div>
           )}
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div>
-            <div className="text-sm muted mb-2">CPU</div>
-            <Progress aria-label="CPU usage" size="sm" value={metrics?.cpuPercent ?? 0} showValueLabel />
-          </div>
-          <div>
-            <div className="text-sm muted mb-2">Memory</div>
-            <Progress aria-label="Memory usage" size="sm" value={metrics?.memoryPercent ?? 0} showValueLabel />
-            <div className="text-xs muted mt-1">
-              {formatBytes(metrics?.memoryBytes)} / {formatBytes(metrics?.memoryLimitBytes)}
-            </div>
-          </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Gauge icon={<Cpu size={16} />} label="CPU" percent={metrics?.cpuPercent ?? 0} color={CPU_STROKE} />
+          <Gauge
+            icon={<MemoryStick size={16} />}
+            label="Memory"
+            percent={metrics?.memoryPercent ?? 0}
+            color={MEM_STROKE}
+            detail={`${formatBytes(metrics?.memoryBytes)} / ${formatBytes(metrics?.memoryLimitBytes)}`}
+          />
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs uppercase tracking-wide muted">
-            <span>Usage history</span>
-            <div className="flex items-center gap-1 normal-case">
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wide muted">Usage history</span>
+            <div className="flex items-center gap-0.5 rounded-md border border-white/10 bg-white/5 p-0.5">
               {(['live', ...METRIC_RANGES] as const).map((key) => (
                 <button
                   key={key}
                   type="button"
                   onClick={() => setTab(key)}
-                  className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                     tab === key ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white/80'
                   }`}
                 >
@@ -301,7 +376,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
               />
             </div>
           ) : rangeError ? (
-            <div className="flex h-16 items-center justify-center text-xs muted">Failed to load history</div>
+            <div className={`${TILE} flex h-16 items-center justify-center text-xs muted`}>Failed to load history</div>
           ) : (
             <HistoryView history={rangeData} />
           )}
@@ -309,27 +384,25 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
 
         <Divider className="bg-white/10" />
 
-        <div className="grid gap-3 md:grid-cols-3 text-sm">
-          <RateSummary
+        <div className="grid gap-4 md:grid-cols-3">
+          <StatBlock
             icon={<Network size={16} />}
             title="Network"
-            inLabel={`In: ${formatBytes(metrics?.networkRxBytes)}`}
-            outLabel={`Out: ${formatBytes(metrics?.networkTxBytes)}`}
+            primary={`In: ${formatBytes(metrics?.networkRxBytes)}`}
+            secondary={`Out: ${formatBytes(metrics?.networkTxBytes)}`}
           />
-          <RateSummary
+          <StatBlock
             icon={<HardDrive size={16} />}
             title="Disk"
-            inLabel={`Read: ${formatBytes(metrics?.blkReadBytes)}`}
-            outLabel={`Write: ${formatBytes(metrics?.blkWriteBytes)}`}
+            primary={`Read: ${formatBytes(metrics?.blkReadBytes)}`}
+            secondary={`Write: ${formatBytes(metrics?.blkWriteBytes)}`}
           />
-          <div className="flex items-start gap-2">
-            <MemoryStick size={16} />
-            <div>
-              <div className="font-semibold">Runtime</div>
-              <div className="muted">PIDs: {metrics?.pids ?? '-'}</div>
-              <div className="muted">Uptime: {uptimeLabel}</div>
-            </div>
-          </div>
+          <StatBlock
+            icon={<MemoryStick size={16} />}
+            title="Runtime"
+            primary={`PIDs: ${metrics?.pids ?? '-'}`}
+            secondary={`Uptime: ${uptimeLabel}`}
+          />
         </div>
       </CardBody>
     </Card>

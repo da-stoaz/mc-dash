@@ -4,6 +4,7 @@ import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';
+import { runServerRcon } from './rconService';
 import { ServerRecord, SnapshotKind, SnapshotRecord } from '../types';
 
 // Subdirectory (relative to the server root) that holds the snapshot archives.
@@ -60,7 +61,26 @@ export async function createSnapshot(
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tar.gz`;
   const archivePath = path.join(dir, fileName);
 
-  await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+  // Minecraft keeps recent play (block edits, movement, inventories) in memory
+  // and only writes to disk on autosave or shutdown. For a *hot* snapshot we
+  // must force a flush over RCON first, or the archive captures a stale world.
+  // save-off pauses autosave so files don't change mid-archive; the save-all
+  // flush RCON reply only returns once the write to disk has completed. Skipped
+  // (null) for a stopped/unreachable server, whose disk is already consistent.
+  const flushed = await runServerRcon(server, ['save-off', 'save-all flush']);
+  if (!flushed && server.status === 'running') {
+    logger.warn(
+      { serverId: server.id },
+      'Could not flush world over RCON before snapshot; it may miss unsaved in-memory changes'
+    );
+  }
+
+  try {
+    await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+  } finally {
+    // Re-enable autosave whether or not the archive succeeded.
+    if (flushed) await runServerRcon(server, ['save-on']);
+  }
 
   const stat = await fs.stat(archivePath);
   const record = serverStore.createSnapshot({
@@ -110,6 +130,29 @@ export async function restoreSnapshot(
   await tar.extract({ file: archivePath, cwd: root });
   logger.info({ serverId: server.id, snapshotId, safetySnapshotId: safetySnapshot.id }, 'Restored snapshot');
   return { restored: record, safetySnapshot };
+}
+
+/**
+ * Populate a freshly-created server's data folder from an uploaded snapshot
+ * archive (the same `.tar.gz` produced by download/createSnapshot). The archive
+ * already contains the extracted, configured pack — including the world — so the
+ * caller can build a container straight away without re-preparing a zip.
+ *
+ * Rejects if the archive doesn't look like a server snapshot (no pack/ inside),
+ * so a stray tarball can't leave a half-populated server behind.
+ */
+export async function importSnapshotArchive(serverId: string, archivePath: string): Promise<void> {
+  const root = serverRootDir(serverId);
+  await fs.mkdir(root, { recursive: true });
+
+  // `tar` strips absolute paths and `..` segments on extract, so a malicious
+  // archive can't escape the server root.
+  await tar.extract({ file: archivePath, cwd: root });
+
+  const packDir = path.join(root, 'pack');
+  if (!(await pathExists(packDir))) {
+    throw new Error('That archive is not a valid MC Dash server snapshot (no pack/ directory inside).');
+  }
 }
 
 export async function deleteSnapshot(server: ServerRecord, snapshotId: string): Promise<boolean> {

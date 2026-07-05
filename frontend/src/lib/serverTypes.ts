@@ -47,6 +47,7 @@ export type ServerRecord = {
   blacklistEnabled?: boolean;
   status: ServerStatus;
   restartRequired?: boolean;
+  packReady?: boolean;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
   game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
