@@ -39,6 +39,13 @@ function formatAgo(ms: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+// Cores as a short number: "12", "1.8", "0.04". Gives a bare CPU 0% real context.
+function formatCores(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 10) return Math.round(n).toString();
+  return parseFloat(n.toFixed(n >= 1 ? 1 : 2)).toString();
+}
+
 // Shared tile chrome so every panel in the card reads as one system.
 const TILE = 'rounded-lg border border-white/10 bg-white/5';
 
@@ -327,7 +334,13 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
-          <Gauge icon={<Cpu size={16} />} label="CPU" percent={metrics?.cpuPercent ?? 0} color={CPU_STROKE} />
+          <Gauge
+            icon={<Cpu size={16} />}
+            label="CPU"
+            percent={metrics?.cpuPercent ?? 0}
+            color={CPU_STROKE}
+            detail={metrics ? `${formatCores(metrics.cpuCores)} / ${formatCores(metrics.cpuCoresAvailable)} cores` : undefined}
+          />
           <Gauge
             icon={<MemoryStick size={16} />}
             label="Memory"

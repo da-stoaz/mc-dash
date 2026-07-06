@@ -66,6 +66,8 @@ export type Snapshot = {
 
 export type ServerMetrics = {
   cpuPercent: number;
+  cpuCores: number;
+  cpuCoresAvailable: number;
   memoryBytes: number;
   memoryLimitBytes: number;
   memoryPercent: number;
