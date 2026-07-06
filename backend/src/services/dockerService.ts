@@ -344,6 +344,10 @@ export class DockerService {
     allocatedCpus = Math.min(allocatedCpus || onlineCpus, onlineCpus);
     const rawCpuPercent = systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus * 100 : 0;
     const cpuPercent = allocatedCpus > 0 ? Math.min(100, rawCpuPercent / allocatedCpus) : 0;
+    // Absolute cores in use (raw % is per-core: 100% = one core) alongside what's
+    // available, so the UI can show "0.04 / 12 cores" — giving a bare 0% real context.
+    const cpuCores = rawCpuPercent / 100;
+    const cpuCoresAvailable = allocatedCpus;
 
     const memoryBytes = stats?.memory_stats?.usage ?? 0;
     const memoryLimitBytes = stats?.memory_stats?.limit ?? 0;
@@ -382,6 +386,8 @@ export class DockerService {
 
     return {
       cpuPercent,
+      cpuCores,
+      cpuCoresAvailable,
       memoryBytes,
       memoryLimitBytes,
       memoryPercent,
