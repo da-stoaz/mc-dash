@@ -81,3 +81,18 @@ git pull && docker compose up -d --build
 - **Permission denied on the Docker socket**: the backend container runs as
   root, which can read the socket. If you changed it to a non-root user, add the
   host's `docker` group GID.
+- **Snapshot fails with `EACCES: permission denied, open '.../world/level.dat'`**:
+  the server's world files are owned by a different user than the one running
+  MC Dash. Minecraft containers now run as the same user as the backend
+  (`MC_CONTAINER_USER`, defaulting to the backend's own uid:gid), so *new*
+  servers avoid this. For a server created before this fix, chown its files once
+  while it's stopped:
+
+  ```bash
+  sudo chown -R "$(id -u)":"$(id -g)" /opt/mc-dash/data   # or your MC_DASH_DATA_DIR
+  ```
+
+  If a pack needs to install packages at runtime (which requires root inside the
+  container), set `MC_CONTAINER_USER=root` to keep that server running as root —
+  but then run MC Dash as root too (e.g. the compose stack) so it can still read
+  the files back for snapshots.

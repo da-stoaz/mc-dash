@@ -33,6 +33,26 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
+function isPermissionError(err: unknown): err is NodeJS.ErrnoException {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === 'EACCES' || code === 'EPERM';
+}
+
+// Turn a raw filesystem EACCES/EPERM (root-owned server files the backend user
+// can't read) into an actionable message instead of a cryptic errno. Happens on
+// servers whose containers ran as root before the container-user fix; the files
+// need a one-time chown to the user MC Dash runs as.
+function toPermissionError(err: NodeJS.ErrnoException, serverRoot: string): Error {
+  const badPath = err.path ?? '(unknown path)';
+  return new Error(
+    `Permission denied reading server files (${badPath}). These files were written by a ` +
+      `Minecraft container running as a different user than MC Dash, so they can't be read to ` +
+      `snapshot them. Stop the server and run once: sudo chown -R "$(id -u)":"$(id -g)" ` +
+      `"${serverRoot}" — then try again. New servers avoid this automatically now that ` +
+      `containers run as the MC Dash user (see MC_CONTAINER_USER in DEPLOY.md).`
+  );
+}
+
 /**
  * Archive a server's entire data folder into a gzipped tarball under its
  * snapshots/ directory and record it. Uses the pure-JS `tar` (gzip via Node's
@@ -77,6 +97,11 @@ export async function createSnapshot(
 
   try {
     await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+  } catch (err) {
+    // Don't leave a half-written archive behind for the caller to trip over.
+    await fs.rm(archivePath, { force: true }).catch(() => undefined);
+    if (isPermissionError(err)) throw toPermissionError(err, root);
+    throw err;
   } finally {
     // Re-enable autosave whether or not the archive succeeded.
     if (flushed) await runServerRcon(server, ['save-on']);
