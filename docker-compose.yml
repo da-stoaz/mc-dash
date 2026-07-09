@@ -26,6 +26,9 @@ services:
       PORT: "4000"
       # MUST be an absolute path, mounted to the identical path below.
       DATA_ROOT: ${MC_DASH_DATA_DIR:-/opt/mc-dash/data}
+      # User the spawned Minecraft containers run as. Empty => same user as this
+      # backend (root here), which keeps server files readable for snapshots.
+      MC_CONTAINER_USER: ${MC_CONTAINER_USER:-}
       # Auth — set a password to require login. Leave SESSION_SECRET stable so
       # sessions survive restarts.
       MC_DASH_PASSWORD: ${MC_DASH_PASSWORD:-}

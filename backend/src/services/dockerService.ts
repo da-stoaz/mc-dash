@@ -145,6 +145,11 @@ export class DockerService {
     const container = await this.docker.createContainer({
       name,
       Image: options.image,
+      // Run the Minecraft process as the same user as the backend so the world
+      // files it writes into the bind mount stay readable/writable by MC Dash
+      // (otherwise root-owned files break snapshots/restores). undefined => use
+      // the image default (root); dockerode omits undefined fields.
+      User: config.containerUser,
       WorkingDir: options.workdir,
       Cmd: options.cmd,
       ExposedPorts: {

@@ -29,6 +29,33 @@ const routerDefaultSubdomain = process.env.MC_ROUTER_DEFAULT_SUBDOMAIN
   ? process.env.MC_ROUTER_DEFAULT_SUBDOMAIN.trim().toLowerCase()
   : undefined;
 
+// The uid:gid the per-server Minecraft containers should run as. By default we
+// mirror the backend process's own uid/gid so every file a server writes into
+// its bind-mounted data folder is owned by the same user that runs MC Dash.
+// Without this, containers run as root and the (often non-root) backend can't
+// read the world files back — snapshots, restores and deletes fail with EACCES.
+//   - unset            -> host uid:gid of this process (0:0 when backend is root)
+//   - "1000:1000"/"1000"-> used verbatim as Docker's `User`
+//   - "root"           -> force root (opt-out; e.g. packs that apt-get install at
+//                          runtime, which needs root inside the container)
+// On platforms without getuid (Windows dev) this is undefined and we let Docker
+// Desktop handle ownership.
+export function resolveContainerUser(
+  raw: string | undefined = process.env.MC_CONTAINER_USER,
+  getuid: (() => number) | undefined = typeof process.getuid === 'function' ? process.getuid.bind(process) : undefined,
+  getgid: (() => number) | undefined = typeof process.getgid === 'function' ? process.getgid.bind(process) : undefined
+): string | undefined {
+  const trimmed = raw?.trim();
+  if (trimmed) {
+    if (trimmed.toLowerCase() === 'root') return '0:0';
+    return trimmed;
+  }
+  if (!getuid) return undefined;
+  const uid = getuid();
+  const gid = getgid ? getgid() : uid;
+  return `${uid}:${gid}`;
+}
+
 const SESSION_TTL_DAYS = Number(process.env.MC_DASH_SESSION_TTL_DAYS ?? 7);
 const frontendOrigins = (process.env.MC_DASH_FRONTEND_ORIGIN ?? 'http://localhost:3000,http://localhost:3001')
   .split(',')
@@ -43,6 +70,7 @@ export const config = {
   dockerTlsVerify: process.env.DOCKER_TLS_VERIFY,
   dockerApiVersion: process.env.DOCKER_API_VERSION,
   dataRoot,
+  containerUser: resolveContainerUser(),
   javaImage: process.env.JAVA_IMAGE ?? 'eclipse-temurin:17-jre',
   serverPort: Number.isFinite(defaultServerPort) ? defaultServerPort : 25565,
   serverPortMin: Number.isFinite(serverPortMin) ? serverPortMin : 25565,
