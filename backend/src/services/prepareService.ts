@@ -105,10 +105,13 @@ async function ensureStartScript(workingDir: string): Promise<string | null> {
 
   const scriptPath = path.join(workingDir, 'start.sh');
   const command = `java -jar "${path.basename(serverJar)}" nogui`;
+  // `exec` so java replaces the shell and becomes the process that receives
+  // SIGTERM on `docker stop`. That lets the JVM shutdown hook run (save + exit)
+  // instead of being SIGKILLed as exit 137 when the signal dies in the wrapper.
   const script = `#!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-${command}
+exec ${command}
 `;
   await fs.writeFile(scriptPath, script, 'utf8');
   logger.info({ scriptPath }, 'Generated start.sh from server.jar');
@@ -297,6 +300,13 @@ async function applyVariablesTxt(workingDir: string, server: ServerRecord): Prom
     desired['SKIP_JAVA_CHECK'] = 'true';
     desired['WAIT_FOR_USER_INPUT'] = 'false';
     desired['JAVA'] = 'java';
+    // Let the container own the process lifecycle. ServerPackCreator scripts
+    // default RESTART=true, which runs the JVM in a `while true` loop and
+    // relaunches it after every clean shutdown — so the container never exits
+    // on `stop` and can only be SIGKILLed (exit 137). With RESTART=false the
+    // script exits when Minecraft stops, so an RCON `stop` produces a clean
+    // exit 0 and Docker/MC Dash manage restarts instead.
+    desired['RESTART'] = 'false';
 
     const newLines = parsed.map((entry) => {
       if (entry.kind !== 'kv') return entry.line;
