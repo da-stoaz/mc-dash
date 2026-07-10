@@ -29,7 +29,7 @@ import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard'
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
-import { getApiErrorMessage } from '../../../lib/apiErrors';
+import { extractApiErrorMessageFromText, getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
 
 export default function ServerDetailsPage() {
@@ -44,6 +44,8 @@ export default function ServerDetailsPage() {
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
   const [showFirewall, setShowFirewall] = useState<ServerRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [packReplacing, setPackReplacing] = useState(false);
+  const [packProgress, setPackProgress] = useState<number | null>(null);
   const serverErrorRef = useRef(false);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
@@ -198,6 +200,53 @@ export default function ServerDetailsPage() {
       }
     } catch (err: any) {
       notify('Update failed', err?.message ?? 'Update failed', 'danger');
+    }
+  };
+
+  const handleReplacePack = async (file: File) => {
+    if (!server || packReplacing) return;
+    const id = server.id;
+    try {
+      setPackReplacing(true);
+      setPackProgress(0);
+      const payload = new FormData();
+      payload.append('file', file);
+
+      const resText = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_BASE}/servers/${id}/pack`);
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            setPackProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setPackProgress(100);
+            resolve(xhr.responseText);
+            return;
+          }
+          reject(new Error(extractApiErrorMessageFromText(xhr.responseText || '', 'Pack upload failed')));
+        };
+        xhr.onerror = () => reject(new Error('Pack upload failed'));
+        xhr.send(payload);
+      });
+      if (resText) {
+        try {
+          const parsed = JSON.parse(resText);
+          if (parsed?.error) throw new Error(parsed.error);
+        } catch {
+          // Non-JSON success responses are fine.
+        }
+      }
+      await fetchServer();
+      notify('New pack uploaded', 'Now run Prepare to apply it — your world is preserved.', 'success');
+    } catch (err: any) {
+      notify('Pack upload failed', err?.message ?? 'Pack upload failed', 'danger');
+    } finally {
+      setPackReplacing(false);
+      setPackProgress(null);
     }
   };
 
@@ -373,7 +422,14 @@ export default function ServerDetailsPage() {
 
         <Tab key="settings" title="Settings">
           <div className="space-y-4">
-            <ConfigurationCard server={server} onEdit={() => setShowEdit(server)} />
+            <ConfigurationCard
+              server={server}
+              onEdit={() => setShowEdit(server)}
+              onReplacePack={handleReplacePack}
+              canReplace={['stopped', 'exited', 'error'].includes(server.status) && !busy}
+              replacing={packReplacing}
+              replaceProgress={packProgress}
+            />
 
             <FirewallCard
               whitelistEnabled={whitelistEnabled}

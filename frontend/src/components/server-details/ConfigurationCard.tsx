@@ -1,5 +1,8 @@
-import { Button, Card, CardBody, CardHeader, Divider } from '@heroui/react';
-import { Pencil, Server } from 'lucide-react';
+'use client';
+
+import { useRef, useState } from 'react';
+import { Button, Card, CardBody, CardHeader, Divider, Progress } from '@heroui/react';
+import { Pencil, Server, Upload } from 'lucide-react';
 import type { ServerRecord } from '../../lib/serverTypes';
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
@@ -7,9 +10,24 @@ const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 type ConfigurationCardProps = {
   server: ServerRecord;
   onEdit?: () => void;
+  onReplacePack?: (file: File) => void | Promise<void>;
+  canReplace?: boolean;
+  replacing?: boolean;
+  replaceProgress?: number | null;
 };
 
-export function ConfigurationCard({ server, onEdit }: ConfigurationCardProps) {
+export function ConfigurationCard({
+  server,
+  onEdit,
+  onReplacePack,
+  canReplace = false,
+  replacing = false,
+  replaceProgress = null,
+}: ConfigurationCardProps) {
+  const [packFile, setPackFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const preparePending = Boolean(server.serverPackUrl) && !server.packReady;
+
   const hostname = server.subdomain
     ? ROUTER_DOMAIN
       ? `${server.subdomain}.${ROUTER_DOMAIN}`
@@ -39,6 +57,53 @@ export function ConfigurationCard({ server, onEdit }: ConfigurationCardProps) {
                 ? 'Imported from snapshot'
                 : 'Not uploaded'}
           </div>
+          {preparePending && (
+            <div className="text-xs text-amber-300">Prepare required to apply this pack.</div>
+          )}
+          {onReplacePack && (
+            <div className="space-y-2 rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="text-sm font-medium">Upgrade / replace pack</div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip"
+                onChange={(e) => setPackFile(e.target.files?.[0] ?? null)}
+                className="text-sm"
+                disabled={!canReplace || replacing}
+              />
+              <div className="text-xs muted">
+                {!canReplace
+                  ? 'Stop the server to replace its pack.'
+                  : packFile
+                    ? `Selected: ${packFile.name}`
+                    : 'Drop in a newer server pack zip. Your world is preserved; run Prepare after upload.'}
+              </div>
+              {replacing && (
+                <Progress
+                  aria-label="Pack upload progress"
+                  size="sm"
+                  value={replaceProgress ?? 0}
+                  showValueLabel
+                  className="mt-1"
+                />
+              )}
+              <Button
+                size="sm"
+                variant="bordered"
+                startContent={<Upload size={14} />}
+                isDisabled={!canReplace || !packFile || replacing}
+                isLoading={replacing}
+                onPress={async () => {
+                  if (!packFile || !onReplacePack) return;
+                  await onReplacePack(packFile);
+                  setPackFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+              >
+                {replacing ? 'Uploading…' : 'Upload new pack'}
+              </Button>
+            </div>
+          )}
           {hostname && <div className="muted">Hostname: {hostname}</div>}
           <div className="muted">Port: {server.serverPort}</div>
           <div className="muted">
