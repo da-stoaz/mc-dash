@@ -17,6 +17,7 @@ import { config } from '../config';
 import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
+import { runServerRcon } from '../services/rconService';
 
 const resourceSchema = z.object({
   minRamMb: z.number().int().positive(),
@@ -635,7 +636,30 @@ router.post('/:id/stop', async (req, res) => {
   if (!server) return notFound(res);
   try {
     serverStore.update(server.id, { status: 'stopping' });
-    await dockerService.stop(server);
+
+    // Graceful shutdown: ask Minecraft to save the world and quit via its own
+    // `stop` console command over RCON, then wait for the JVM to exit on its
+    // own. The container's PID 1 is a shell wrapper that does not forward SIGTERM
+    // to the Java child (and pack start scripts run Java in a restart loop), so a
+    // plain `docker stop` can't stop MC cleanly — it times out and SIGKILLs the
+    // container mid-write (exit 137, risking chunk corruption).
+    //
+    // We gate on RCON being reachable rather than on the command's result,
+    // because the server closes the RCON socket as it shuts down without
+    // replying to `stop`, so runServerRcon resolves null even on success. When
+    // RCON is reachable we send `stop` and wait for the container to exit; if it
+    // does not exit in time (or RCON is unreachable) we fall back to a signal
+    // stop.
+    let exited = false;
+    const rconReachable = (await dockerService.rconAddress(server)) !== null;
+    if (rconReachable) {
+      await runServerRcon(server, ['stop']);
+      exited = await dockerService.waitForExit(server, 30_000);
+    }
+    if (!exited) {
+      await dockerService.stop(server);
+    }
+
     const updated = serverStore.update(server.id, { status: 'stopped' });
     res.json(updated);
   } catch (err: any) {

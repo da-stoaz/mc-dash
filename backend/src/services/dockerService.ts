@@ -237,6 +237,26 @@ export class DockerService {
     }
   }
 
+  // Poll the container until it is no longer running, or the timeout elapses.
+  // Returns true if it exited within the window (a missing container counts as
+  // exited), false on timeout. Used by the graceful-stop path to wait for the
+  // Minecraft JVM to save and quit on its own after an RCON `stop`.
+  async waitForExit(server: ServerRecord, timeoutMs: number): Promise<boolean> {
+    const container = await this.getContainer(server);
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const inspect = await container.inspect();
+        if (!inspect.State?.Running) return true;
+      } catch (err) {
+        if ((err as { statusCode?: number })?.statusCode === 404) return true;
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return false;
+  }
+
   async restart(server: ServerRecord): Promise<void> {
     const container = await this.getContainer(server);
     try {
