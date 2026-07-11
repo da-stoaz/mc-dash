@@ -407,6 +407,64 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
   }
 });
 
+// Replace an existing server's pack with a newer .zip (a modpack upgrade). This
+// only swaps the source zip and marks the pack as needing a rebuild; the caller
+// then runs Prepare, which re-extracts the new pack while cleanPackDir preserves
+// the worlds -- so mods/config update without wiping the save.
+router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
+  try {
+    const serverId = String(req.params.id);
+    const server = serverStore.get(serverId);
+    if (!server) {
+      if (req.file) fs.promises.rm(req.file.path, { force: true }).catch(() => {});
+      return notFound(res);
+    }
+    if (['running', 'starting', 'restarting'].includes(server.status)) {
+      if (req.file) fs.promises.rm(req.file.path, { force: true }).catch(() => {});
+      return res.status(409).json({ error: 'Stop the server before replacing its pack' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Server pack zip required (field "file")' });
+    }
+
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
+    await fs.promises.rename(req.file.path, target);
+
+    const previousPack = server.serverPackUrl;
+    const updated =
+      serverStore.update(server.id, {
+        serverPackUrl: target,
+        // Force Java re-detection from the new pack on the next Prepare.
+        effectiveJavaImage: null,
+        effectiveJavaSource: null,
+        packRecommendedJava: null,
+        packRecommendedJavaMajor: null,
+        // The prepared pack on disk is now stale until Prepare re-extracts.
+        packReady: false,
+        status: 'stopped',
+      }) ?? server;
+
+    // Reclaim the previous pack zip (often 200 MB+) now that it's replaced.
+    // Guarded to this server's own uploads so we never touch anything else.
+    if (
+      previousPack &&
+      previousPack !== target &&
+      path.dirname(previousPack) === uploadDir &&
+      path.basename(previousPack).startsWith(`${server.id}-`)
+    ) {
+      fs.promises.rm(previousPack, { force: true }).catch(() => {});
+    }
+
+    res.json(updated);
+  } catch (err) {
+    if (req.file) {
+      fs.promises.rm(req.file.path, { force: true }).catch(() => {});
+    }
+    next(err);
+  }
+});
+
 router.patch('/:id', async (req, res, next) => {
   try {
     const parsed = updateServerSchema.parse(req.body);
