@@ -86,11 +86,17 @@ git pull && docker compose up -d --build
   MC Dash. Minecraft containers now run as the same user as the backend
   (`MC_CONTAINER_USER`, defaulting to the backend's own uid:gid), so *new*
   servers avoid this. For a server created before this fix, chown its files once
-  while it's stopped:
+  while it's stopped, then start it again:
 
   ```bash
   sudo chown -R "$(id -u)":"$(id -g)" /opt/mc-dash/data   # or your MC_DASH_DATA_DIR
   ```
+
+  Both steps matter: the chown fixes the files that already exist, and the next
+  **Start** rebuilds that server's container so it runs as the MC Dash user from
+  then on. Without the rebuild the still-root container would re-own the world on
+  its next save and the error would come back — so a plain restart now performs
+  that rebuild automatically when it detects the mismatch.
 
   If a pack needs to install packages at runtime (which requires root inside the
   container), set `MC_CONTAINER_USER=root` to keep that server running as root —

@@ -678,7 +678,24 @@ router.post('/:id/start', async (req, res) => {
   if (!server) return notFound(res);
   try {
     serverStore.update(server.id, { status: 'starting' });
-    const containerId = await dockerService.start(server);
+
+    // Migrate a legacy container that still runs as root (created before the
+    // container-user fix) before starting it, so it stops writing root-owned
+    // files the non-root backend can't read back for snapshots. Recreating from
+    // the prepared pack is the canonical rebuild and stamps the correct User; if
+    // it fails we fall back to starting the existing container unchanged.
+    let toStart = server;
+    if (await dockerService.needsUserMigration(server)) {
+      try {
+        const { containerId } = await recreateContainer(server);
+        toStart = serverStore.update(server.id, { containerId }) ?? server;
+        logger.info({ serverId: server.id }, 'Recreated container to run as the MC Dash user before start');
+      } catch (err) {
+        logger.warn({ err, serverId: server.id }, 'Could not recreate container as the MC Dash user; starting the existing one');
+      }
+    }
+
+    const containerId = await dockerService.start(toStart);
     const updated = serverStore.update(server.id, { status: 'starting', containerId, restartRequired: false });
     res.json(updated);
   } catch (err: any) {
@@ -696,26 +713,33 @@ router.post('/:id/stop', async (req, res) => {
     serverStore.update(server.id, { status: 'stopping' });
 
     // Graceful shutdown: ask Minecraft to save the world and quit via its own
-    // `stop` console command over RCON, then wait for the JVM to exit on its
-    // own. The container's PID 1 is a shell wrapper that does not forward SIGTERM
-    // to the Java child (and pack start scripts run Java in a restart loop), so a
-    // plain `docker stop` can't stop MC cleanly — it times out and SIGKILLs the
-    // container mid-write (exit 137, risking chunk corruption).
+    // `stop` console command over RCON, so the JVM's shutdown hook flushes every
+    // dimension to disk before the process dies (avoids the exit-137 mid-write
+    // corruption a bare `docker stop` SIGKILL caused).
     //
-    // We gate on RCON being reachable rather than on the command's result,
-    // because the server closes the RCON socket as it shuts down without
-    // replying to `stop`, so runServerRcon resolves null even on success. When
-    // RCON is reachable we send `stop` and wait for the container to exit; if it
-    // does not exit in time (or RCON is unreachable) we fall back to a signal
-    // stop.
-    let exited = false;
+    // We can't rely on the *container* exiting on its own, though: pack start
+    // scripts (ServerPackCreator) run the JVM in a restart loop, so after a
+    // clean `stop` the wrapper immediately relaunches the server and PID 1 never
+    // dies. Waiting for a container exit there just burns the timeout and then a
+    // second `docker stop` SIGTERM window before Docker SIGKILLs the *relaunched*
+    // server mid-boot — slow, and back to exit 137.
+    //
+    // So: send `stop`, give a well-behaved (non-looping) pack a short window to
+    // exit cleanly on its own (exit 0), and otherwise hard-stop promptly. The
+    // world is already saved by the RCON `stop` above, so the short-timeout stop
+    // (escalating to kill) is safe and fast rather than a 30s + 30s hang.
+    //
+    // We gate on RCON reachability, not the command's result: MC closes the RCON
+    // socket as it shuts down without replying to `stop`, so runServerRcon
+    // resolves null even on success.
+    let exitedCleanly = false;
     const rconReachable = (await dockerService.rconAddress(server)) !== null;
     if (rconReachable) {
       await runServerRcon(server, ['stop']);
-      exited = await dockerService.waitForExit(server, 30_000);
+      exitedCleanly = await dockerService.waitForExit(server, 20_000);
     }
-    if (!exited) {
-      await dockerService.stop(server);
+    if (!exitedCleanly) {
+      await dockerService.stop(server, { timeoutSec: rconReachable ? 5 : 30 });
     }
 
     const updated = serverStore.update(server.id, { status: 'stopped' });
