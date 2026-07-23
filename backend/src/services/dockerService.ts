@@ -35,6 +35,29 @@ function demuxDockerLogBuffer(buffer: Buffer): string {
   return output;
 }
 
+// Decide whether a server's existing container must be recreated so it runs as
+// the user MC Dash expects. Containers created before the container-user fix run
+// as root and write root-owned world/log files the non-root backend can't read
+// back (snapshots and readiness log reads fail with EACCES). A plain start
+// reuses the old container, so without this a one-time `chown` gets clobbered the
+// moment that root container next saves the world. We migrate only when:
+//   - a user is actually enforced (config.containerUser is set; unset on Win dev)
+//   - that user is non-root (a root backend can already read every file)
+//   - the container is stopped (never yank a running server out from under itself)
+//   - its current uid differs from the desired one (empty User => image default root)
+export function shouldRecreateForUser(
+  desired: string | undefined,
+  currentUser: string | undefined,
+  isRunning: boolean
+): boolean {
+  if (!desired || isRunning) return false;
+  const desiredUid = Number(desired.split(':')[0]);
+  if (!Number.isFinite(desiredUid) || desiredUid === 0) return false;
+  const raw = (currentUser ?? '').trim();
+  const currentUid = raw ? Number(raw.split(':')[0]) : 0;
+  return !Number.isFinite(currentUid) || currentUid !== desiredUid;
+}
+
 function buildDockerClient(): Docker {
   const apiVersion = config.dockerApiVersion;
   const dockerHost = config.dockerHost?.trim();
@@ -203,6 +226,22 @@ export class DockerService {
     }
   }
 
+  // True when this server's existing container should be recreated to run as the
+  // MC Dash user before its next start (see shouldRecreateForUser). Safe no-op
+  // when there is no container yet or Docker can't be reached, so callers can
+  // gate a best-effort migration on it without a try/catch of their own.
+  async needsUserMigration(server: ServerRecord): Promise<boolean> {
+    try {
+      const container = await this.getContainer(server);
+      const inspect = await container.inspect();
+      return shouldRecreateForUser(config.containerUser, inspect.Config?.User, inspect.State?.Running === true);
+    } catch (err: any) {
+      if (err?.statusCode === 404) return false;
+      logger.warn({ err }, 'Could not check container user for migration');
+      return false;
+    }
+  }
+
   async start(server: ServerRecord): Promise<string> {
     const container = await this.getContainer(server);
     try {
@@ -214,10 +253,10 @@ export class DockerService {
     }
   }
 
-  async stop(server: ServerRecord): Promise<void> {
+  async stop(server: ServerRecord, opts: { timeoutSec?: number } = {}): Promise<void> {
     const container = await this.getContainer(server);
     try {
-      await container.stop({ t: 30 });
+      await container.stop({ t: opts.timeoutSec ?? 30 });
     } catch (err) {
       const statusCode = (err as { statusCode?: number })?.statusCode;
       if (statusCode === 304 || statusCode === 404) {

@@ -41,15 +41,17 @@ function isPermissionError(err: unknown): err is NodeJS.ErrnoException {
 // Turn a raw filesystem EACCES/EPERM (root-owned server files the backend user
 // can't read) into an actionable message instead of a cryptic errno. Happens on
 // servers whose containers ran as root before the container-user fix; the files
-// need a one-time chown to the user MC Dash runs as.
+// need a one-time chown to the user MC Dash runs as, after which starting the
+// server rebuilds its container as that user so the fix sticks.
 function toPermissionError(err: NodeJS.ErrnoException, serverRoot: string): Error {
   const badPath = err.path ?? '(unknown path)';
   return new Error(
     `Permission denied reading server files (${badPath}). These files were written by a ` +
       `Minecraft container running as a different user than MC Dash, so they can't be read to ` +
       `snapshot them. Stop the server and run once: sudo chown -R "$(id -u)":"$(id -g)" ` +
-      `"${serverRoot}" — then try again. New servers avoid this automatically now that ` +
-      `containers run as the MC Dash user (see MC_CONTAINER_USER in DEPLOY.md).`
+      `"${serverRoot}" — then start it again. Starting now rebuilds the container to run as the ` +
+      `MC Dash user, so the world stays readable instead of re-breaking on the next save (see ` +
+      `MC_CONTAINER_USER in DEPLOY.md).`
   );
 }
 
