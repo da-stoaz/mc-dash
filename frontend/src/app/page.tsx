@@ -25,6 +25,10 @@ export default function Page() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [importProgress, setImportProgress] = useState<number | null>(null);
   const serversErrorRef = useRef(false);
+  // The table is fed by SSE, so the status bar reports whether that stream is
+  // actually alive rather than implying the Refresh button is what keeps it current.
+  const [streamLive, setStreamLive] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const { authRequired, logout } = useAuth();
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
@@ -44,6 +48,7 @@ export default function Page() {
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load servers'));
       const data = await res.json();
       setServers(data);
+      setLastUpdated(new Date());
       serversErrorRef.current = false;
     } catch (err) {
       if (!serversErrorRef.current) {
@@ -65,6 +70,8 @@ export default function Page() {
       es.addEventListener('servers', (e) => {
         try {
           setServers(JSON.parse((e as MessageEvent).data));
+          setLastUpdated(new Date());
+          setStreamLive(true);
           serversErrorRef.current = false;
         } catch {
           // ignore malformed frame
@@ -72,6 +79,7 @@ export default function Page() {
         setLoading(false);
       });
       es.onerror = () => {
+        setStreamLive(false);
         // EventSource reconnects on its own; surface the drop only once.
         if (!serversErrorRef.current) {
           notify('Lost connection to server', 'Reconnecting…', 'warning');
@@ -83,6 +91,7 @@ export default function Page() {
     const disconnect = () => {
       es?.close();
       es = null;
+      setStreamLive(false);
     };
 
     const onVisibility = () => {
@@ -357,7 +366,14 @@ export default function Page() {
           </div>
         </div>
 
-        <StatusBar counts={statusCounts} restartRequiredCount={restartRequiredCount} loading={loading} onRefresh={fetchServers} />
+        <StatusBar
+          counts={statusCounts}
+          restartRequiredCount={restartRequiredCount}
+          loading={loading}
+          live={streamLive}
+          lastUpdated={lastUpdated}
+          onRefresh={fetchServers}
+        />
 
         <ServerTable
           servers={servers}
