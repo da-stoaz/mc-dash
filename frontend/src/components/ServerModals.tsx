@@ -29,10 +29,16 @@ import { API_BASE, apiFetch } from '../lib/api';
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 
+// The LTS majors Temurin publishes -jre images for. Keep in step with
+// PUBLISHED_JAVA_MAJORS in backend/src/services/prepareService.ts, which snaps
+// auto-detected versions onto this same set. These are shortcuts only — "Auto"
+// and "Custom…" are not limited to what is listed here.
 const JAVA_IMAGE_PRESETS: { key: string; label: string }[] = [
   { key: '', label: 'Auto' },
+  { key: 'eclipse-temurin:25-jre', label: 'Java 25 (eclipse-temurin:25-jre)' },
   { key: 'eclipse-temurin:21-jre', label: 'Java 21 (eclipse-temurin:21-jre)' },
   { key: 'eclipse-temurin:17-jre', label: 'Java 17 (eclipse-temurin:17-jre)' },
+  { key: 'eclipse-temurin:11-jre', label: 'Java 11 (eclipse-temurin:11-jre)' },
   { key: 'eclipse-temurin:8-jre', label: 'Java 8 (eclipse-temurin:8-jre)' },
   { key: '__custom__', label: 'Custom…' },
 ];
