@@ -27,8 +27,7 @@ import {
 } from '../lib/serverTypes';
 import { API_BASE, apiFetch } from '../lib/api';
 import { FilePicker } from './FilePicker';
-
-const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+import { useRouterDomain } from '../lib/routerDomain';
 
 // The LTS majors Temurin publishes -jre images for. Keep in step with
 // PUBLISHED_JAVA_MAJORS in backend/src/services/prepareService.ts, which snaps
@@ -79,6 +78,7 @@ export function CreateModal({
   uploadProgress,
 }: CreateProps) {
   const progressValue = Math.min(100, Math.max(0, uploadProgress ?? 0));
+  const routerDomain = useRouterDomain();
   const [javaSelection, setJavaSelection] = useState<string>(defaultJavaSelection(form.javaImage));
 
   useEffect(() => {
@@ -109,10 +109,8 @@ export function CreateModal({
                   isDisabled={isCreating}
                 />
                 <div className="text-xs muted mt-1">
-                  {ROUTER_DOMAIN
-                    ? form.subdomain
-                      ? `Full hostname: ${form.subdomain}.${ROUTER_DOMAIN}`
-                      : `Full hostname: <subdomain>.${ROUTER_DOMAIN}`
+                  {routerDomain
+                    ? `Full hostname: ${form.subdomain || '<subdomain>'}.${routerDomain}`
                     : 'Optional. Used for wildcard subdomain routing if enabled.'}
                 </div>
               </div>
@@ -274,6 +272,7 @@ type ImportProps = {
 
 export function ImportModal({ open, onClose, onImport, isImporting = false, uploadProgress }: ImportProps) {
   const progressValue = Math.min(100, Math.max(0, uploadProgress ?? 0));
+  const routerDomain = useRouterDomain();
   const [fields, setFields] = useState<ImportFields>({ ...emptyImport });
   const [archive, setArchive] = useState<File | null>(null);
   const [javaSelection, setJavaSelection] = useState<string>('');
@@ -328,10 +327,8 @@ export function ImportModal({ open, onClose, onImport, isImporting = false, uplo
                   isDisabled={isImporting}
                 />
                 <div className="text-xs muted mt-1">
-                  {ROUTER_DOMAIN
-                    ? fields.subdomain
-                      ? `Full hostname: ${fields.subdomain}.${ROUTER_DOMAIN}`
-                      : `Full hostname: <subdomain>.${ROUTER_DOMAIN}`
+                  {routerDomain
+                    ? `Full hostname: ${fields.subdomain || '<subdomain>'}.${routerDomain}`
                     : 'Optional. Auto-assigned from the name if left blank.'}
                 </div>
               </div>
@@ -421,6 +418,7 @@ type EditProps = {
 };
 
 export function EditModal({ server, onClose, onSave }: EditProps) {
+  const routerDomain = useRouterDomain();
   const [local, setLocal] = useState<FormState | null>(null);
   const [javaSelection, setJavaSelection] = useState<string>('');
   const [difficultyOptions, setDifficultyOptions] = useState<DifficultyOptions | null>(null);
@@ -495,8 +493,8 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                       onChange={(e) => setLocal({ ...local, subdomain: e.target.value })}
                     />
                     <div className="text-xs muted mt-1">
-                      {ROUTER_DOMAIN
-                        ? `Full hostname: ${local.subdomain || '<subdomain>'}.${ROUTER_DOMAIN}`
+                      {routerDomain
+                        ? `Full hostname: ${local.subdomain || '<subdomain>'}.${routerDomain}`
                         : 'Optional. Used for wildcard subdomain routing if enabled.'}
                     </div>
                   </div>
