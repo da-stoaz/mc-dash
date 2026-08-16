@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authEnabled, checkPassword, clearSessionCookie, isAuthenticated, setSessionCookie } from '../auth';
+import { clearLoginFailures, loginRateLimit, recordLoginFailure } from '../loginRateLimit';
 import { logger } from '../logger';
 
 const router = Router();
@@ -13,7 +14,7 @@ router.get('/me', (req, res) => {
   });
 });
 
-router.post('/login', (req, res) => {
+router.post('/login', loginRateLimit, (req, res) => {
   if (!authEnabled) {
     return res.json({ ok: true, authRequired: false });
   }
@@ -22,9 +23,11 @@ router.post('/login', (req, res) => {
     return res.status(400).json({ error: 'Password required' });
   }
   if (!checkPassword(parsed.data.password)) {
+    recordLoginFailure(req);
     logger.warn({ ip: req.ip }, 'Failed login attempt');
     return res.status(401).json({ error: 'Incorrect password' });
   }
+  clearLoginFailures(req);
   setSessionCookie(res);
   res.json({ ok: true });
 });

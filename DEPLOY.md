@@ -67,6 +67,47 @@ git pull && docker compose up -d --build
 - **Host networking on the backend**: lets the optional handshake router reach
   servers on `127.0.0.1:<port>` and publishes server ports directly on the host.
 
+## Exposing it to the internet
+
+Know what you are exposing: the backend talks to the host's Docker socket and
+runs uploaded server packs. Someone who gets past the login does not "restart a
+Minecraft server", they run code on the host. Gate it accordingly.
+
+**1. Put an identity proxy in front (Cloudflare Access, or equivalent).** The
+shared password is one guessable secret with no MFA and no per-person
+revocation. Cloudflare Access sits in front of the tunnel, authenticates against
+a real IdP (Google / GitHub / email OTP), and drops everything else before it
+ever reaches Express. Free for up to 50 users, and it is the whole "who is
+allowed in" problem solved without a users table.
+
+**2. Serve the UI and API from one hostname.** MC Dash is a browser app on :3000
+calling an API on :4000. Give each its own public hostname and Access will
+302 the API's XHRs to a login page that CORS then blocks — the app appears to
+hang at "Could not reach the server". Put a small reverse proxy (Caddy/nginx) on
+the host instead, route `/api/*` to :4000 with the prefix stripped and
+everything else to :3000, and point the tunnel at the proxy. Then set
+`NEXT_PUBLIC_API_BASE_URL=/api` and rebuild the frontend.
+
+**3. Close the back door.** The tunnel is pointless if :3000/:4000 are also
+reachable directly.
+
+```bash
+MC_DASH_BIND_HOST=127.0.0.1     # backend binds loopback only
+MC_DASH_TRUST_PROXY=loopback    # real client IP from X-Forwarded-For
+MC_DASH_COOKIE_SECURE=true      # you are on HTTPS now
+MC_DASH_FRONTEND_ORIGIN=https://<your-hostname>
+```
+
+Bind the frontend to loopback too (`next start -H 127.0.0.1`) and verify from
+another machine that `http://<host-ip>:3000` and `:4000` both refuse. Note the
+ordering: set `MC_DASH_TRUST_PROXY` **only** once the port is unreachable
+directly, otherwise anyone can forge `X-Forwarded-For` and walk past the login
+throttle.
+
+**4. Know the revocation story.** Sessions are stateless signed cookies with a
+7-day TTL. Changing `MC_DASH_PASSWORD` does **not** log anyone out — rotating
+`MC_DASH_SESSION_SECRET` (and restarting) is what kills every live session.
+
 ## Troubleshooting
 
 - **Dashboard loads but every action says "can't reach backend"**: the baked-in
