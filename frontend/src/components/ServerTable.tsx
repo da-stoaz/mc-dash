@@ -1,8 +1,42 @@
 import Link from 'next/link';
-import { Card, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip } from '@heroui/react';
+import { Card, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
 import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
+import { CopyButton } from './CopyButton';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
+
+// Hostnames and pack filenames are both longer than the column can show, so
+// each is truncated with the full value on hover — and the hostname, the bit
+// people actually need to hand out, gets a copy button next to it.
+function ServerNameCell({ server, routerDomain }: { server: ServerRecord; routerDomain: string | undefined }) {
+  const hostname = formatHostname(server.subdomain, routerDomain);
+
+  return (
+    <div className="flex flex-col max-w-[260px] leading-tight">
+      <Link
+        href={`/servers/${server.id}`}
+        className="text-base font-semibold hover:text-cyan-200 transition-colors truncate"
+        title={server.name}
+      >
+        {server.name}
+      </Link>
+      {/* Hostname and short id share one line: three stacked lines made every
+          row taller than the action buttons needed. */}
+      <div className="flex items-center gap-1 min-w-0 text-xs">
+        {hostname && (
+          <>
+            <Tooltip content={hostname} size="sm" delay={200} closeDelay={0}>
+              <span className="muted truncate">{hostname}</span>
+            </Tooltip>
+            <CopyButton value={hostname} label={`Copy hostname for ${server.name}`} compact />
+            <span className="muted shrink-0">·</span>
+          </>
+        )}
+        <span className="muted shrink-0 font-mono">{server.id.slice(0, 8)}</span>
+      </div>
+    </div>
+  );
+}
 
 type Props = {
   servers: ServerRecord[];
@@ -32,17 +66,7 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
           {(server) => (
             <TableRow key={server.id}>
               <TableCell>
-                <div className="flex flex-col">
-                  <Link href={`/servers/${server.id}`} className="font-semibold hover:text-cyan-200 transition-colors">
-                    {server.name}
-                  </Link>
-                  {server.subdomain && (
-                    <span className="muted text-xs">
-                      {formatHostname(server.subdomain, routerDomain)}
-                    </span>
-                  )}
-                  <span className="muted text-xs">{server.id.slice(0, 8)}</span>
-                </div>
+                <ServerNameCell server={server} routerDomain={routerDomain} />
               </TableCell>
               <TableCell>
                 <div className="flex flex-wrap gap-2">
@@ -58,10 +82,12 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1 max-w-[220px]">
-                  {server.serverPackUrl ? (
-                    <span className="muted text-xs truncate">
-                      {server.serverPackUrl.split(/[\\/]/).pop()}
-                    </span>
+                  {server.serverPackName ? (
+                    <Tooltip content={server.serverPackName} size="sm" delay={200} closeDelay={0}>
+                      <span className="muted text-xs truncate">{server.serverPackName}</span>
+                    </Tooltip>
+                  ) : server.packReady ? (
+                    <span className="muted text-xs">Imported from snapshot</span>
                   ) : (
                     <span className="muted text-xs">No pack uploaded</span>
                   )}

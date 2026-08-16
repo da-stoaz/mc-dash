@@ -173,6 +173,7 @@ export default function ServerDetailsPage() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: changes.name?.trim() ? changes.name.trim() : undefined,
           javaImage: changes.javaImage ? changes.javaImage : null,
           serverPort: changes.serverPort ? Number(changes.serverPort) : undefined,
           subdomain: changes.subdomain ? changes.subdomain : undefined,

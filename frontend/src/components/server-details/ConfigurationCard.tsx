@@ -46,11 +46,7 @@ export function ConfigurationCard({
         <div className="space-y-2">
           <div className="text-base font-semibold">Server pack</div>
           <div className="muted break-all">
-            {server.serverPackUrl
-              ? server.serverPackUrl.split(/[\\/]/).pop()
-              : server.packReady
-                ? 'Imported from snapshot'
-                : 'Not uploaded'}
+            {server.serverPackName ?? (server.packReady ? 'Imported from snapshot' : 'Not uploaded')}
           </div>
           {preparePending && (
             <div className="text-xs text-amber-300">Prepare required to apply this pack.</div>

@@ -488,6 +488,16 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <Input
+                      label="Name"
+                      value={local.name}
+                      onChange={(e) => setLocal({ ...local, name: e.target.value })}
+                      isInvalid={local.name.trim().length === 0}
+                      errorMessage={local.name.trim().length === 0 ? 'Name is required' : undefined}
+                    />
+                    <div className="text-xs muted mt-1">Display label only. Does not change the subdomain or restart the server.</div>
+                  </div>
+                  <div>
+                    <Input
                       label="Subdomain"
                       value={local.subdomain}
                       onChange={(e) => setLocal({ ...local, subdomain: e.target.value })}
@@ -599,8 +609,9 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
               </Button>
               <Button
                 color="primary"
+                isDisabled={local.name.trim().length === 0}
                 onPress={() => {
-                  onSave(server.id, local);
+                  onSave(server.id, { ...local, name: local.name.trim() });
                   onModalClose();
                 }}
               >
