@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" width="320" height="96" fill="none" role="img" aria-label="MC Dash">
+  <defs>
+    <linearGradient id="mcd-lockup-top" x1="30" y1="24" x2="82" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a5f3fc"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="mcd-lockup-left" x1="30" y1="39" x2="56" y2="76" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="mcd-lockup-right" x1="82" y1="39" x2="56" y2="76" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Dark plate so the lockup keeps its contrast on light and dark backgrounds
+       alike (GitHub renders READMEs in both themes). -->
+  <rect width="320" height="96" rx="18" fill="#05070f"/>
+
+  <!-- Mark: the icon.svg cube, translated by (24,18) into the plate. -->
+  <path d="M56 24 82 39 56 54 30 39Z" fill="url(#mcd-lockup-top)"/>
+  <path d="M30 39 56 54 56 76 30 61Z" fill="url(#mcd-lockup-left)"/>
+  <path d="M82 39 56 54 56 76 82 61Z" fill="url(#mcd-lockup-right)"/>
+
+  <text x="106" y="59" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif"
+        font-size="30" font-weight="800" letter-spacing="-0.6" fill="#ffffff">MC Dash</text>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="mcd-top" x1="6" y1="6" x2="58" y2="36" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a5f3fc"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="mcd-left" x1="6" y1="21" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="mcd-right" x1="58" y1="21" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 6 58 21 32 36 6 21Z" fill="url(#mcd-top)"/>
+  <path d="M6 21 32 36 32 58 6 43Z" fill="url(#mcd-left)"/>
+  <path d="M58 21 32 36 32 58 58 43Z" fill="url(#mcd-right)"/>
+</svg>

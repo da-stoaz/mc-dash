@@ -2,8 +2,8 @@
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import { Button, Card, CardBody, CardHeader, Input } from '@heroui/react';
-import { Lock } from 'lucide-react';
 import { API_BASE, UNAUTHORIZED_EVENT } from '../lib/api';
+import { Logo } from './Logo';
 
 type AuthContextValue = {
   authRequired: boolean;
@@ -91,7 +91,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         <Card className="w-full max-w-sm bg-white/5 border border-white/10">
           <CardHeader className="flex flex-col items-start gap-1">
             <div className="flex items-center gap-2 text-lg font-semibold">
-              <Lock size={18} />
+              <Logo size={20} />
               <span>MC Dash</span>
             </div>
             <div className="text-xs text-white/50">Enter the admin password to continue.</div>

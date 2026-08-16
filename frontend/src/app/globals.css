@@ -35,15 +35,6 @@ body {
   gap: 8px;
 }
 
-.brand::before {
-  content: '';
-  display: inline-block;
-  width: 8px;
-  height: 24px;
-  background: linear-gradient(180deg, #22d3ee, #3b82f6);
-  border-radius: 999px;
-}
-
 .muted {
   color: #9ca3af;
 }
