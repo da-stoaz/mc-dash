@@ -4,12 +4,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
 import { LogOut, Plus, Upload } from 'lucide-react';
 import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
-import { StatusBar } from '../components/StatusBar';
+import { FilterKey, StatusBar } from '../components/StatusBar';
+import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal, ImportModal, ImportFields } from '../components/ServerModals';
 import { useAuth } from '../components/AuthGate';
 import { extractApiErrorMessageFromText, getApiErrorMessage } from '../lib/apiErrors';
 import { API_BASE, apiFetch } from '../lib/api';
+import { Logo } from '../components/Logo';
 
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
@@ -25,6 +27,13 @@ export default function Page() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [importProgress, setImportProgress] = useState<number | null>(null);
   const serversErrorRef = useRef(false);
+  // The table is fed by SSE, so the status bar reports whether that stream is
+  // actually alive rather than implying the Refresh button is what keeps it current.
+  const [streamLive, setStreamLive] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [statusFilter, setStatusFilter] = useState<FilterKey[]>([]);
+  const [search, setSearch] = useState('');
+  const routerDomain = useRouterDomain();
   const { authRequired, logout } = useAuth();
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
@@ -44,6 +53,7 @@ export default function Page() {
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load servers'));
       const data = await res.json();
       setServers(data);
+      setLastUpdated(new Date());
       serversErrorRef.current = false;
     } catch (err) {
       if (!serversErrorRef.current) {
@@ -65,6 +75,8 @@ export default function Page() {
       es.addEventListener('servers', (e) => {
         try {
           setServers(JSON.parse((e as MessageEvent).data));
+          setLastUpdated(new Date());
+          setStreamLive(true);
           serversErrorRef.current = false;
         } catch {
           // ignore malformed frame
@@ -72,6 +84,7 @@ export default function Page() {
         setLoading(false);
       });
       es.onerror = () => {
+        setStreamLive(false);
         // EventSource reconnects on its own; surface the drop only once.
         if (!serversErrorRef.current) {
           notify('Lost connection to server', 'Reconnecting…', 'warning');
@@ -83,6 +96,7 @@ export default function Page() {
     const disconnect = () => {
       es?.close();
       es = null;
+      setStreamLive(false);
     };
 
     const onVisibility = () => {
@@ -225,6 +239,7 @@ export default function Page() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: changes.name?.trim() ? changes.name.trim() : undefined,
           javaImage: changes.javaImage ? changes.javaImage : null,
           serverPort: changes.serverPort ? Number(changes.serverPort) : undefined,
           subdomain: changes.subdomain ? changes.subdomain : undefined,
@@ -333,12 +348,39 @@ export default function Page() {
 
   const restartRequiredCount = useMemo(() => servers.filter((s) => s.restartRequired).length, [servers]);
 
+  const toggleFilter = (key: FilterKey) =>
+    setStatusFilter((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+
+  // Counts above stay derived from the unfiltered list, so the chips keep
+  // reporting the whole fleet rather than collapsing to whatever is on screen.
+  const filteredServers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return servers.filter((server) => {
+      // Several selected statuses widen the result (Error *or* Exited); the
+      // search then narrows whatever that produced.
+      if (statusFilter.length > 0) {
+        const matchesStatus = statusFilter.some((key) =>
+          key === 'restart-required' ? Boolean(server.restartRequired) : server.status === key
+        );
+        if (!matchesStatus) return false;
+      }
+      if (!query) return true;
+      const hostname = formatHostname(server.subdomain, routerDomain) ?? '';
+      return [server.name, hostname, server.id].some((field) => field.toLowerCase().includes(query));
+    });
+  }, [servers, statusFilter, search, routerDomain]);
+
+  const filtering = statusFilter.length > 0 || search.trim().length > 0;
+
   return (
     <div className="min-h-screen bg-linear-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="page">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <div className="brand text-lg">MC Dash</div>
+            <div className="brand text-lg">
+              <Logo size={22} />
+              MC Dash
+            </div>
             <div className="muted text-sm">Minecraft server manager</div>
           </div>
           <div className="flex items-center gap-2">
@@ -356,10 +398,23 @@ export default function Page() {
           </div>
         </div>
 
-        <StatusBar counts={statusCounts} restartRequiredCount={restartRequiredCount} loading={loading} onRefresh={fetchServers} />
+        <StatusBar
+          counts={statusCounts}
+          restartRequiredCount={restartRequiredCount}
+          loading={loading}
+          live={streamLive}
+          lastUpdated={lastUpdated}
+          onRefresh={fetchServers}
+          selected={statusFilter}
+          onToggleFilter={toggleFilter}
+          onClearFilters={() => setStatusFilter([])}
+          search={search}
+          onSearchChange={setSearch}
+        />
 
         <ServerTable
-          servers={servers}
+          servers={filteredServers}
+          emptyContent={filtering ? 'No servers match these filters.' : 'No servers yet.'}
           actionLoading={actionLoading}
           onAction={invokeAction}
           onEdit={setShowEdit}

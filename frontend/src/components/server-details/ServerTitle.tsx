@@ -1,7 +1,7 @@
-import { Button, Chip } from '@heroui/react';
+import { Chip } from '@heroui/react';
 import type { ServerRecord } from '../../lib/serverTypes';
 import { statusColor, statusLabel } from '../../lib/serverTypes';
-import { Copy } from 'lucide-react';
+import { CopyButton } from '../CopyButton';
 import { formatHostname, useRouterDomain } from '../../lib/routerDomain';
 
 type ServerTitleProps = {
@@ -11,15 +11,6 @@ type ServerTitleProps = {
 export function ServerTitle({ server }: ServerTitleProps) {
   const routerDomain = useRouterDomain();
   const hostname = formatHostname(server.subdomain, routerDomain);
-
-  const handleCopy = async () => {
-    if (!hostname) return;
-    try {
-      await navigator.clipboard.writeText(hostname);
-    } catch {
-      // Best-effort copy; ignore failures for now.
-    }
-  };
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
@@ -31,9 +22,7 @@ export function ServerTitle({ server }: ServerTitleProps) {
           {hostname ? (
             <>
               <span className="font-mono text-sm">{hostname}</span>
-              <Button isIconOnly size="sm" variant="light" onPress={handleCopy} aria-label="Copy hostname">
-                <Copy size={14} />
-              </Button>
+              <CopyButton value={hostname} label="Copy hostname" />
             </>
           ) : (
             <span className="muted">Not configured</span>
