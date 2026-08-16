@@ -2,19 +2,15 @@ import { Button, Chip } from '@heroui/react';
 import type { ServerRecord } from '../../lib/serverTypes';
 import { statusColor, statusLabel } from '../../lib/serverTypes';
 import { Copy } from 'lucide-react';
-
-const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+import { formatHostname, useRouterDomain } from '../../lib/routerDomain';
 
 type ServerTitleProps = {
   server: ServerRecord;
 };
 
 export function ServerTitle({ server }: ServerTitleProps) {
-  const hostname = server.subdomain
-    ? ROUTER_DOMAIN
-      ? `${server.subdomain}.${ROUTER_DOMAIN}`
-      : server.subdomain
-    : null;
+  const routerDomain = useRouterDomain();
+  const hostname = formatHostname(server.subdomain, routerDomain);
 
   const handleCopy = async () => {
     if (!hostname) return;

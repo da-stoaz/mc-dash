@@ -5,8 +5,7 @@ import { Button, Card, CardBody, CardHeader, Divider, Progress } from '@heroui/r
 import { Pencil, Server, Upload } from 'lucide-react';
 import type { ServerRecord } from '../../lib/serverTypes';
 import { FilePicker } from '../FilePicker';
-
-const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+import { formatHostname, useRouterDomain } from '../../lib/routerDomain';
 
 type ConfigurationCardProps = {
   server: ServerRecord;
@@ -27,12 +26,8 @@ export function ConfigurationCard({
 }: ConfigurationCardProps) {
   const [packFile, setPackFile] = useState<File | null>(null);
   const preparePending = Boolean(server.serverPackUrl) && !server.packReady;
-
-  const hostname = server.subdomain
-    ? ROUTER_DOMAIN
-      ? `${server.subdomain}.${ROUTER_DOMAIN}`
-      : server.subdomain
-    : null;
+  const routerDomain = useRouterDomain();
+  const hostname = formatHostname(server.subdomain, routerDomain);
 
   return (
     <Card className="bg-white/5 border border-white/10">

@@ -33,6 +33,19 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+// Settings the browser needs but that only the backend's env knows. Served at
+// runtime on purpose: the router domain used to be a second, build-time
+// NEXT_PUBLIC_ROUTER_DOMAIN in the frontend, so it had to be set twice and the
+// bundle rebuilt to change it — and when it was missed the UI silently showed
+// bare subdomains instead of full hostnames.
+app.get('/config', requireAuth, (_req, res) => {
+  res.json({
+    routerEnabled: config.routerEnabled,
+    routerDomain: config.routerDomain ?? null,
+    routerPort: config.routerPort,
+  });
+});
+
 app.use('/auth', authRouter);
 app.use('/servers', requireAuth, serversRouter);
 

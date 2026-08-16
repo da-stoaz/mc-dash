@@ -2,8 +2,7 @@ import Link from 'next/link';
 import { Card, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip } from '@heroui/react';
 import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
-
-const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
+import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 
 type Props = {
   servers: ServerRecord[];
@@ -15,6 +14,8 @@ type Props = {
 };
 
 export function ServerTable({ servers, actionLoading, onAction, onEdit, onDeleteContainer, onDeleteServer }: Props) {
+  const routerDomain = useRouterDomain();
+
   return (
     <Card shadow="sm" className="bg-white/5 border border-white/10">
       <Table aria-label="Servers" removeWrapper>
@@ -37,7 +38,7 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
                   </Link>
                   {server.subdomain && (
                     <span className="muted text-xs">
-                      {ROUTER_DOMAIN ? `${server.subdomain}.${ROUTER_DOMAIN}` : server.subdomain}
+                      {formatHostname(server.subdomain, routerDomain)}
                     </span>
                   )}
                   <span className="muted text-xs">{server.id.slice(0, 8)}</span>

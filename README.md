@@ -22,6 +22,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 
 ## Backend endpoints (initial pass)
 - `GET /health`
+- `GET /config` — browser-facing settings from the backend env (`routerEnabled`, `routerDomain`, `routerPort`). The dashboard reads this to render full hostnames.
 - `GET /servers` — list server records.
 - `POST /servers` — create a record with a server pack zip (multipart form, fields include `name`, `subdomain` (optional), `serverPort` (optional), `minRamMb`, `maxRamMb`, `cpuLimit`, `renderDistance`, `gameMode`, `seed`, `javaImage`, and file field `file`).
 - `PATCH /servers/:id` — update resources/game/status.
@@ -50,6 +51,8 @@ To avoid per-server DNS entries, you can route all `*.mc.example.com` hostnames 
    - `MC_ROUTER_PORT=25565`
    - Ensure your auto-assign port range excludes the router port (e.g., `MC_SERVER_PORT_MIN=25566`).
 3. Each server gets a subdomain (auto-generated from name or user-provided).
+
+The dashboard reads `MC_ROUTER_DOMAIN` from the backend at runtime (`GET /config`), so it is configured in one place — no frontend rebuild needed to change the domain.
 
 ## Docker rootless vs root
 - Rootless Docker cannot bind ports <1024 and has stricter cgroup limits (swap limits often unavailable; CPU/memory enforcement depends on host kernel). Volume permissions can also differ.
