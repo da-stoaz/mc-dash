@@ -30,6 +30,9 @@ export interface ServerRecord {
   name: string;
   subdomain?: string;
   serverPackUrl?: string;
+  // Original zip filename, recovered from serverPackUrl's on-disk name. Derived,
+  // not stored — see packDisplayName in serverStore.ts.
+  serverPackName?: string;
   javaImage?: string;
   effectiveJavaImage?: string;
   effectiveJavaSource?: string;
@@ -65,6 +68,7 @@ export interface ServerCreateInput {
 }
 
 export interface ServerUpdateInput {
+  name?: string;
   resources?: ResourceConfig;
   game?: GameConfig;
   status?: ServerStatus;

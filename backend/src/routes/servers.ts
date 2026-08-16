@@ -94,6 +94,10 @@ const importServerSchema = z.object({
 });
 
 const updateServerSchema = z.object({
+  // Display label only — the container name and the data directory are keyed on
+  // the server id, and the subdomain is edited separately, so a rename touches
+  // nothing on disk and needs no restart.
+  name: z.string().trim().min(1).max(120).optional(),
   resources: resourceSchema.optional(),
   game: gameSchema.optional(),
   status: z.enum(['creating', 'stopped', 'running', 'starting', 'stopping', 'restarting', 'exited', 'error']).optional(),

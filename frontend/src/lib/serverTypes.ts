@@ -34,6 +34,8 @@ export type ServerRecord = {
   name: string;
   subdomain?: string;
   serverPackUrl?: string;
+  // Original zip filename; the backend derives it from serverPackUrl.
+  serverPackName?: string;
   javaImage?: string;
   effectiveJavaImage?: string;
   effectiveJavaSource?: string;

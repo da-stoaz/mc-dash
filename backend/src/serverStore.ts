@@ -200,6 +200,28 @@ function parseStringList(value?: string | null): string[] | undefined {
   return [];
 }
 
+// Uploaded packs land on disk as `<serverId>-<timestamp>-<originalName>` so two
+// uploads of "ServerPack.zip" can't collide. Strip that prefix back off for
+// display: the raw basename leads with a UUID, so a truncated column shows the
+// id and hides the only part that identifies the pack.
+function packDisplayName(id: string, packUrl: string | null | undefined): string | undefined {
+  if (!packUrl) return undefined;
+  const base = packUrl.split(/[\\/]/).pop() ?? '';
+  if (!base) return undefined;
+  const prefix = `${id}-`;
+  if (base.startsWith(prefix)) {
+    const rest = base.slice(prefix.length);
+    const dash = rest.indexOf('-');
+    // Only strip when what follows the id really is the upload timestamp,
+    // otherwise a pack whose own name starts with the id would lose characters.
+    if (dash > 0 && /^\d+$/.test(rest.slice(0, dash))) {
+      const original = rest.slice(dash + 1);
+      if (original) return original;
+    }
+  }
+  return base;
+}
+
 function mapRow(row: ServerRow): ServerRecord {
   const whitelist = parseStringList(row.whitelist);
   const blacklist = parseStringList(row.blacklist);
@@ -208,6 +230,7 @@ function mapRow(row: ServerRow): ServerRecord {
     name: row.name,
     subdomain: normalizeSubdomain(row.subdomain) ?? undefined,
     serverPackUrl: row.serverPackUrl,
+    serverPackName: packDisplayName(row.id, row.serverPackUrl),
     javaImage: row.javaImage ?? undefined,
     effectiveJavaImage: row.effectiveJavaImage ?? undefined,
     effectiveJavaSource: row.effectiveJavaSource ?? undefined,
@@ -292,6 +315,9 @@ export class ServerStore {
 
     const next: Partial<ServerRow> = {};
 
+    if (updates.name !== undefined) {
+      next.name = updates.name;
+    }
     if (updates.resources) {
       next.resources = JSON.stringify(updates.resources);
     }
