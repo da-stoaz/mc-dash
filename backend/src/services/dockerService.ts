@@ -1,7 +1,9 @@
 import Docker, { Container } from 'dockerode';
 import { PassThrough } from 'stream';
+import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
+import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord, ServerStatus } from '../types';
@@ -33,6 +35,64 @@ function demuxDockerLogBuffer(buffer: Buffer): string {
     offset += frameSize;
   }
   return output;
+}
+
+// ServerPackCreator start scripts download the modloader server jar (Fabric
+// launcher, NeoForge ServerStarterJar, ...) with curl or wget on first run. Bare
+// JRE images ship with neither, and installing one at container *runtime* needs
+// root — which we deliberately no longer have, since containers run as the MC
+// Dash user so their world files stay readable for snapshots.
+//
+// So we install it a phase earlier instead: `docker build` runs as the daemon
+// (root) and produces an image that then runs unprivileged. Same package-manager
+// cascade as before, just moved from runtime to build time.
+export function derivedImageTag(base: string): string {
+  // Docker repository names must be lowercase; tags allow [A-Za-z0-9_.-]. Fold
+  // the whole base reference into the tag so one derived image maps to exactly
+  // one base (including its tag/digest) and stale bases can't be silently reused.
+  const slug = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+  return `mc-dash/java:${slug || 'base'}`;
+}
+
+// Exits 0 immediately when the base already provides a downloader, so bases that
+// ship curl cost nothing but a cache hit. Exits non-zero when no package manager
+// can supply one — that failure is what lets us report the real cause instead of
+// letting the pack fail later with a misleading modloader error.
+export function downloaderDockerfile(base: string): string {
+  return [
+    `FROM ${base}`,
+    // Base images that default to a non-root user would otherwise fail apt-get.
+    // The runtime user is set per-container at create time, so this only affects
+    // the build.
+    'USER root',
+    'RUN set -e; \\',
+    '    if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then exit 0; fi; \\',
+    '    if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*; \\',
+    '    elif command -v apk >/dev/null 2>&1; then apk add --no-cache curl ca-certificates; \\',
+    '    elif command -v microdnf >/dev/null 2>&1; then microdnf install -y curl ca-certificates; \\',
+    '    elif command -v dnf >/dev/null 2>&1; then dnf install -y curl ca-certificates; \\',
+    '    elif command -v yum >/dev/null 2>&1; then yum install -y curl ca-certificates; \\',
+    '    else echo "no supported package manager to install curl/wget" >&2; exit 1; fi',
+    '',
+  ].join('\n');
+}
+
+// The pack would otherwise fail with something like "Fabric is not available for
+// Minecraft 1.21" — true-sounding, and completely wrong. Name the actual cause.
+export function downloaderUnavailableError(base: string, detail: string): Error {
+  return new Error(
+    `Java image "${base}" has no curl or wget, and MC Dash could not add one (${detail}). ` +
+      `Server pack start scripts need a downloader to fetch the modloader jar on first run; ` +
+      `without one the pack fails with a misleading error such as "Fabric is not available for ` +
+      `Minecraft <version>". MC Dash adds it at image build time because containers run as the ` +
+      `MC Dash user rather than root (which keeps world files readable for snapshots), so a ` +
+      `runtime install is not possible. Fix: point this server's Java image — or JAVA_IMAGE — at ` +
+      `a base that already includes curl, or give the Docker daemon access to your package mirrors.`
+  );
 }
 
 // Decide whether a server's existing container must be recreated so it runs as
@@ -123,6 +183,89 @@ export class DockerService {
       }
     }
     return this.docker.getContainer(this.containerName(server.id));
+  }
+
+  // base image reference -> the image reference we actually run. Cleared only by
+  // a restart, which is fine: the answer only changes when the base changes, and
+  // a changed base means a different key.
+  private readonly runnableImages = new Map<string, string>();
+
+  /**
+   * Resolve a Java image to one that can actually run a server pack — i.e. one
+   * that provides curl or wget. Returns the base untouched when it already does;
+   * otherwise builds (and caches) a derived image that adds one at build time.
+   * Throws a message naming the real cause when neither is possible.
+   */
+  async ensureRunnableImage(base: string): Promise<string> {
+    const cached = this.runnableImages.get(base);
+    if (cached) return cached;
+
+    await this.ensureImage(base);
+
+    if (await this.imageHasDownloader(base)) {
+      this.runnableImages.set(base, base);
+      return base;
+    }
+
+    const tag = derivedImageTag(base);
+    logger.info({ base, tag }, 'Java image has no downloader; building a derived image that adds one');
+    await this.buildDownloaderImage(base, tag);
+    this.runnableImages.set(base, tag);
+    return tag;
+  }
+
+  // Probe by running `command -v` in a throwaway container rather than guessing
+  // from the image name — custom and future base images may already ship curl,
+  // and those should cost no build at all.
+  private async imageHasDownloader(image: string): Promise<boolean> {
+    let container: Container | undefined;
+    try {
+      container = await this.docker.createContainer({
+        Image: image,
+        // Override any ENTRYPOINT the base sets, or we'd probe the wrong thing.
+        Entrypoint: ['/bin/sh', '-c'],
+        Cmd: ['command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1'],
+      });
+      await container.start();
+      const result = await container.wait();
+      return result?.StatusCode === 0;
+    } catch (err) {
+      // A probe we couldn't run tells us nothing; fall through to the build,
+      // whose Dockerfile performs the same check authoritatively.
+      logger.warn({ err, image }, 'Could not probe image for curl/wget; assuming it needs one');
+      return false;
+    } finally {
+      // Not AutoRemove: that races with wait() and can drop the exit status.
+      await container?.remove({ force: true }).catch(() => undefined);
+    }
+  }
+
+  private async buildDownloaderImage(base: string, tag: string): Promise<void> {
+    const contextDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mc-dash-image-'));
+    const log: string[] = [];
+    try {
+      await fs.writeFile(path.join(contextDir, 'Dockerfile'), downloaderDockerfile(base));
+      const context = tar.create({ cwd: contextDir, portable: true }, ['Dockerfile']);
+
+      const stream = await this.docker.buildImage(context as any, { t: tag, dockerfile: 'Dockerfile' });
+      await new Promise<void>((resolve, reject) => {
+        this.docker.modem.followProgress(
+          stream,
+          (err: any) => (err ? reject(err) : resolve()),
+          (event: any) => {
+            // Docker reports a failed RUN in-band, not as a stream error.
+            if (event?.error) return reject(new Error(String(event.error)));
+            const chunk = typeof event?.stream === 'string' ? event.stream.trim() : '';
+            if (chunk) log.push(chunk);
+          }
+        );
+      });
+    } catch (err: any) {
+      const detail = [err?.message, log.slice(-5).join(' | ')].filter(Boolean).join('; ');
+      throw downloaderUnavailableError(base, detail || 'image build failed');
+    } finally {
+      await fs.rm(contextDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   private async ensureImage(image: string) {

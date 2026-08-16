@@ -422,6 +422,16 @@ export default function ServerDetailsPage() {
 
         <Tab key="settings" title="Settings">
           <div className="space-y-4">
+
+            <FirewallCard
+              whitelistEnabled={whitelistEnabled}
+              whitelistCount={whitelistCount}
+              blacklistEnabled={blacklistEnabled}
+              blacklistCount={blacklistCount}
+              onManage={() => setShowFirewall(server)}
+            />
+
+            
             <ConfigurationCard
               server={server}
               onEdit={() => setShowEdit(server)}
@@ -431,13 +441,7 @@ export default function ServerDetailsPage() {
               replaceProgress={packProgress}
             />
 
-            <FirewallCard
-              whitelistEnabled={whitelistEnabled}
-              whitelistCount={whitelistCount}
-              blacklistEnabled={blacklistEnabled}
-              blacklistCount={blacklistCount}
-              onManage={() => setShowFirewall(server)}
-            />
+            
 
             <Card className="bg-rose-500/5 border border-rose-500/30">
               <CardHeader className="flex flex-col items-start gap-0.5">

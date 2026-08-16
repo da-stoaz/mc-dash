@@ -26,6 +26,7 @@ import {
   emptyForm,
 } from '../lib/serverTypes';
 import { API_BASE, apiFetch } from '../lib/api';
+import { FilePicker } from './FilePicker';
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 
@@ -109,18 +110,15 @@ export function CreateModal({
                     : 'Optional. Used for wildcard subdomain routing if enabled.'}
                 </div>
               </div>
-              <div className="space-y-2">
-                <div className="text-sm font-medium">Server pack zip</div>
-                <input
-                  type="file"
+              <div>
+                <FilePicker
+                  label="Server pack zip"
                   accept=".zip"
-                  onChange={(e) => setPackFile(e.target.files?.[0] ?? null)}
-                  className="text-sm"
-                  disabled={isCreating}
+                  file={packFile}
+                  onFileChange={setPackFile}
+                  isDisabled={isCreating}
+                  description="Required. Use the server pack zip you downloaded from CurseForge."
                 />
-                <div className="text-xs muted">
-                  {packFile ? `Selected: ${packFile.name}` : 'Required. Use the server pack zip you downloaded.'}
-                </div>
                 {isCreating && (
                   <Progress aria-label="Upload progress" size="sm" value={progressValue} showValueLabel className="mt-2" />
                 )}
@@ -302,18 +300,15 @@ export function ImportModal({ open, onClose, onImport, isImporting = false, uplo
                 onChange={(e) => setFields({ ...fields, name: e.target.value })}
                 isDisabled={isImporting}
               />
-              <div className="space-y-2">
-                <div className="text-sm font-medium">Snapshot archive</div>
-                <input
-                  type="file"
+              <div>
+                <FilePicker
+                  label="Snapshot archive"
                   accept=".gz,.tgz,.tar.gz,application/gzip"
-                  onChange={(e) => setArchive(e.target.files?.[0] ?? null)}
-                  className="text-sm"
-                  disabled={isImporting}
+                  file={archive}
+                  onFileChange={setArchive}
+                  isDisabled={isImporting}
+                  description="Required. A snapshot .tar.gz exported from MC Dash."
                 />
-                <div className="text-xs muted">
-                  {archive ? `Selected: ${archive.name}` : 'Required. A snapshot .tar.gz exported from MC Dash.'}
-                </div>
                 {isImporting && (
                   <Progress aria-label="Upload progress" size="sm" value={progressValue} showValueLabel className="mt-2" />
                 )}

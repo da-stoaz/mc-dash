@@ -98,7 +98,19 @@ git pull && docker compose up -d --build
   its next save and the error would come back — so a plain restart now performs
   that rebuild automatically when it detects the mismatch.
 
-  If a pack needs to install packages at runtime (which requires root inside the
-  container), set `MC_CONTAINER_USER=root` to keep that server running as root —
-  but then run MC Dash as root too (e.g. the compose stack) so it can still read
-  the files back for snapshots.
+- **Server exits immediately and the pack log says the modloader "is not
+  available" for your Minecraft version**: usually a lie. Server pack start
+  scripts fetch the modloader jar with `curl`/`wget`, bare JRE images ship with
+  neither, and a failed download looks identical to "not available". MC Dash
+  handles this by building a derived image (`mc-dash/java:<base>`) that adds
+  curl on top of the resolved Java image — at *build* time, since containers
+  run unprivileged and can no longer install packages at runtime. If that build
+  can't run, MC Dash now fails with the real reason instead of letting the pack
+  mislead you. Point the server's Java image at a base that already includes
+  curl, or give the Docker daemon access to your package mirrors.
+
+  Don't reach for `MC_CONTAINER_USER=root` to fix this — it would make the
+  runtime install work again at the cost of root-owned world files, i.e. the
+  snapshot breakage above. Reserve it for packs that genuinely need root *inside*
+  the container for their own reasons, and then run MC Dash as root too (e.g. the
+  compose stack) so it can still read the files back for snapshots.
