@@ -40,6 +40,7 @@ function ServerNameCell({ server, routerDomain }: { server: ServerRecord; router
 
 type Props = {
   servers: ServerRecord[];
+  emptyContent?: string;
   actionLoading: Record<string, string>;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
   onEdit: (server: ServerRecord) => void;
@@ -47,7 +48,15 @@ type Props = {
   onDeleteServer: (id: string) => void;
 };
 
-export function ServerTable({ servers, actionLoading, onAction, onEdit, onDeleteContainer, onDeleteServer }: Props) {
+export function ServerTable({
+  servers,
+  emptyContent = 'No servers yet.',
+  actionLoading,
+  onAction,
+  onEdit,
+  onDeleteContainer,
+  onDeleteServer,
+}: Props) {
   const routerDomain = useRouterDomain();
 
   return (
@@ -62,7 +71,7 @@ export function ServerTable({ servers, actionLoading, onAction, onEdit, onDelete
           <TableColumn>Game</TableColumn>
           <TableColumn align="end">Actions</TableColumn>
         </TableHeader>
-        <TableBody emptyContent="No servers yet." items={servers}>
+        <TableBody emptyContent={emptyContent} items={servers}>
           {(server) => (
             <TableRow key={server.id}>
               <TableCell>
