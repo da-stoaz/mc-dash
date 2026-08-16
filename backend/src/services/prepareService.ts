@@ -620,7 +620,23 @@ function resolveJavaImage(serverJavaImage?: string, recommended?: string): {
   return { image: config.javaImage, source: 'default' };
 }
 
-function parseRecommendedJavaMajor(recommended?: string): number | undefined {
+// The Java majors Temurin publishes -jre images for. resolveJavaImage builds the
+// tag `eclipse-temurin:<major>-jre`, so a major outside this set (say 16, or 26)
+// produces a reference that simply 404s at pull time. Keep in step with
+// JAVA_IMAGE_PRESETS in frontend/src/components/ServerModals.tsx.
+export const PUBLISHED_JAVA_MAJORS = [8, 11, 17, 21, 25];
+
+// A pack's recommended Java version is a *minimum*, so round up to the next
+// published major rather than down: Minecraft 1.17 asks for Java 16 and runs
+// happily on 17, but would not run on 11.
+export function toPublishedJavaMajor(major: number): number | undefined {
+  if (!Number.isFinite(major) || major <= 0) return undefined;
+  // Undefined past the highest known major — the caller then falls back to the
+  // configured JAVA_IMAGE instead of inventing a tag that does not exist.
+  return PUBLISHED_JAVA_MAJORS.find((published) => published >= major);
+}
+
+export function parseRecommendedJavaMajor(recommended?: string): number | undefined {
   if (!recommended) return undefined;
   const normalized = recommended.replace(/['"]/g, '').trim().toLowerCase();
   if (!normalized) return undefined;
@@ -628,24 +644,29 @@ function parseRecommendedJavaMajor(recommended?: string): number | undefined {
   // Common patterns: "21", "21.0.2", "java 21", "temurin-21"
   const explicitJava = normalized.match(/\bjava[^0-9]*([0-9]{1,2})\b/);
   if (explicitJava) {
-    const major = Number(explicitJava[1]);
-    if (Number.isFinite(major) && major > 0) return major;
+    return toPublishedJavaMajor(Number(explicitJava[1]));
   }
 
-  // Some packs use Minecraft version-ish strings; map to the Java major Minecraft expects.
-  const minecraft = normalized.match(/\b1\.(\d{1,2})\b/);
-  if (minecraft) {
-    const minor = Number(minecraft[1]);
-    if (minor >= 21) return 21;
-    if (minor >= 18) return 17;
-    if (minor === 17) return 16;
-    return 8;
+  // Minecraft's classic 1.x line -> the Java major it expects. The lookbehind
+  // matters: a plain \b would let a modern version like "26.1.2" match its
+  // embedded "1.2" and map the pack all the way down to Java 8.
+  const legacyMinecraft = normalized.match(/(?<![\d.])1\.(\d{1,2})\b/);
+  if (legacyMinecraft) {
+    const minor = Number(legacyMinecraft[1]);
+    if (minor >= 21) return toPublishedJavaMajor(21);
+    if (minor >= 18) return toPublishedJavaMajor(17);
+    if (minor === 17) return toPublishedJavaMajor(16);
+    return toPublishedJavaMajor(8);
   }
+
+  // A dotted version that is not on the 1.x line (e.g. "26.1.2"). We have no
+  // mapping for those, and guessing low would be worse than not guessing —
+  // defer to the operator's configured JAVA_IMAGE instead.
+  if (/^\d+\.\d+/.test(normalized)) return undefined;
 
   const firstNumber = normalized.match(/\b([0-9]{1,2})\b/);
   if (firstNumber) {
-    const major = Number(firstNumber[1]);
-    if (Number.isFinite(major) && major > 0) return major;
+    return toPublishedJavaMajor(Number(firstNumber[1]));
   }
 
   return undefined;
