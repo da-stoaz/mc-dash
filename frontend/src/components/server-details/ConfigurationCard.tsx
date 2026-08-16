@@ -1,9 +1,10 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Button, Card, CardBody, CardHeader, Divider, Progress } from '@heroui/react';
 import { Pencil, Server, Upload } from 'lucide-react';
 import type { ServerRecord } from '../../lib/serverTypes';
+import { FilePicker } from '../FilePicker';
 
 const ROUTER_DOMAIN = process.env.NEXT_PUBLIC_ROUTER_DOMAIN;
 
@@ -25,7 +26,6 @@ export function ConfigurationCard({
   replaceProgress = null,
 }: ConfigurationCardProps) {
   const [packFile, setPackFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const preparePending = Boolean(server.serverPackUrl) && !server.packReady;
 
   const hostname = server.subdomain
@@ -62,22 +62,18 @@ export function ConfigurationCard({
           )}
           {onReplacePack && (
             <div className="space-y-2 rounded-lg border border-white/10 bg-white/5 p-3">
-              <div className="text-sm font-medium">Upgrade / replace pack</div>
-              <input
-                ref={fileInputRef}
-                type="file"
+              <FilePicker
+                label="Upgrade / replace pack"
                 accept=".zip"
-                onChange={(e) => setPackFile(e.target.files?.[0] ?? null)}
-                className="text-sm"
-                disabled={!canReplace || replacing}
+                file={packFile}
+                onFileChange={setPackFile}
+                isDisabled={!canReplace || replacing}
+                description={
+                  canReplace
+                    ? 'Drop in a newer server pack zip. Your world is preserved; run Prepare after upload.'
+                    : 'Stop the server to replace its pack.'
+                }
               />
-              <div className="text-xs muted">
-                {!canReplace
-                  ? 'Stop the server to replace its pack.'
-                  : packFile
-                    ? `Selected: ${packFile.name}`
-                    : 'Drop in a newer server pack zip. Your world is preserved; run Prepare after upload.'}
-              </div>
               {replacing && (
                 <Progress
                   aria-label="Pack upload progress"
@@ -97,7 +93,6 @@ export function ConfigurationCard({
                   if (!packFile || !onReplacePack) return;
                   await onReplacePack(packFile);
                   setPackFile(null);
-                  if (fileInputRef.current) fileInputRef.current.value = '';
                 }}
               >
                 {replacing ? 'Uploading…' : 'Upload new pack'}
