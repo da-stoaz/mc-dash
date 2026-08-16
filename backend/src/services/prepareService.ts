@@ -596,7 +596,10 @@ async function applyAccessLists(workingDir: string, server: ServerRecord) {
   }
 }
 
-async function ensureZipExtracted(zipPath: string, packDir: string): Promise<string> {
+// Extracts an *uploaded* archive, so it runs on attacker-influenced input on any
+// instance whose dashboard has more than one user. Exported for tests: adm-zip
+// is the only dependency here whose API could shift under a major bump.
+export async function ensureZipExtracted(zipPath: string, packDir: string): Promise<string> {
   const zip = new AdmZip(zipPath);
   zip.extractAllTo(packDir, true);
   return packDir;
