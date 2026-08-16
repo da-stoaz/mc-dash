@@ -181,29 +181,19 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
   await fs.writeFile(propsPath, lines.join('\n') + '\n');
 }
 
-// ServerPackCreator start scripts download the modloader server jar (Fabric
-// launcher, NeoForge ServerStarterJar, etc.) at first run using curl or wget.
-// Bare JRE images (e.g. eclipse-temurin:*-jre) ship with neither, which makes
-// the pack crash with a misleading message like "Fabric is not available...".
-// So before running the pack's script, ensure a downloader is present. This is
-// best-effort and supports the common base-image package managers.
-function buildStartCommand(scriptName: string): string {
+// The pack's start script, and nothing else. Providing curl/wget used to happen
+// here, at container runtime, which needed root — incompatible with running
+// containers as the (non-root) MC Dash user. That install now happens when the
+// Java image is built instead; see dockerService.ensureRunnableImage.
+//
+// Kept as a `bash -c` wrapper rather than exec'ing the script directly so there
+// remains one place to add container-side preamble, and so PID 1 stays the same
+// shape the stop path already reasons about.
+export function buildStartCommand(scriptName: string): string {
   // scriptName comes from path.basename of a script we located/wrote, so it has
   // no shell metacharacters; still, keep it in single quotes defensively.
   const safeName = scriptName.replace(/'/g, `'\\''`);
-  return [
-    'if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then',
-    '  echo "[mc-dash] Installing curl (required by the server pack start script)...";',
-    '  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y --no-install-recommends curl ca-certificates;',
-    '  elif command -v apk >/dev/null 2>&1; then apk add --no-cache curl ca-certificates;',
-    '  elif command -v microdnf >/dev/null 2>&1; then microdnf install -y curl ca-certificates;',
-    '  elif command -v dnf >/dev/null 2>&1; then dnf install -y curl ca-certificates;',
-    '  elif command -v yum >/dev/null 2>&1; then yum install -y curl ca-certificates;',
-    '  else echo "[mc-dash] WARNING: no supported package manager found to install curl/wget; the pack may fail to download its modloader.";',
-    '  fi;',
-    'fi;',
-    `exec bash './${safeName}'`,
-  ].join('\n');
+  return `exec bash './${safeName}'`;
 }
 
 async function buildContainerFromPack(
@@ -236,8 +226,13 @@ async function buildContainerFromPack(
   const javaResolution = resolveJavaImage(server.javaImage, packRecommendedJava);
   const image = javaResolution.image;
 
+  // The container may run a derived image that adds curl/wget on top of the
+  // resolved base. We keep reporting the *base* as the server's Java image: that
+  // is the Java runtime the user chose, and the downloader layer is plumbing.
+  const runtimeImage = await dockerService.ensureRunnableImage(image);
+
   const containerId = await dockerService.createOrReplaceContainer(server, {
-    image,
+    image: runtimeImage,
     hostServerDir: serverRoot,
     workdir: containerWorkdir,
     cmd,
