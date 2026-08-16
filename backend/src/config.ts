@@ -57,6 +57,13 @@ export function resolveContainerUser(
 }
 
 const SESSION_TTL_DAYS = Number(process.env.MC_DASH_SESSION_TTL_DAYS ?? 7);
+
+// Fail closed. Anyone who gets past the login can upload a server pack and have
+// the backend run it through the host's Docker socket, so an unset
+// MC_DASH_PASSWORD must stop the boot rather than quietly serve an open API —
+// the failure mode of a typo'd env file should be "won't start", not "the
+// internet can spawn containers on my host". Opt out only on a trusted LAN.
+const allowNoAuth = String(process.env.MC_DASH_ALLOW_NO_AUTH ?? '').toLowerCase() === 'true';
 const frontendOrigins = (process.env.MC_DASH_FRONTEND_ORIGIN ?? 'http://localhost:3000,http://localhost:3001')
   .split(',')
   .map((origin) => origin.trim())
@@ -82,10 +89,20 @@ export const config = {
   routerDefaultSubdomain,
   // Auth: when MC_DASH_PASSWORD is set, the API requires a login session.
   authPassword: process.env.MC_DASH_PASSWORD || undefined,
+  allowNoAuth,
   sessionSecret: process.env.MC_DASH_SESSION_SECRET || undefined,
   sessionTtlMs: (Number.isFinite(SESSION_TTL_DAYS) ? SESSION_TTL_DAYS : 7) * 24 * 60 * 60 * 1000,
   cookieSecure: String(process.env.MC_DASH_COOKIE_SECURE ?? '').toLowerCase() === 'true',
   frontendOrigins,
+  // Behind a reverse proxy / Cloudflare tunnel every request arrives from
+  // 127.0.0.1, which would make req.ip useless for the login throttle and the
+  // failed-login log. Set to "loopback" (or a hop count) so Express reads
+  // X-Forwarded-For instead. Only safe when the port is not directly reachable,
+  // otherwise anyone can forge the header — hence off by default.
+  trustProxy: process.env.MC_DASH_TRUST_PROXY || undefined,
+  // Bind 127.0.0.1 when a tunnel/proxy fronts the API, so the port can't be hit
+  // directly and bypass whatever gating sits in front of it.
+  bindHost: process.env.MC_DASH_BIND_HOST || '0.0.0.0',
 };
 
 // Ensure the data directory exists for SQLite

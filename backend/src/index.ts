@@ -2,13 +2,28 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import serversRouter from './routes/servers';
 import authRouter from './routes/auth';
-import { requireAuth } from './auth';
+import { assertAuthConfig, requireAuth } from './auth';
 import { config } from './config';
 import { logger } from './logger';
 import { routerService } from './services/routerService';
 import { metricsCollector } from './services/metricsCollector';
 
+// Before anything binds a port: refuse to come up unauthenticated by accident.
+try {
+  assertAuthConfig();
+} catch (err) {
+  logger.fatal((err as Error).message);
+  process.exit(1);
+}
+
 const app = express();
+
+// Needed for req.ip behind a reverse proxy / tunnel — the login throttle and the
+// failed-login log key off it. See config.trustProxy for when this is safe.
+if (config.trustProxy) {
+  const hops = Number(config.trustProxy);
+  app.set('trust proxy', Number.isFinite(hops) ? hops : config.trustProxy);
+}
 
 // Credentialed CORS so the session cookie flows from the frontend origin(s).
 app.use(cors({ origin: config.frontendOrigins, credentials: true }));
@@ -30,8 +45,8 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-app.listen(config.port, () => {
-  logger.info(`API listening on port ${config.port}`);
+app.listen(config.port, config.bindHost, () => {
+  logger.info(`API listening on ${config.bindHost}:${config.port}`);
 });
 
 routerService.start();

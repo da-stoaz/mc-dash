@@ -10,10 +10,54 @@ export const authEnabled = !!config.authPassword;
 // back to a per-boot random secret (sessions reset when the server restarts).
 const sessionSecret = config.sessionSecret || crypto.randomBytes(32).toString('hex');
 
-if (!authEnabled) {
-  logger.warn('MC_DASH_PASSWORD is not set — API authentication is DISABLED. Set it to require a login.');
-} else if (!config.sessionSecret) {
-  logger.warn('MC_DASH_SESSION_SECRET is not set — using a random secret; sessions reset on restart.');
+const MIN_PASSWORD_LENGTH = 12;
+// The values our own docs and .env.example ship with. A deploy that still uses
+// one of these has not been configured, whatever its length.
+const PLACEHOLDER_PASSWORDS = new Set(['change-me', 'changeme', 'password', 'admin', 'minecraft']);
+
+function describeAuthProblem(): string | null {
+  if (!config.authPassword) {
+    return (
+      'MC_DASH_PASSWORD is not set. MC Dash drives the host Docker socket, so it refuses to start without a login. ' +
+      'Set MC_DASH_PASSWORD, or set MC_DASH_ALLOW_NO_AUTH=true to run unauthenticated on a trusted LAN.'
+    );
+  }
+  if (PLACEHOLDER_PASSWORDS.has(config.authPassword.toLowerCase())) {
+    return 'MC_DASH_PASSWORD is still an example placeholder. Set a real one, e.g. `openssl rand -base64 24`.';
+  }
+  if (config.authPassword.length < MIN_PASSWORD_LENGTH) {
+    // Report the length we actually received: when it disagrees with what's in
+    // .env the cause is almost always an unquoted `#`, which dotenv reads as the
+    // start of a comment and silently drops the rest of the value.
+    return (
+      `MC_DASH_PASSWORD is ${config.authPassword.length} characters; the minimum is ${MIN_PASSWORD_LENGTH}. ` +
+      'If your .env value looks longer than that, it contains a `#` — dotenv treats it as a comment and ' +
+      'truncates the value. Wrap the whole value in double quotes to keep it intact.'
+    );
+  }
+  return null;
+}
+
+/**
+ * Validated once at boot (see index.ts) so a misconfigured deploy dies with a
+ * readable message instead of coming up unauthenticated. Throws rather than
+ * exiting so the caller decides how to report it.
+ */
+export function assertAuthConfig(): void {
+  const problem = describeAuthProblem();
+  if (problem) {
+    // MC_DASH_ALLOW_NO_AUTH is the operator saying "this environment doesn't
+    // need a real login" — honour that for a weak password too, not just a
+    // missing one, so local dev is never blocked by a hardening check.
+    if (!config.allowNoAuth) throw new Error(problem);
+    logger.warn(
+      `${problem} Starting anyway because MC_DASH_ALLOW_NO_AUTH=true — never do this on an internet-facing host, ` +
+        'this API can run containers on the host.'
+    );
+  }
+  if (config.authPassword && !config.sessionSecret) {
+    logger.warn('MC_DASH_SESSION_SECRET is not set — using a random secret; sessions reset on restart.');
+  }
 }
 
 function sign(data: string): string {
@@ -21,9 +65,11 @@ function sign(data: string): string {
 }
 
 function timingSafeEqualStr(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
+  // Compare fixed-width digests rather than the raw strings: timingSafeEqual
+  // throws on unequal lengths, and the early length return that works around
+  // that leaks how long the configured password is.
+  const bufA = crypto.createHash('sha256').update(a).digest();
+  const bufB = crypto.createHash('sha256').update(b).digest();
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
