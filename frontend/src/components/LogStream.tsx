@@ -143,12 +143,12 @@ export function LogStream({ serverId, apiBase }: Props) {
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="h-[420px] rounded-lg border border-white/10 bg-black/30 px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap overflow-y-auto"
+        className="h-[55dvh] sm:h-[420px] rounded-lg border border-white/10 bg-black/30 px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap overflow-y-auto"
       >
         {logs || 'No logs yet.'}
       </div>
 
-      <Modal isOpen={expanded} onClose={() => setExpanded(false)} placement="center" size="5xl" scrollBehavior="inside">
+      <Modal isOpen={expanded} onClose={() => setExpanded(false)} placement="auto" size="5xl" scrollBehavior="inside">
         <ModalContent className="max-w-6xl">
           {(onClose) => (
             <>

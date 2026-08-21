@@ -399,7 +399,19 @@ export default function ServerDetailsPage() {
         onRestart={() => setConfirmState('restart')}
       />
 
-      <Tabs aria-label="Server sections" variant="underlined" size="lg" classNames={{ panel: 'pt-2' }}>
+      <Tabs
+        aria-label="Server sections"
+        variant="underlined"
+        size="lg"
+        classNames={{
+          panel: 'pt-2',
+          // Phones get all four tabs spread across the width instead of a
+          // horizontally scrolling strip with no visible scrollbar.
+          tabList: 'max-md:w-full max-md:gap-0',
+          tab: 'max-md:px-1',
+          tabContent: 'max-md:text-sm',
+        }}
+      >
         <Tab key="overview" title="Overview">
           <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
             <MetricsCard

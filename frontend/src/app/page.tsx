@@ -375,7 +375,7 @@ export default function Page() {
   return (
     <div className="min-h-screen bg-linear-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="page">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
           <div>
             <div className="brand text-lg">
               <Logo size={22} />
@@ -383,7 +383,7 @@ export default function Page() {
             </div>
             <div className="muted text-sm">Minecraft server manager</div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>
               New server
             </Button>

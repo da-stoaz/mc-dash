@@ -177,7 +177,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
                     {formatDate(snap.createdAt)} · {formatBytes(snap.sizeBytes)}
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-2">
+                <div className="flex shrink-0 flex-wrap gap-2">
                   <Button
                     size="sm"
                     variant="bordered"

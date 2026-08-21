@@ -70,7 +70,10 @@ export function CopyButton({ value, label = 'Copy', compact = false }: CopyButto
         variant="light"
         onPress={handleCopy}
         aria-label={label}
-        className={compact ? 'h-4 w-4 min-w-4 shrink-0' : 'shrink-0'}
+        // min-h-4 opts out of the mobile touch-target floor in globals.css:
+        // compact exists to match the adjacent text height, and a 40px button
+        // would set the height of the dense row it sits in.
+        className={compact ? 'h-4 min-h-4 w-4 min-w-4 shrink-0' : 'shrink-0'}
       >
         {copied ? <Check size={iconSize} className="text-emerald-400" /> : <Copy size={iconSize} />}
       </Button>

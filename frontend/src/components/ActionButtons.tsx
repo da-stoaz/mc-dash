@@ -28,9 +28,10 @@ type Props = {
   onEdit: () => void;
   onDeleteContainer: () => void;
   onDeleteServer: () => void;
+  align?: 'start' | 'end';
 };
 
-export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContainer, onDeleteServer }: Props) {
+export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContainer, onDeleteServer, align = 'end' }: Props) {
   const disabled = !!busy;
   const canStart = ['stopped', 'exited', 'error'].includes(server.status);
   const canStop = ['running', 'starting', 'restarting'].includes(server.status);
@@ -40,7 +41,7 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContaine
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete' | 'deleteServer'>(null);
 
   return (
-    <div className="flex flex-wrap gap-2 justify-end">
+    <div className={`flex flex-wrap gap-2 ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
       <Button
         size="sm"
         color="warning"

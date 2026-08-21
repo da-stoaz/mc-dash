@@ -38,3 +38,28 @@ body {
 .muted {
   color: #9ca3af;
 }
+
+/* Mobile-only adjustments. Everything from the md breakpoint up is untouched. */
+@media (max-width: 767px) {
+  /* iOS Safari auto-zooms into focused fields whose text is under 16px, which
+     throws the whole layout off. */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* The UI is built from HeroUI's size="sm" buttons (32px tall), which are
+     below the ~44px comfortable tap target. Grow them vertically on touch
+     screens without changing their desktop size. */
+  button {
+    min-height: 40px;
+  }
+
+  /* Keep content clear of the notch and home indicator (viewportFit: cover). */
+  .page {
+    padding-left: max(18px, env(safe-area-inset-left));
+    padding-right: max(18px, env(safe-area-inset-right));
+    padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  }
+}

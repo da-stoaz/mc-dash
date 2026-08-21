@@ -197,7 +197,7 @@ export function StatusBar({
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-3">
           <Input
             size="sm"
             variant="bordered"
@@ -207,7 +207,7 @@ export function StatusBar({
             isClearable
             onClear={() => onSearchChange('')}
             startContent={<Search size={14} className="shrink-0 text-white/40" />}
-            classNames={{ inputWrapper: 'h-8 min-h-8', base: 'w-56' }}
+            classNames={{ inputWrapper: 'h-8 min-h-8', base: 'w-full sm:w-56' }}
             aria-label="Search servers"
           />
           <Tooltip

@@ -87,7 +87,7 @@ export function CreateModal({
   }, [open]);
 
   return (
-    <Modal isOpen={open} onClose={onClose} placement="center" size="4xl" scrollBehavior="inside">
+    <Modal isOpen={open} onClose={onClose} placement="auto" size="4xl" scrollBehavior="inside">
       <ModalContent className="max-w-5xl">
         {(onModalClose) => (
           <>
@@ -288,7 +288,7 @@ export function ImportModal({ open, onClose, onImport, isImporting = false, uplo
   const canSubmit = fields.name.trim().length > 0 && archive !== null && !isImporting;
 
   return (
-    <Modal isOpen={open} onClose={onClose} placement="center" size="3xl" scrollBehavior="inside">
+    <Modal isOpen={open} onClose={onClose} placement="auto" size="3xl" scrollBehavior="inside">
       <ModalContent className="max-w-4xl">
         {(onModalClose) => (
           <>
@@ -479,7 +479,7 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
   const seedLocked = Boolean(server.containerId);
 
   return (
-    <Modal isOpen onClose={onClose} placement="center" size="3xl" scrollBehavior="inside">
+    <Modal isOpen onClose={onClose} placement="auto" size="3xl" scrollBehavior="inside">
         <ModalContent className="max-w-4xl">
           {(onModalClose) => (
             <>
@@ -652,7 +652,7 @@ export function FirewallModal({ server, onClose, onSave }: FirewallProps) {
   if (!server || !local) return null;
 
   return (
-    <Modal isOpen onClose={onClose} placement="center" size="4xl" scrollBehavior="inside">
+    <Modal isOpen onClose={onClose} placement="auto" size="4xl" scrollBehavior="inside">
       <ModalContent className="max-w-5xl">
         {(onModalClose) => (
           <>
