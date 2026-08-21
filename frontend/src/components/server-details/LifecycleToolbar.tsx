@@ -29,7 +29,7 @@ export function LifecycleToolbar({
   onRestart,
 }: LifecycleToolbarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
+    <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-white/5 p-2 sm:flex sm:flex-wrap sm:items-center">
       <Button
         size="sm"
         color="warning"

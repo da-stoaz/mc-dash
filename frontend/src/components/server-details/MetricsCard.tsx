@@ -351,7 +351,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs uppercase tracking-wide muted">Usage history</span>
             <div className="flex items-center gap-0.5 rounded-md border border-white/10 bg-white/5 p-0.5">
               {(['live', ...METRIC_RANGES] as const).map((key) => (

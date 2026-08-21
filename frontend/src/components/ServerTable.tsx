@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Card, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
+import { Card, CardBody, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
 import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 import { CopyButton } from './CopyButton';
@@ -38,6 +38,93 @@ function ServerNameCell({ server, routerDomain }: { server: ServerRecord; router
   );
 }
 
+// Phone rendering of one server. The table needs ~900px before its seven
+// columns stop colliding, so below md each row becomes a card: identity and
+// status on top, the columns still worth showing as a label/value grid, then
+// the same actions the table row carries.
+function ServerCard({
+  server,
+  routerDomain,
+  actionLoading,
+  onAction,
+  onEdit,
+  onDeleteContainer,
+  onDeleteServer,
+}: { server: ServerRecord; routerDomain: string | undefined } & Pick<
+  Props,
+  'actionLoading' | 'onAction' | 'onEdit' | 'onDeleteContainer' | 'onDeleteServer'
+>) {
+  const hostname = formatHostname(server.subdomain, routerDomain);
+  const packLabel = server.serverPackName ?? (server.packReady ? 'Imported from snapshot' : 'No pack uploaded');
+
+  return (
+    <Card shadow="sm" className="bg-white/5 border border-white/10">
+      <CardBody className="space-y-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col leading-tight">
+            <Link
+              href={`/servers/${server.id}`}
+              className="text-base font-semibold hover:text-cyan-200 transition-colors truncate"
+            >
+              {server.name}
+            </Link>
+            {hostname && (
+              <div className="flex min-w-0 items-center gap-1 text-xs">
+                <span className="muted truncate">{hostname}</span>
+                <CopyButton value={hostname} label={`Copy hostname for ${server.name}`} compact />
+              </div>
+            )}
+            <span className="muted font-mono text-xs">{server.id.slice(0, 8)}</span>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <Chip color={statusColor[server.status]} variant="flat" size="sm">
+              {statusLabel[server.status]}
+            </Chip>
+            {server.restartRequired && (
+              <Chip color="warning" variant="flat" size="sm">
+                Restart required
+              </Chip>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+          <span className="muted">Pack</span>
+          <span className="truncate text-right">{packLabel}</span>
+          <span className="muted">Port</span>
+          <span className="text-right">{server.serverPort}</span>
+          <span className="muted">RAM</span>
+          <span className="text-right">
+            {server.resources.minRamMb}–{server.resources.maxRamMb} MB
+          </span>
+          {server.resources.cpuLimit && (
+            <>
+              <span className="muted">CPU cap</span>
+              <span className="text-right">{server.resources.cpuLimit} cores</span>
+            </>
+          )}
+          {server.game.gameMode && (
+            <>
+              <span className="muted">Mode</span>
+              <span className="text-right capitalize">{server.game.gameMode}</span>
+            </>
+          )}
+        </div>
+
+        <ActionButtons
+          server={server}
+          busy={actionLoading[server.id]}
+          onAction={onAction}
+          onEdit={() => onEdit(server)}
+          onDeleteContainer={() => onDeleteContainer(server.id)}
+          onDeleteServer={() => onDeleteServer(server.id)}
+          align="start"
+        />
+      </CardBody>
+    </Card>
+  );
+}
+
 type Props = {
   servers: ServerRecord[];
   emptyContent?: string;
@@ -60,7 +147,30 @@ export function ServerTable({
   const routerDomain = useRouterDomain();
 
   return (
-    <Card shadow="sm" className="bg-white/5 border border-white/10">
+    <>
+      {/* Phones: stacked cards. The table below is hidden at this width. */}
+      <div className="space-y-3 md:hidden">
+        {servers.length === 0 ? (
+          <Card shadow="sm" className="bg-white/5 border border-white/10">
+            <CardBody className="text-sm muted">{emptyContent}</CardBody>
+          </Card>
+        ) : (
+          servers.map((server) => (
+            <ServerCard
+              key={server.id}
+              server={server}
+              routerDomain={routerDomain}
+              actionLoading={actionLoading}
+              onAction={onAction}
+              onEdit={onEdit}
+              onDeleteContainer={onDeleteContainer}
+              onDeleteServer={onDeleteServer}
+            />
+          ))
+        )}
+      </div>
+
+    <Card shadow="sm" className="max-md:hidden bg-white/5 border border-white/10">
       <Table aria-label="Servers" removeWrapper>
         <TableHeader>
           <TableColumn>Name</TableColumn>
@@ -135,5 +245,6 @@ export function ServerTable({
         </TableBody>
       </Table>
     </Card>
+    </>
   );
 }
