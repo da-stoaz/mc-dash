@@ -174,7 +174,7 @@ export function ServerTable({
           <TableColumn>Status</TableColumn>
           <TableColumn>Server pack</TableColumn>
           <TableColumn>Port</TableColumn>
-          <TableColumn>Usage</TableColumn>
+          <TableColumn width={160}>Usage</TableColumn>
           <TableColumn>Game</TableColumn>
           <TableColumn align="end">Actions</TableColumn>
         </TableHeader>
