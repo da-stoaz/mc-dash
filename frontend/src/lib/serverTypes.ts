@@ -50,6 +50,8 @@ export type ServerRecord = {
   status: ServerStatus;
   restartRequired?: boolean;
   packReady?: boolean;
+  // Why the last operation failed; survives the toast and a page reload.
+  lastError?: string | null;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
   game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };

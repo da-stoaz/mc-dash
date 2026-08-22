@@ -27,6 +27,7 @@ import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
+import { FailureBanner } from '../../../components/server-details/FailureBanner';
 import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
@@ -369,6 +370,8 @@ export default function ServerDetailsPage() {
       </div>
 
       <ServerTitle server={server} />
+
+      <FailureBanner message={server.lastError} />
 
       <LifecycleToolbar
         busy={busy}

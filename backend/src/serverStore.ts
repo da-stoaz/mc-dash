@@ -84,6 +84,12 @@ if (!columns.find((col) => col.name === 'packReady')) {
   db.prepare(`UPDATE servers SET packReady = 1 WHERE serverPackUrl IS NOT NULL`).run();
 }
 
+// Why the last operation failed. Without it a server that fails to prepare
+// shows a red chip and nothing else once the toast is gone.
+if (!columns.find((col) => col.name === 'lastError')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN lastError TEXT`).run();
+}
+
 db.prepare(
   `CREATE TABLE IF NOT EXISTS snapshots (
     id TEXT PRIMARY KEY,
@@ -118,6 +124,7 @@ type ServerRow = {
   notes?: string;
   restartRequired?: number;
   packReady?: number;
+  lastError?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -250,6 +257,7 @@ function mapRow(row: ServerRow): ServerRecord {
     notes: row.notes ?? undefined,
     restartRequired: row.restartRequired === 1,
     packReady: row.packReady === 1,
+    lastError: row.lastError ?? null,
   };
 }
 
@@ -371,6 +379,9 @@ export class ServerStore {
     }
     if (updates.packReady !== undefined) {
       next.packReady = updates.packReady ? 1 : 0;
+    }
+    if (updates.lastError !== undefined) {
+      next.lastError = updates.lastError ?? null;
     }
 
     if (Object.keys(next).length === 0) {

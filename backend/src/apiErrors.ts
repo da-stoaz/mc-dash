@@ -84,6 +84,34 @@ function classifyDocker(err: unknown): { status: number; body: ApiErrorBody } | 
 
 function classifyServerPack(err: unknown): { status: number; body: ApiErrorBody } | null {
   const message = getErrMessage(err) ?? '';
+  const code = getErrCode(err);
+
+  // Extraction is where a big pack actually lands on disk, so it is where a
+  // full disk surfaces — and the raw errno says nothing about which disk or
+  // what to do. Extracting needs room beyond the archive itself, so this fires
+  // even when the upload was admitted.
+  if (code === 'ENOSPC' || /no space left on device/i.test(message)) {
+    return {
+      status: 507,
+      body: { error: 'Out of disk space', code: 'DISK_FULL', reason: 'Not enough disk space to extract the pack' },
+    };
+  }
+
+  // adm-zip and tar report a corrupt archive in their own vocabulary; neither
+  // means anything to someone who just uploaded a file.
+  if (/Invalid or unsupported zip format/i.test(message) || /END header/i.test(message) || /Invalid CEN header/i.test(message)) {
+    return {
+      status: 400,
+      body: { error: 'Unreadable server pack', code: 'PACK_CORRUPT', reason: 'The pack is not a readable zip — it may have uploaded incompletely' },
+    };
+  }
+
+  if (/unexpected end of file/i.test(message) || /TAR_BAD_ARCHIVE/i.test(message) || /invalid gzip/i.test(message)) {
+    return {
+      status: 400,
+      body: { error: 'Unreadable archive', code: 'ARCHIVE_CORRUPT', reason: 'The archive is truncated or not a valid .tar.gz' },
+    };
+  }
 
   if (/Remote URLs are not supported/i.test(message)) {
     return {
