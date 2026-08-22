@@ -155,3 +155,99 @@ test('handles a command response split across TCP packets', async () => {
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+
+/**
+ * Mock that reads the way Minecraft's own RCON server does: one read() is one
+ * packet, and anything else drops the connection. This is what makes pipelining
+ * requests unsafe, so it is the mock that has to catch it.
+ */
+function startStrictRcon(opts: { password: string; respondTo: (cmd: string) => string[] }) {
+  const server = net.createServer((socket) => {
+    let authed = false;
+    socket.on('data', (chunk: Buffer) => {
+      // Vanilla checks the declared length against the whole read and hangs up
+      // when they disagree, which is exactly what two coalesced packets do.
+      const size = chunk.length >= 4 ? chunk.readInt32LE(0) : -1;
+      if (size !== chunk.length - 4) {
+        socket.destroy();
+        return;
+      }
+      const id = chunk.readInt32LE(4);
+      const type = chunk.readInt32LE(8);
+      const body = chunk.toString('utf8', 12, chunk.length - 2);
+      if (type === TYPE_AUTH) {
+        authed = body === opts.password;
+        socket.write(encode(authed ? id : -1, TYPE_AUTH_RESPONSE, ''));
+      } else if (type === TYPE_EXEC && authed) {
+        for (const part of opts.respondTo(body)) socket.write(encode(id, TYPE_RESPONSE_VALUE, part));
+      }
+    });
+  });
+  return new Promise<{ port: number; close: () => Promise<void> }>((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: (server.address() as net.AddressInfo).port,
+        close: () => new Promise<void>((r) => server.close(() => r())),
+      });
+    });
+  });
+}
+
+test('never pipelines requests, which a real Minecraft server hangs up on', async () => {
+  const mock = await startStrictRcon({ password: 'pw', respondTo: (cmd) => [`ok:${cmd}`] });
+  try {
+    const responses = await sendRconCommands({
+      host: '127.0.0.1',
+      port: mock.port,
+      password: 'pw',
+      commands: ['time set night', 'give DaStoaz minecraft:diamond 12'],
+      timeoutMs: 2000,
+    });
+    assert.deepEqual(responses, ['ok:time set night', 'ok:give DaStoaz minecraft:diamond 12']);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('reassembles a response Minecraft split at its 4096-byte boundary', async () => {
+  // `help` on a modded server runs well past one packet. Vanilla emits full
+  // 4096-byte packets until a short one ends the response.
+  const head = 'a'.repeat(4096);
+  const tail = 'the-end';
+  const mock = await startStrictRcon({
+    password: 'pw',
+    respondTo: (cmd) => (cmd === 'help' ? [head, tail] : ['']),
+  });
+  try {
+    const responses = await sendRconCommands({
+      host: '127.0.0.1',
+      port: mock.port,
+      password: 'pw',
+      commands: ['help', 'list'],
+      timeoutMs: 3000,
+    });
+    assert.deepEqual(responses, [head + tail, '']);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('a response landing exactly on the boundary still completes', async () => {
+  // Nothing follows a final full-size packet, so only the grace window tells us
+  // the response is over. It must end, not hang until the overall timeout.
+  const exact = 'b'.repeat(4096);
+  const mock = await startStrictRcon({ password: 'pw', respondTo: () => [exact] });
+  try {
+    const responses = await sendRconCommands({
+      host: '127.0.0.1',
+      port: mock.port,
+      password: 'pw',
+      commands: ['help'],
+      timeoutMs: 3000,
+    });
+    assert.deepEqual(responses, [exact]);
+  } finally {
+    await mock.close();
+  }
+});

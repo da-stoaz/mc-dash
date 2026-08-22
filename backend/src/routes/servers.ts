@@ -18,6 +18,7 @@ import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
+import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands, runConsoleCommand } from '../services/consoleService';
 import { assertCanStart, capacityReport, committedMbFor, floorMbFor } from '../services/hostCapacityService';
 import { hibernationService } from '../services/hibernationService';
 import { toServerViews } from '../services/serverView';
@@ -966,6 +967,45 @@ router.get('/:id/logs', async (req, res) => {
   }
 });
 
+// --- Server console (RCON) -------------------------------------------------
+// What has been run through the console since the backend last started. Kept
+// so the tab opens with context instead of an empty box.
+router.get('/:id/console', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  res.json({ entries: consoleHistory(server.id) });
+});
+
+// The commands to offer for completion: the standard catalog plus anything this
+// server has shown it accepts, minus what it has said it doesn't have.
+router.get('/:id/console/commands', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  res.json({ commands: knownCommands(server.id) });
+});
+
+// Run a single Minecraft command (`give`, `tp`, `kill`, …) and return what the
+// console printed. Every failure mode is a UserFacingError from consoleService,
+// so the UI can say why rather than just "failed".
+router.post('/:id/console', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  try {
+    const entry = await runConsoleCommand(server, req.body?.command);
+    res.json(entry);
+  } catch (err) {
+    const apiErr = toApiError(err, { error: 'Command failed', status: 500 });
+    res.status(apiErr.status).json(apiErr.body);
+  }
+});
+
+router.delete('/:id/console', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  clearConsoleHistory(server.id);
+  res.json({ entries: [] });
+});
+
 router.get('/:id/metrics', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
@@ -1084,6 +1124,7 @@ router.delete('/:id', async (req, res) => {
 
   const removed = serverStore.delete(server.id);
   if (!removed) return notFound(res);
+  forgetServerConsole(server.id);
   res.json({ ok: true });
 });
 

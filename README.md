@@ -8,6 +8,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - Basic dashboard to list servers, view statuses, and manage uploads.
 - Live per-server CPU and RAM on the server list, plus host totals — what servers are actually using, not just what they're allowed to use.
 - Memory management: idle servers hand heap back to the OS, containers can't touch swap, and a start is refused when the host has no budget left (see below).
+- Server console: run Minecraft commands (`/give`, `/tp`, `/kill`, …) against a live server over RCON, with completion for what the server actually has and failures shown as failures (see below).
 
 ## Quick start
 1. Install dependencies:
@@ -33,6 +34,9 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - `GET /servers/:id/status` — inspect Docker container status.
 - `POST /servers/:id/{start|stop|restart}` — issues container actions (expects container already built/created). `start` and `restart` are refused with 409 `MEMORY_GUARANTEE_EXCEEDED` / `MEMORY_BURST_EXCEEDED` / `HOST_MEMORY_LOW` when the host has no room; send `{"force": true}` to override.
 - `GET /servers/:id/logs` — streams Docker logs.
+- `POST /servers/:id/console` — run one Minecraft command on the live server over RCON. Body `{"command": "give Alice minecraft:diamond 64"}`; a leading `/` is accepted and stripped. Returns `{ id, command, output, at, status, suggestion? }`, where `status` is `ok`, `unknown-command`, or `bad-arguments`. Refused with 409 `CONSOLE_SERVER_NOT_RUNNING` / `CONSOLE_RCON_DISABLED` / `CONSOLE_RCON_NOT_READY` (connected but the server is still booting), 400 `CONSOLE_COMMAND_UNKNOWN` when this server has already said it has no such command, or 502 `CONSOLE_RCON_FAILED` when it doesn't answer.
+- `GET /servers/:id/console` — recent console entries for this server; `DELETE` clears them.
+- `GET /servers/:id/console/commands` — the commands to offer for completion: the standard catalog plus anything this server has shown it accepts, minus what it has said it doesn't have. Each carries `args` (label, options, wantsPlayer, optional) derived from its usage, which drives per-argument completion.
 
 ## Server pack workflow
 - Create a server with the server pack zip attached.
@@ -157,6 +161,78 @@ reconnect is the only honest option — it is what
 > start gate and the memory bar — works immediately, but until a server is
 > rebuilt it will still hold its full heap while idle.
 
+## Server console
+
+The **Console** tab on a server's page runs Minecraft commands against the live
+server and shows what the console printed back — `/give`, `/tp`, `/kill`,
+`/gamemode`, `/time set day`, anything the server understands.
+
+It talks to the server over RCON, which `prepare` turns on for every server
+(`enable-rcon=true` with a random `rcon.password` in `server.properties`). The
+RCON port is published on loopback only and never leaves the host, so the
+console is reachable from MC Dash and nowhere else.
+
+Notes:
+- The prompt is live only while the server's status is **Running**. `Starting`
+  is not good enough: Docker's port proxy accepts an RCON connection on the
+  container's behalf long before Minecraft opens its own listener, so a command
+  sent during boot connects, gets dropped, and fails for a reason that has
+  nothing to do with the command. The status chip is the server's real status,
+  never a claim about the connection.
+- A hibernating server has to be started (or woken by a player) first; the
+  console says so rather than failing silently.
+- A leading `/` is optional — the console strips it, so commands can be pasted
+  straight out of the chat box.
+- ↑ / ↓ recall earlier commands. The scrollback is kept in memory on the
+  backend so it survives a page reload, and resets when MC Dash restarts. It is
+  a convenience, not an audit log.
+- `stop` works, and is reported as a shutdown rather than an error — but the
+  toolbar's Stop button is the better path, since it also releases the port and
+  updates the server's state immediately.
+
+
+### Only commands that work
+
+Completion runs the whole way through a command, not just its name. At the
+first token it lists commands by their full usage (`give <player> <item>
+[count]`), so what a command takes is visible before it is picked. Past that,
+each argument offers what it actually accepts: `gamemode` offers survival /
+creative / adventure / spectator, `<player>` and `<target>` offer whoever is
+online, and free-form slots like `<item>` offer nothing rather than guessing.
+The usage sits above the prompt throughout with the argument being typed
+picked out.
+
+Those values come from the usage string itself — `parseUsageArgs` reads
+`<a|b|c>` as an enumeration, a bare word as a literal, and `<player>` /
+`<target>` as slots to fill from who is online — so each command is described
+in exactly one place.
+
+Beyond completion, the console leans on the server itself rather than on a
+list we ship:
+
+- Whatever the server answers normally is remembered as a command that works,
+  which is how a modpack's own commands (`/ftbquests`, `/waystones`, …) end up
+  in the completion list without MC Dash knowing anything about them.
+- Whatever the server calls *unknown* is remembered too, and refused up front
+  the next time, with the closest real command offered as a suggestion.
+- A command that fails is shown as failed — red for one the server doesn't
+  have, amber for a real command given bad arguments — so a typo never looks
+  like it worked.
+
+The vanilla catalog in `commandCatalog.ts` only seeds completion and the
+"did you mean" suggestions. It is never used to refuse a command, because it
+cannot know what a modpack added.
+
+### RCON packet framing
+
+Minecraft's RCON server does one `read()` per packet and drops the connection
+unless the declared length matches that read exactly. So the client must never
+have two requests in flight: writing a second packet before the first is
+answered lets TCP coalesce them into one segment, and the server hangs up on
+the pair. `rconClient.ts` sends one command at a time for that reason, and
+`rconClient.test.ts` has a mock that reads the same strict way to keep it
+honest. Responses over 4096 bytes arrive split across packets and are
+reassembled; a short packet ends the response.
 ## Docker rootless vs root
 - Rootless Docker cannot bind ports <1024 and has stricter cgroup limits (swap limits often unavailable; CPU/memory enforcement depends on host kernel). Volume permissions can also differ.
 - Rootful Docker allows full cgroup limits and privileged ports. If you rely on tight resource caps or privileged ports, prefer rootful or test rootless carefully.
@@ -168,6 +244,7 @@ reconnect is the only honest option — it is what
 - Prepare/build pipeline: `backend/src/services/prepareService.ts`.
 - Docker actions: `backend/src/services/dockerService.ts`.
 - Memory management: `backend/src/services/jvmTuning.ts` (JVM flags), `memoryPlan.ts` (cgroup limits), `hostCapacityService.ts` (ledger + start gate).
+- Server console: `backend/src/services/consoleService.ts` (validation, learned commands, RCON round-trip), `commandCatalog.ts` (completion catalog + output classification), `rconClient.ts` (protocol), `frontend/src/components/server-details/ConsoleCard.tsx` (UI).
 - Frontend UI: `frontend/src/app/page.tsx`.
 
 ## Next steps
