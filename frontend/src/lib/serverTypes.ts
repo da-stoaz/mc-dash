@@ -12,6 +12,13 @@ export type Difficulty = 'peaceful' | 'easy' | 'normal' | 'hard';
 
 export const DIFFICULTIES: Difficulty[] = ['peaceful', 'easy', 'normal', 'hard'];
 
+// Statuses where a server process actually exists. A config change that can't
+// be applied live only needs a restart in these; anywhere else the next start
+// picks it up on its own.
+export function hasLiveProcess(status?: ServerStatus): boolean {
+  return status === 'running' || status === 'starting' || status === 'restarting';
+}
+
 export const difficultyLabel: Record<Difficulty, string> = {
   peaceful: 'Peaceful',
   easy: 'Easy',

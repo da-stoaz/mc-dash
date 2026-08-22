@@ -241,7 +241,11 @@ export class HibernationService {
     try {
       logger.info({ serverId, trigger }, 'Waking hibernated server');
       await this.releasePort(serverId);
-      serverStore.update(serverId, { status: 'starting', hibernated: false });
+      // Clear restartRequired for the same reason the manual start route does:
+      // the process coming up reads the current files, so whatever was pending
+      // is applied by this start. Without it, a server that slept with a config
+      // change pending would wake up still claiming it needed a restart.
+      serverStore.update(serverId, { status: 'starting', hibernated: false, restartRequired: false });
       const containerId = await dockerService.start(server);
       serverStore.update(serverId, { status: 'starting', containerId });
     } catch (err) {

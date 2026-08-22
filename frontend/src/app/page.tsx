@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
 import { LogOut, Plus, Upload } from 'lucide-react';
-import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
+import { emptyForm, FormState, hasLiveProcess, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { FilterKey, StatusBar } from '../components/StatusBar';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 import { ServerTable } from '../components/ServerTable';
@@ -260,6 +260,8 @@ export default function Page() {
       setShowEdit(null);
       if (updated?.restartRequired) {
         notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else if (!hasLiveProcess(updated?.status)) {
+        notify('Saved', 'Applied the next time this server starts.', 'success');
       } else {
         notify('Saved', 'Changes applied live — no restart needed.', 'success');
       }
