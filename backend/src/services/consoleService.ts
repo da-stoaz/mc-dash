@@ -195,11 +195,18 @@ export async function runConsoleCommand(server: ServerRecord, raw: unknown): Pro
       output = 'Server is shutting down.';
     } else {
       logger.warn({ err, serverId: server.id, command }, 'Console command failed');
+      // Docker's port proxy accepts the connection on the container's behalf
+      // well before Minecraft opens its own RCON listener, so a boot in
+      // progress looks like a connection that opens and immediately closes.
+      // Saying that beats echoing a socket error nobody can act on.
+      const stillBooting = isConnectionClosed(err);
       throw new UserFacingError({
         error: 'Command failed',
-        code: 'CONSOLE_RCON_FAILED',
-        status: 502,
-        reason: (err as Error)?.message ?? 'The server did not answer.',
+        code: stillBooting ? 'CONSOLE_RCON_NOT_READY' : 'CONSOLE_RCON_FAILED',
+        status: stillBooting ? 409 : 502,
+        reason: stillBooting
+          ? 'The server accepted the connection and dropped it — it is most likely still starting up. Try again once it is running.'
+          : (err as Error)?.message ?? 'The server did not answer.',
       });
     }
   }

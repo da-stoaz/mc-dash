@@ -1,16 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, CardBody, CardHeader, Chip, Input, Tooltip } from '@heroui/react';
-import { CornerDownLeft, Terminal, Trash2 } from 'lucide-react';
+import { Button, Card, CardBody, CardHeader, Chip } from '@heroui/react';
+import { CornerDownLeft, Trash2 } from 'lucide-react';
 import { API_BASE, apiFetch } from '../../lib/api';
 import { getApiErrorMessage } from '../../lib/apiErrors';
-import { CatalogCommand, ConsoleEntry, ServerStatus } from '../../lib/serverTypes';
+import { CatalogCommand, ConsoleEntry, ServerStatus, statusColor, statusLabel } from '../../lib/serverTypes';
 
 type ConsoleCardProps = {
   serverId: string;
   status: ServerStatus;
-  /** Names of players currently online, offered as one-click insertions. */
+  /** Who is online, offered where a command wants a player name. */
   playerNames?: string[];
 };
 
@@ -21,20 +21,18 @@ type ConsoleLine =
   | { kind: 'entry'; entry: ConsoleEntry }
   | { kind: 'error'; id: string; command: string; message: string; at: string };
 
-// The commands to surface as one-click chips. Pulled from the server's catalog
-// so the usage hint matches what completion would insert.
-const FAVOURITES = ['list', 'give', 'tp', 'kill', 'gamemode', 'time', 'weather', 'op', 'say', 'save-all'];
+type Completion = { value: string; hint: string };
 
-// The states where RCON can plausibly answer. 'starting' is included on
-// purpose: it becomes reachable partway through boot, and the backend gives a
-// clear "still booting" message if it isn't yet.
-const LIVE_STATES: ServerStatus[] = ['running', 'starting', 'restarting'];
-
-const MAX_SUGGESTIONS = 6;
+const MAX_COMPLETIONS = 7;
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString();
+}
+
+/** Argument slots written `<player>` / `<target>` are the ones we can fill. */
+function wantsPlayer(placeholder: string | undefined): boolean {
+  return Boolean(placeholder && /player|target/i.test(placeholder));
 }
 
 export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardProps) {
@@ -43,17 +41,18 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
   const [command, setCommand] = useState('');
   const [sending, setSending] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // Commands typed in this tab, newest last, walked with the arrow keys.
+  const [focused, setFocused] = useState(false);
+  // Commands sent from this tab, newest last, walked with the arrow keys.
   const [recall, setRecall] = useState<string[]>([]);
   const [recallIndex, setRecallIndex] = useState<number | null>(null);
-  // Completion is offered while typing and dismissed once something is picked,
-  // so accepting a suggestion doesn't immediately re-open the list.
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestIndex, setSuggestIndex] = useState(0);
+  // Completions are offered while typing and dismissed once one is taken, so
+  // accepting doesn't immediately re-open the list.
+  const [listOpen, setListOpen] = useState(false);
+  const [listIndex, setListIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const live = LIVE_STATES.includes(status);
+  const running = status === 'running';
 
   const load = useCallback(async () => {
     try {
@@ -85,36 +84,55 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
-  const favourites = useMemo(
-    () =>
-      FAVOURITES.map((name) => catalog.find((entry) => entry.name === name)).filter(
-        (entry): entry is CatalogCommand => Boolean(entry)
-      ),
-    [catalog]
+  // Where the caret is in the command: token 0 is the command name, the rest
+  // are its arguments. A trailing space means the next slot has been reached.
+  const tokens = useMemo(
+    () => (command.startsWith('/') ? command.slice(1) : command).split(' '),
+    [command]
   );
+  const slot = tokens.length - 1;
+  const entry = useMemo(
+    () => catalog.find((item) => item.name === tokens[0]?.toLowerCase()),
+    [catalog, tokens]
+  );
+  // The usage split into its argument placeholders, so the one being typed can
+  // be picked out and shown above the prompt.
+  const usageParts = useMemo(() => (entry ? entry.usage.split(' ') : []), [entry]);
 
-  // Only complete while the command name is still being typed — once there's a
-  // space the user is on to arguments, which we can't complete.
-  const suggestions = useMemo(() => {
-    const typed = command.trimStart();
-    if (!suggestOpen || typed.includes(' ')) return [];
-    const prefix = (typed.startsWith('/') ? typed.slice(1) : typed).toLowerCase();
-    if (!prefix) return [];
-    const starts = catalog.filter((entry) => entry.name.startsWith(prefix));
-    const contains = catalog.filter((entry) => !entry.name.startsWith(prefix) && entry.name.includes(prefix));
-    return [...starts, ...contains].slice(0, MAX_SUGGESTIONS);
-  }, [catalog, command, suggestOpen]);
+  const completions = useMemo<Completion[]>(() => {
+    if (!listOpen) return [];
+    const prefix = (tokens[slot] ?? '').toLowerCase();
+
+    if (slot === 0) {
+      const pool = prefix
+        ? [
+            ...catalog.filter((item) => item.name.startsWith(prefix)),
+            ...catalog.filter((item) => !item.name.startsWith(prefix) && item.name.includes(prefix)),
+          ]
+        : catalog;
+      return pool.slice(0, MAX_COMPLETIONS).map((item) => ({ value: item.name, hint: item.summary }));
+    }
+
+    if (wantsPlayer(usageParts[slot])) {
+      return playerNames
+        .filter((name) => name.toLowerCase().startsWith(prefix))
+        .slice(0, MAX_COMPLETIONS)
+        .map((name) => ({ value: name, hint: 'online now' }));
+    }
+
+    return [];
+  }, [catalog, listOpen, playerNames, slot, tokens, usageParts]);
 
   useEffect(() => {
-    setSuggestIndex(0);
-  }, [suggestions.length]);
+    setListIndex(0);
+  }, [completions.length]);
 
   const send = async () => {
     const text = command.trim();
     if (!text || sending) return;
 
     setSending(true);
-    setSuggestOpen(false);
+    setListOpen(false);
     setRecall((prev) => (prev[prev.length - 1] === text ? prev : [...prev, text]));
     setRecallIndex(null);
     setCommand('');
@@ -126,10 +144,10 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
         body: JSON.stringify({ command: text }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Command failed'));
-      const entry = (await res.json()) as ConsoleEntry;
-      setLines((prev) => [...prev, { kind: 'entry', entry }]);
+      const result = (await res.json()) as ConsoleEntry;
+      setLines((prev) => [...prev, { kind: 'entry', entry: result }]);
       // A command the server didn't recognise changes what it will offer next.
-      if (entry.status === 'unknown-command') load();
+      if (result.status === 'unknown-command') load();
     } catch (err) {
       setLines((prev) => [
         ...prev,
@@ -147,41 +165,39 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     }
   };
 
-  const acceptSuggestion = (entry: CatalogCommand) => {
-    // Insert the whole usage as a template: the placeholders show what the
-    // command needs, and it never runs until the user replaces them and hits
-    // Enter a second time.
-    setCommand(entry.usage);
-    setSuggestOpen(false);
+  /**
+   * Swap the token being typed for the chosen one and move to the next slot.
+   * Only the name goes in, never the placeholders — the usage line above the
+   * prompt shows what comes next, so nothing runnable is ever a literal
+   * `<target>`.
+   */
+  const accept = (value: string) => {
+    const next = [...tokens];
+    next[slot] = value;
+    setCommand(`${next.join(' ')} `);
+    setListOpen(false);
     setRecallIndex(null);
     inputRef.current?.focus();
   };
 
-  const handleValueChange = (value: string) => {
-    setCommand(value);
-    setSuggestOpen(true);
-  };
-
-  // While the completion list is open the arrows move through it; otherwise
-  // they recall earlier commands, the way a shell behaves.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const open = suggestions.length > 0;
+    const open = completions.length > 0;
 
     if (event.key === 'Escape' && open) {
       event.preventDefault();
-      setSuggestOpen(false);
+      setListOpen(false);
       return;
     }
 
     if (event.key === 'Tab' && open) {
       event.preventDefault();
-      acceptSuggestion(suggestions[suggestIndex]);
+      accept(completions[listIndex].value);
       return;
     }
 
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (open) acceptSuggestion(suggestions[suggestIndex]);
+      if (open) accept(completions[listIndex].value);
       else send();
       return;
     }
@@ -189,9 +205,10 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
     event.preventDefault();
 
+    // The list owns the arrows while it is open; otherwise they walk history.
     if (open) {
       const delta = event.key === 'ArrowDown' ? 1 : -1;
-      setSuggestIndex((prev) => (prev + delta + suggestions.length) % suggestions.length);
+      setListIndex((prev) => (prev + delta + completions.length) % completions.length);
       return;
     }
 
@@ -201,7 +218,6 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
       const next = recallIndex === null ? recall.length - 1 : Math.max(0, recallIndex - 1);
       setRecallIndex(next);
       setCommand(recall[next]);
-      setSuggestOpen(false);
       return;
     }
 
@@ -216,13 +232,6 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     setCommand(recall[next]);
   };
 
-  const insert = (text: string) => {
-    setCommand(text);
-    setSuggestOpen(false);
-    setRecallIndex(null);
-    inputRef.current?.focus();
-  };
-
   const clear = async () => {
     setLines([]);
     try {
@@ -233,15 +242,18 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     }
   };
 
+  const placeholder = running
+    ? 'Type a command'
+    : status === 'starting' || status === 'restarting'
+      ? 'Waiting for the server to finish starting'
+      : 'Start the server to run commands';
+
   return (
     <Card className="bg-white/5 border border-white/10">
-      <CardHeader className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2 text-lg font-semibold">
-          <Terminal size={18} />
-          Console
-        </div>
-        <Chip size="sm" variant="flat" color={live ? 'success' : 'default'}>
-          {live ? 'Connected via RCON' : 'Server not running'}
+      <CardHeader className="flex items-center gap-2">
+        <span className="text-lg font-semibold">Console</span>
+        <Chip color={statusColor[status]} variant="flat" size="sm">
+          {statusLabel[status]}
         </Chip>
         {loadError && (
           <Chip size="sm" variant="flat" color="danger">
@@ -250,7 +262,7 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
         )}
         <Button
           size="sm"
-          variant="flat"
+          variant="light"
           className="ml-auto"
           startContent={<Trash2 size={14} />}
           onPress={clear}
@@ -260,17 +272,12 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
         </Button>
       </CardHeader>
 
-      <CardBody className="space-y-3">
-        <div
-          ref={scrollRef}
-          className="h-[45dvh] sm:h-[360px] rounded-lg border border-white/10 bg-black/30 px-4 py-3 font-mono text-xs leading-relaxed overflow-y-auto space-y-2"
-        >
-          {lines.length === 0 ? (
-            <div className="muted">
-              No commands yet. Start typing to see what this server accepts, or pick one below.
-            </div>
-          ) : (
-            lines.map((line) => {
+      <CardBody>
+        {/* One surface: scrollback and prompt share a background and a border,
+            so it reads as a terminal rather than a log box with a form under it. */}
+        <div className="flex h-[60dvh] sm:h-[460px] flex-col rounded-lg border border-white/10 bg-black/40 font-mono text-xs">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2 leading-relaxed">
+            {lines.map((line) => {
               const at = formatTime(line.kind === 'entry' ? line.entry.at : line.at);
               const text = line.kind === 'entry' ? line.entry.command : line.command;
               const failed = line.kind === 'error' || line.entry.status !== 'ok';
@@ -294,106 +301,97 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
                             : 'text-white/70'
                       }`}
                     >
-                      {line.entry.output || <span className="text-white/30">(no output)</span>}
+                      {line.entry.output || <span className="text-white/30">no output</span>}
                     </div>
                   )}
                   {suggestion && (
                     <button
                       type="button"
                       className="pl-4 text-primary-300 hover:underline"
-                      onClick={() => insert(suggestion)}
+                      onClick={() => setCommand(`${suggestion} `)}
                     >
                       Did you mean {suggestion}?
                     </button>
                   )}
                 </div>
               );
-            })
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          {favourites.map((entry) => (
-            <Tooltip key={entry.name} content={entry.summary} size="sm">
-              <Chip size="sm" variant="flat" className="cursor-pointer" onClick={() => insert(entry.usage)}>
-                {entry.name}
-              </Chip>
-            </Tooltip>
-          ))}
-        </div>
-
-        {playerNames.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs muted">Online:</span>
-            {playerNames.map((name) => (
-              <Tooltip key={name} content="Append to the command" size="sm">
-                <Chip
-                  size="sm"
-                  variant="flat"
-                  color="success"
-                  className="cursor-pointer"
-                  onClick={() => insert(`${command.trimEnd()} ${name}`.trim())}
-                >
-                  {name}
-                </Chip>
-              </Tooltip>
-            ))}
+            })}
           </div>
-        )}
 
-        <div className="relative">
-          {suggestions.length > 0 && (
-            <div className="absolute bottom-full mb-1 w-full z-20 rounded-lg border border-white/10 bg-neutral-900/95 backdrop-blur shadow-xl overflow-hidden">
-              {suggestions.map((entry, index) => (
-                <button
-                  key={entry.name}
-                  type="button"
-                  // Mouse-down rather than click: the input must not lose focus
-                  // before the selection is applied.
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    acceptSuggestion(entry);
-                  }}
-                  onMouseEnter={() => setSuggestIndex(index)}
-                  className={`w-full text-left px-3 py-1.5 ${index === suggestIndex ? 'bg-white/10' : ''}`}
-                >
-                  <div className="font-mono text-xs">{entry.usage}</div>
-                  <div className="text-[11px] muted">{entry.summary}</div>
-                </button>
-              ))}
+          <div className="relative border-t border-white/10">
+            {completions.length > 0 && (
+              <div className="absolute bottom-full inset-x-0 mb-px max-h-64 overflow-y-auto rounded-t-lg border-t border-x border-white/10 bg-neutral-900 shadow-2xl">
+                {completions.map((completion, index) => (
+                  <button
+                    key={completion.value}
+                    type="button"
+                    // Mouse-down, not click: the input must not lose focus
+                    // before the selection is applied.
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      accept(completion.value);
+                    }}
+                    onMouseEnter={() => setListIndex(index)}
+                    className={`flex w-full items-baseline gap-3 px-4 py-1.5 text-left ${
+                      index === listIndex ? 'bg-white/10' : ''
+                    }`}
+                  >
+                    <span className="text-white/90">{completion.value}</span>
+                    <span className="truncate text-[11px] text-white/40">{completion.hint}</span>
+                    {index === listIndex && <span className="ml-auto text-[11px] text-white/30">tab</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* The command's shape, with the argument being typed picked out. */}
+            {entry && slot > 0 && (
+              <div className="px-4 pt-2 text-[11px] text-white/30">
+                {usageParts.map((part, index) => (
+                  <span key={`${part}-${index}`} className={index === slot ? 'text-white/80' : undefined}>
+                    {part}{' '}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 px-4 py-2.5">
+              <span className={running ? 'text-primary-300' : 'text-white/20'}>&gt;</span>
+              <input
+                ref={inputRef}
+                value={command}
+                onChange={(event) => {
+                  setCommand(event.target.value);
+                  setListOpen(true);
+                }}
+                onKeyDown={handleKeyDown}
+                onFocus={() => {
+                  setFocused(true);
+                  setListOpen(true);
+                }}
+                onBlur={() => {
+                  setFocused(false);
+                  setListOpen(false);
+                }}
+                placeholder={placeholder}
+                disabled={!running || sending}
+                autoComplete="off"
+                spellCheck="false"
+                className="flex-1 bg-transparent text-white placeholder:text-white/25 outline-none disabled:cursor-not-allowed"
+              />
+              <Button
+                size="sm"
+                variant="light"
+                isIconOnly
+                aria-label="Run command"
+                onPress={send}
+                isLoading={sending}
+                isDisabled={!running || !command.trim()}
+              >
+                <CornerDownLeft size={14} className={focused && command.trim() ? 'text-primary-300' : undefined} />
+              </Button>
             </div>
-          )}
-
-          <div className="flex gap-2">
-            <Input
-              ref={inputRef}
-              size="sm"
-              value={command}
-              onValueChange={handleValueChange}
-              onKeyDown={handleKeyDown}
-              placeholder={live ? 'give Alice minecraft:diamond 64' : 'Start the server to run commands'}
-              isDisabled={!live || sending}
-              autoComplete="off"
-              spellCheck="false"
-              classNames={{ input: 'font-mono' }}
-              startContent={<span className="text-white/30 font-mono text-sm">&gt;</span>}
-            />
-            <Button
-              size="sm"
-              color="primary"
-              endContent={<CornerDownLeft size={14} />}
-              onPress={send}
-              isLoading={sending}
-              isDisabled={!live || !command.trim()}
-            >
-              Run
-            </Button>
           </div>
-        </div>
-
-        <div className="text-xs muted">
-          Runs against the live server over RCON. A leading <code>/</code> is optional; ↑ and ↓ recall earlier
-          commands, and Tab accepts a completion.
         </div>
       </CardBody>
     </Card>

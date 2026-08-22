@@ -34,7 +34,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - `GET /servers/:id/status` — inspect Docker container status.
 - `POST /servers/:id/{start|stop|restart}` — issues container actions (expects container already built/created). `start` and `restart` are refused with 409 `MEMORY_GUARANTEE_EXCEEDED` / `MEMORY_BURST_EXCEEDED` / `HOST_MEMORY_LOW` when the host has no room; send `{"force": true}` to override.
 - `GET /servers/:id/logs` — streams Docker logs.
-- `POST /servers/:id/console` — run one Minecraft command on the live server over RCON. Body `{"command": "give Alice minecraft:diamond 64"}`; a leading `/` is accepted and stripped. Returns `{ id, command, output, at, status, suggestion? }`, where `status` is `ok`, `unknown-command`, or `bad-arguments`. Refused with 409 `CONSOLE_SERVER_NOT_RUNNING` / `CONSOLE_RCON_DISABLED`, 400 `CONSOLE_COMMAND_UNKNOWN` when this server has already said it has no such command, or 502 `CONSOLE_RCON_FAILED` when it doesn't answer.
+- `POST /servers/:id/console` — run one Minecraft command on the live server over RCON. Body `{"command": "give Alice minecraft:diamond 64"}`; a leading `/` is accepted and stripped. Returns `{ id, command, output, at, status, suggestion? }`, where `status` is `ok`, `unknown-command`, or `bad-arguments`. Refused with 409 `CONSOLE_SERVER_NOT_RUNNING` / `CONSOLE_RCON_DISABLED` / `CONSOLE_RCON_NOT_READY` (connected but the server is still booting), 400 `CONSOLE_COMMAND_UNKNOWN` when this server has already said it has no such command, or 502 `CONSOLE_RCON_FAILED` when it doesn't answer.
 - `GET /servers/:id/console` — recent console entries for this server; `DELETE` clears them.
 - `GET /servers/:id/console/commands` — the commands to offer for completion: the standard catalog plus anything this server has shown it accepts, minus what it has said it doesn't have.
 
@@ -173,8 +173,14 @@ RCON port is published on loopback only and never leaves the host, so the
 console is reachable from MC Dash and nowhere else.
 
 Notes:
-- The server must be running. A hibernating server has to be started (or woken
-  by a player) first; the console says so rather than failing silently.
+- The prompt is live only while the server's status is **Running**. `Starting`
+  is not good enough: Docker's port proxy accepts an RCON connection on the
+  container's behalf long before Minecraft opens its own listener, so a command
+  sent during boot connects, gets dropped, and fails for a reason that has
+  nothing to do with the command. The status chip is the server's real status,
+  never a claim about the connection.
+- A hibernating server has to be started (or woken by a player) first; the
+  console says so rather than failing silently.
 - A leading `/` is optional — the console strips it, so commands can be pasted
   straight out of the chat box.
 - ↑ / ↓ recall earlier commands. The scrollback is kept in memory on the
