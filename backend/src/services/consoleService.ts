@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { dockerService } from './dockerService';
 import { sendRconCommands } from './rconClient';
 import { locateWorkingDir, readServerProperties } from './prepareService';
-import { classifyOutput, COMMAND_CATALOG, suggestCommand, VANILLA_COMMANDS, verbOf } from './commandCatalog';
+import { CatalogCommand, classifyOutput, COMMAND_CATALOG, suggestCommand, VANILLA_COMMANDS, verbOf } from './commandCatalog';
 import { UserFacingError } from '../apiErrors';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
@@ -235,14 +235,16 @@ export async function runConsoleCommand(server: ServerRecord, raw: unknown): Pro
  * this server has shown it accepts (a modpack's own commands), minus the ones
  * it has said it doesn't have.
  */
-export function knownCommands(serverId: string): { name: string; usage: string; summary: string }[] {
+export function knownCommands(serverId: string): CatalogCommand[] {
   const known = knowledgeFor(serverId);
   const listed = COMMAND_CATALOG.filter((entry) => !known.missing.has(entry.name));
 
-  const extras = [...known.works]
+  // We know a modded command's name and nothing about its arguments — the
+  // server never told us, and guessing would be worse than saying nothing.
+  const extras: CatalogCommand[] = [...known.works]
     .filter((name) => !VANILLA_COMMANDS.has(name))
     .sort()
-    .map((name) => ({ name, usage: name, summary: 'Added by this server’s mods' }));
+    .map((name) => ({ name, usage: name, summary: 'Added by this server’s mods', args: [] }));
 
   return [...listed, ...extras];
 }

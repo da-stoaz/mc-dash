@@ -21,18 +21,13 @@ type ConsoleLine =
   | { kind: 'entry'; entry: ConsoleEntry }
   | { kind: 'error'; id: string; command: string; message: string; at: string };
 
-type Completion = { value: string; hint: string };
+type Completion = { value: string; label: string; hint: string };
 
 const MAX_COMPLETIONS = 7;
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString();
-}
-
-/** Argument slots written `<player>` / `<target>` are the ones we can fill. */
-function wantsPlayer(placeholder: string | undefined): boolean {
-  return Boolean(placeholder && /player|target/i.test(placeholder));
 }
 
 export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardProps) {
@@ -103,6 +98,8 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     if (!listOpen) return [];
     const prefix = (tokens[slot] ?? '').toLowerCase();
 
+    // Still on the command name: offer commands, labelled with the whole usage
+    // so the arguments each one takes are visible before it is picked.
     if (slot === 0) {
       const pool = prefix
         ? [
@@ -110,18 +107,28 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
             ...catalog.filter((item) => !item.name.startsWith(prefix) && item.name.includes(prefix)),
           ]
         : catalog;
-      return pool.slice(0, MAX_COMPLETIONS).map((item) => ({ value: item.name, hint: item.summary }));
+      return pool
+        .slice(0, MAX_COMPLETIONS)
+        .map((item) => ({ value: item.name, label: item.usage, hint: item.summary }));
     }
 
-    if (wantsPlayer(usageParts[slot])) {
+    // Past the name: the argument in this slot decides what to offer. The args
+    // list lines up with the usage, so slot 1 is the first argument.
+    const arg = entry?.args[slot - 1];
+    if (!arg) return [];
+
+    if (arg.wantsPlayer) {
       return playerNames
         .filter((name) => name.toLowerCase().startsWith(prefix))
         .slice(0, MAX_COMPLETIONS)
-        .map((name) => ({ value: name, hint: 'online now' }));
+        .map((name) => ({ value: name, label: name, hint: 'online now' }));
     }
 
-    return [];
-  }, [catalog, listOpen, playerNames, slot, tokens, usageParts]);
+    return arg.options
+      .filter((option) => option.toLowerCase().startsWith(prefix))
+      .slice(0, MAX_COMPLETIONS)
+      .map((option) => ({ value: option, label: option, hint: arg.optional ? 'optional' : '' }));
+  }, [catalog, entry, listOpen, playerNames, slot, tokens]);
 
   useEffect(() => {
     setListIndex(0);
@@ -161,7 +168,13 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
       ]);
     } finally {
       setSending(false);
+      // Land back on the prompt, ready for the next command. The input is never
+      // disabled while sending precisely so this can work — focus() is a no-op
+      // on a disabled element, and the browser has already blurred it by then.
       inputRef.current?.focus();
+      // Refocusing must not pop the whole command list open over the output
+      // that just arrived; this runs after the focus handler, so it wins.
+      setListOpen(false);
     }
   };
 
@@ -175,7 +188,9 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
     const next = [...tokens];
     next[slot] = value;
     setCommand(`${next.join(' ')} `);
-    setListOpen(false);
+    // Stay open: the caret has moved to the next argument, so the list now
+    // shows that one's values (and closes itself when it has none to show).
+    setListOpen(true);
     setRecallIndex(null);
     inputRef.current?.focus();
   };
@@ -336,9 +351,11 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
                       index === listIndex ? 'bg-white/10' : ''
                     }`}
                   >
-                    <span className="text-white/90">{completion.value}</span>
-                    <span className="truncate text-[11px] text-white/40">{completion.hint}</span>
-                    {index === listIndex && <span className="ml-auto text-[11px] text-white/30">tab</span>}
+                    <span className="shrink-0 text-white/90">{completion.label}</span>
+                    {completion.hint && (
+                      <span className="truncate text-[11px] text-white/40">{completion.hint}</span>
+                    )}
+                    {index === listIndex && <span className="ml-auto shrink-0 text-[11px] text-white/30">tab</span>}
                   </button>
                 ))}
               </div>
@@ -374,7 +391,7 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
                   setListOpen(false);
                 }}
                 placeholder={placeholder}
-                disabled={!running || sending}
+                disabled={!running}
                 autoComplete="off"
                 spellCheck="false"
                 className="flex-1 bg-transparent text-white placeholder:text-white/25 outline-none disabled:cursor-not-allowed"

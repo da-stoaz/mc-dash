@@ -120,12 +120,24 @@ export type ConsoleEntry = {
   suggestion?: string;
 };
 
+// One argument slot of a command, in the order the command takes them.
+export type CommandArg = {
+  /** As written in the usage, e.g. `<player>`, `[count]`, `set`. */
+  label: string;
+  /** Values worth offering. Empty when the argument is free-form. */
+  options: string[];
+  /** Fill this one from whoever is online rather than a fixed list. */
+  wantsPlayer: boolean;
+  optional: boolean;
+};
+
 // A command the console offers for completion. Served per server, so a
 // modpack's own commands appear once the server has shown it accepts them.
 export type CatalogCommand = {
   name: string;
   usage: string;
   summary: string;
+  args: CommandArg[];
 };
 
 export type FormState = {

@@ -10,21 +10,80 @@
  * and judged by the server's answer (see consoleService).
  */
 
+export type CommandArg = {
+  /** As written in the usage, e.g. `<player>`, `[count]`, `set`. */
+  label: string;
+  /** Values worth offering. Empty when the argument is free-form. */
+  options: string[];
+  /** Fill this one from whoever is online rather than a fixed list. */
+  wantsPlayer: boolean;
+  optional: boolean;
+};
+
 export type CatalogCommand = {
   name: string;
   usage: string;
   summary: string;
+  args: CommandArg[];
 };
+
+/** A usage entry before its arguments have been worked out. */
+type CatalogSeed = Omit<CatalogCommand, 'args'>;
+
+/**
+ * Read a command's arguments off its usage line, so the usage string stays the
+ * single place each command is described.
+ *
+ * `<a|b|c>` and `(a|b|c)` enumerate the values an argument accepts; a bare word
+ * is a literal that has to be typed as-is (`time set …`); `<player>` and
+ * `<target>` are filled from who is online; anything else is free-form.
+ */
+export function parseUsageArgs(usage: string): CommandArg[] {
+  const tokens = usage.trim().split(/\s+/).slice(1);
+
+  return tokens
+    .map((token) => {
+      // Kept rather than dropped so an argument's position in this list always
+      // matches its position in the usage line the UI highlights.
+      if (token === '…' || token === '...') {
+        return { label: token, options: [], wantsPlayer: false, optional: true };
+      }
+
+      const optional = token.startsWith('[');
+      const wrapped = /^[[<(].*[\]>)]$/.test(token);
+      const inner = wrapped ? token.slice(1, -1) : token;
+
+      if (inner.includes('|')) {
+        return {
+          label: token,
+          // An ellipsis inside a group stands for "and more", not a value.
+          options: inner
+            .split('|')
+            .map((option) => option.trim())
+            .filter((option) => option && option !== '…' && option !== '...'),
+          wantsPlayer: false,
+          optional,
+        };
+      }
+
+      // Unwrapped words are literal parts of the command, not placeholders.
+      if (!wrapped) {
+        return { label: token, options: [token], wantsPlayer: false, optional };
+      }
+
+      return { label: token, options: [], wantsPlayer: /player|target/i.test(inner), optional };
+    });
+}
 
 // The commands worth completing: the ones an operator actually reaches for,
 // with the argument order spelled out so the shape is right on the first try.
-export const COMMAND_CATALOG: CatalogCommand[] = [
+const CATALOG_SEEDS: CatalogSeed[] = [
   { name: 'give', usage: 'give <player> <item> [count]', summary: 'Put an item in a player’s inventory' },
   { name: 'tp', usage: 'tp <player> <x> <y> <z>', summary: 'Teleport to coordinates or another player' },
   { name: 'teleport', usage: 'teleport <target> <destination>', summary: 'Teleport an entity or player' },
   { name: 'kill', usage: 'kill <target>', summary: 'Kill players or entities' },
   { name: 'gamemode', usage: 'gamemode <survival|creative|adventure|spectator> [player]', summary: 'Change a player’s game mode' },
-  { name: 'defaultgamemode', usage: 'defaultgamemode <mode>', summary: 'Game mode for players joining the first time' },
+  { name: 'defaultgamemode', usage: 'defaultgamemode <survival|creative|adventure|spectator>', summary: 'Game mode for players joining the first time' },
   { name: 'time', usage: 'time set <day|night|noon|midnight>', summary: 'Set or add to the world time' },
   { name: 'weather', usage: 'weather <clear|rain|thunder> [duration]', summary: 'Change the weather' },
   { name: 'difficulty', usage: 'difficulty <peaceful|easy|normal|hard>', summary: 'Set the world difficulty' },
@@ -79,6 +138,12 @@ export const COMMAND_CATALOG: CatalogCommand[] = [
   { name: 'setidletimeout', usage: 'setidletimeout <minutes>', summary: 'Kick players after idling' },
   { name: 'help', usage: 'help [command]', summary: 'List the commands this server has' },
 ];
+
+// The catalog proper: each entry with its arguments worked out from its usage.
+export const COMMAND_CATALOG: CatalogCommand[] = CATALOG_SEEDS.map((seed) => ({
+  ...seed,
+  args: parseUsageArgs(seed.usage),
+}));
 
 // Every vanilla command name, including the ones not worth completing. Used
 // only to answer "is this a real command?", never to refuse one outright.

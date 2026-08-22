@@ -36,7 +36,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - `GET /servers/:id/logs` — streams Docker logs.
 - `POST /servers/:id/console` — run one Minecraft command on the live server over RCON. Body `{"command": "give Alice minecraft:diamond 64"}`; a leading `/` is accepted and stripped. Returns `{ id, command, output, at, status, suggestion? }`, where `status` is `ok`, `unknown-command`, or `bad-arguments`. Refused with 409 `CONSOLE_SERVER_NOT_RUNNING` / `CONSOLE_RCON_DISABLED` / `CONSOLE_RCON_NOT_READY` (connected but the server is still booting), 400 `CONSOLE_COMMAND_UNKNOWN` when this server has already said it has no such command, or 502 `CONSOLE_RCON_FAILED` when it doesn't answer.
 - `GET /servers/:id/console` — recent console entries for this server; `DELETE` clears them.
-- `GET /servers/:id/console/commands` — the commands to offer for completion: the standard catalog plus anything this server has shown it accepts, minus what it has said it doesn't have.
+- `GET /servers/:id/console/commands` — the commands to offer for completion: the standard catalog plus anything this server has shown it accepts, minus what it has said it doesn't have. Each carries `args` (label, options, wantsPlayer, optional) derived from its usage, which drives per-argument completion.
 
 ## Server pack workflow
 - Create a server with the server pack zip attached.
@@ -193,9 +193,22 @@ Notes:
 
 ### Only commands that work
 
-Typing a command name offers completions with their argument shape, so most
-commands are picked rather than typed. Beyond that, the console leans on the
-server itself rather than on a list we ship:
+Completion runs the whole way through a command, not just its name. At the
+first token it lists commands by their full usage (`give <player> <item>
+[count]`), so what a command takes is visible before it is picked. Past that,
+each argument offers what it actually accepts: `gamemode` offers survival /
+creative / adventure / spectator, `<player>` and `<target>` offer whoever is
+online, and free-form slots like `<item>` offer nothing rather than guessing.
+The usage sits above the prompt throughout with the argument being typed
+picked out.
+
+Those values come from the usage string itself — `parseUsageArgs` reads
+`<a|b|c>` as an enumeration, a bare word as a literal, and `<player>` /
+`<target>` as slots to fill from who is online — so each command is described
+in exactly one place.
+
+Beyond completion, the console leans on the server itself rather than on a
+list we ship:
 
 - Whatever the server answers normally is remembered as a command that works,
   which is how a modpack's own commands (`/ftbquests`, `/waystones`, …) end up
