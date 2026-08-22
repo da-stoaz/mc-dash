@@ -81,12 +81,17 @@ function ensureStagingDir(): void {
 // under any proxy's body limit.
 const TARGET_CHUNK_COUNT = 200;
 
-export function chunkSizeFor(size: number): number {
-  const wanted = Math.ceil(size / TARGET_CHUNK_COUNT);
+export function chunkSizeFor(fileBytes: number): number {
+  const wanted = Math.ceil(fileBytes / TARGET_CHUNK_COUNT);
   return Math.min(config.uploadChunkMaxBytes, Math.max(config.uploadChunkBytes, wanted));
 }
 
-const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+// Toasts truncate, so sizes are rendered short: GB once past a gigabyte.
+function size(bytes: number): string {
+  const mb = bytes / 1024 / 1024;
+  if (mb < 1024) return `${Math.round(mb)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
 
 /**
  * The real ceiling on a 20 GB snapshot is the disk, not a configured number, and
@@ -94,17 +99,20 @@ const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
  * spent minutes uploading, and a full disk takes the running servers down with
  * it. So refuse up front, while the file is still only a declared size.
  *
+ * The archive is staged whole and then extracted alongside itself, so the space
+ * needed is a multiple of the upload, not the upload plus a fixed slack.
+ *
  * Split out from the statfs call so the arithmetic can be tested without needing
  * a disk of a particular size.
  */
-export function assertRoomFor(size: number, availableBytes: number): void {
-  const needed = size + config.uploadDiskMarginBytes;
+export function requiredFreeBytes(uploadBytes: number): number {
+  return Math.max(uploadBytes * config.uploadDiskFactor, config.uploadDiskMinFreeBytes);
+}
+
+export function assertRoomFor(uploadBytes: number, availableBytes: number): void {
+  const needed = requiredFreeBytes(uploadBytes);
   if (needed <= availableBytes) return;
-  throw new UploadError(
-    `Not enough disk space: ${mb(size)} MB upload needs ${mb(needed)} MB free (including a ` +
-      `${mb(config.uploadDiskMarginBytes)} MB reserve) but only ${mb(availableBytes)} MB is available`,
-    507
-  );
+  throw new UploadError(`Needs ${size(needed)} free, only ${size(availableBytes)} left`, 507);
 }
 
 // statfs landed in Node 18.15. Older runtimes simply skip the check rather than
@@ -120,27 +128,23 @@ function availableBytes(dir: string): number | null {
   }
 }
 
-export function beginUpload(filename: string, size: number): { id: string; chunkSize: number } {
-  if (!Number.isInteger(size) || size <= 0) {
-    throw new UploadError('Upload size must be a positive number of bytes');
+export function beginUpload(filename: string, declaredBytes: number): { id: string; chunkSize: number } {
+  if (!Number.isInteger(declaredBytes) || declaredBytes <= 0) {
+    throw new UploadError('Upload size must be a positive number');
   }
-  if (size > config.maxUploadBytes) {
-    throw new UploadError(
-      `File is ${mb(size)} MB; the limit is ${mb(config.maxUploadBytes)} MB ` +
-        '(raise MC_DASH_MAX_UPLOAD_MB to allow more)',
-      413
-    );
+  if (declaredBytes > config.maxUploadBytes) {
+    throw new UploadError(`File is ${size(declaredBytes)}; the limit is ${size(config.maxUploadBytes)}`, 413);
   }
   ensureStagingDir();
   const free = availableBytes(stagingDir);
-  if (free !== null) assertRoomFor(size, free);
+  if (free !== null) assertRoomFor(declaredBytes, free);
   const id = crypto.randomUUID();
   const filePath = path.join(stagingDir, `${id}.part`);
   fs.writeFileSync(filePath, '');
   uploads.set(id, {
     id,
     filename: safeFilename(filename),
-    size,
+    size: declaredBytes,
     received: 0,
     nextIndex: 0,
     filePath,
@@ -148,13 +152,13 @@ export function beginUpload(filename: string, size: number): { id: string; chunk
     touchedAt: Date.now(),
     chain: Promise.resolve(),
   });
-  return { id, chunkSize: chunkSizeFor(size) };
+  return { id, chunkSize: chunkSizeFor(declaredBytes) };
 }
 
 function get(id: string): StagedUpload {
   const upload = uploads.get(id);
   if (!upload) {
-    throw new UploadError('Upload session not found or expired — start the upload again', 404);
+    throw new UploadError('Upload expired — start it again', 404);
   }
   return upload;
 }
@@ -162,7 +166,7 @@ function get(id: string): StagedUpload {
 export async function appendChunk(id: string, index: number, chunk: Buffer): Promise<{ received: number; nextIndex: number }> {
   const upload = get(id);
   if (upload.complete) throw new UploadError('Upload is already complete');
-  if (!Number.isInteger(index) || index < 0) throw new UploadError('Chunk index must be a non-negative integer');
+  if (!Number.isInteger(index) || index < 0) throw new UploadError('Chunk index must be a positive whole number');
 
   const run = upload.chain.then(async () => {
     // A retry after a lost response re-sends a chunk we already wrote. Treat it
@@ -173,7 +177,7 @@ export async function appendChunk(id: string, index: number, chunk: Buffer): Pro
       throw new UploadError(`Chunk ${index} arrived out of order; expected ${upload.nextIndex}`, 409);
     }
     if (upload.received + chunk.length > upload.size) {
-      throw new UploadError('Chunks exceed the declared upload size');
+      throw new UploadError('Received more data than the file declared');
     }
     await fs.promises.appendFile(upload.filePath, chunk);
     upload.received += chunk.length;
@@ -191,7 +195,7 @@ export async function appendChunk(id: string, index: number, chunk: Buffer): Pro
 export function completeUpload(id: string): { id: string; size: number } {
   const upload = get(id);
   if (upload.received !== upload.size) {
-    throw new UploadError(`Upload is incomplete: received ${upload.received} of ${upload.size} bytes`);
+    throw new UploadError(`Upload incomplete: ${size(upload.received)} of ${size(upload.size)}`);
   }
   upload.complete = true;
   upload.touchedAt = Date.now();
@@ -206,7 +210,7 @@ export function completeUpload(id: string): { id: string; size: number } {
 export function claimUpload(id: string): StagedFile {
   const upload = get(id);
   if (!upload.complete) {
-    throw new UploadError('Upload has not finished — send every chunk and call complete first');
+    throw new UploadError('Upload has not finished');
   }
   uploads.delete(id);
   return { path: upload.filePath, originalname: upload.filename };

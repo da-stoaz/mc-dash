@@ -160,7 +160,7 @@ router.post('/uploads', (req, res, next) => {
 router.put('/uploads/:uploadId/:index', chunkBody, async (req, res, next) => {
   try {
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: 'Chunk body must be non-empty application/octet-stream' });
+      return res.status(400).json({ error: 'Chunk body is empty' });
     }
     const index = Number(req.params.index);
     res.json(await appendChunk(String(req.params.uploadId), index, req.body));
@@ -369,7 +369,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       throw err;
     }
     if (!pack) {
-      return res.status(400).json({ error: 'Server pack zip required (field "file" or a completed "uploadId")' });
+      return res.status(400).json({ error: 'Server pack zip required' });
     }
 
     const parsed = createServerSchema.parse(req.body);
@@ -444,7 +444,7 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
       throw err;
     }
     if (!archive) {
-      return res.status(400).json({ error: 'Snapshot archive required (field "file" or a completed "uploadId")' });
+      return res.status(400).json({ error: 'Snapshot archive required' });
     }
 
     const parsed = importServerSchema.parse(req.body);
@@ -533,7 +533,7 @@ router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
       return res.status(409).json({ error: 'Stop the server before replacing its pack' });
     }
     if (!pack) {
-      return res.status(400).json({ error: 'Server pack zip required (field "file" or a completed "uploadId")' });
+      return res.status(400).json({ error: 'Server pack zip required' });
     }
 
     const safeName = pack.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');

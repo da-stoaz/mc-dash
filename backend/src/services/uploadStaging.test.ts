@@ -10,7 +10,7 @@ process.env.SQLITE_PATH = path.join(TMP, 'test.sqlite');
 process.env.MC_DASH_MAX_UPLOAD_MB = '1';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { beginUpload, appendChunk, completeUpload, claimUpload, discardUpload, sweep, chunkSizeFor, assertRoomFor, UploadError } =
+const { beginUpload, appendChunk, completeUpload, claimUpload, discardUpload, sweep, chunkSizeFor, assertRoomFor, requiredFreeBytes, UploadError } =
   require('./uploadStaging');
 
 function chunk(byte: number, size: number): Buffer {
@@ -145,22 +145,46 @@ test('slices grow with the file so a huge upload is not thousands of round trips
   assert.ok(huge < 100 * MB, 'must stay under the tightest common proxy limit');
 });
 
-test('an upload that would fill the disk is refused before a byte moves', () => {
+test('an upload needs room for its own extraction, not just itself', () => {
   const GB = 1024 * 1024 * 1024;
-  // 20 GB snapshot onto a disk with 30 GB free: fits, with the reserve intact.
-  assert.doesNotThrow(() => assertRoomFor(20 * GB, 30 * GB));
+  // The archive is staged whole and then extracted beside it, so 20 GB of
+  // snapshot needs half again as much room.
+  assert.equal(requiredFreeBytes(20 * GB), 30 * GB);
+  assert.doesNotThrow(() => assertRoomFor(20 * GB, 31 * GB));
 
-  // Same file onto a disk with 21 GB free: it would technically fit, but would
-  // leave nothing for the extracted world the import is about to write.
+  // 21 GB free would hold the upload but leave nothing to extract into.
   assert.throws(
     () => assertRoomFor(20 * GB, 21 * GB),
     (err: any) => {
       assert.equal(err.status, 507, 'Insufficient Storage, not a generic 400');
-      assert.match(err.message, /Not enough disk space/);
       return true;
     }
   );
-
-  // And the obvious case.
   assert.throws(() => assertRoomFor(20 * GB, 5 * GB), UploadError);
+});
+
+test('small uploads still reserve a floor, where a multiple would reserve nothing', () => {
+  const MB = 1024 * 1024;
+  // 1.5x of 10 MB is 15 MB, which protects nothing: the floor wins.
+  assert.equal(requiredFreeBytes(10 * MB), 2048 * MB);
+  assert.throws(() => assertRoomFor(10 * MB, 1024 * MB), UploadError);
+  assert.doesNotThrow(() => assertRoomFor(10 * MB, 4096 * MB));
+});
+
+test('refusals stay short enough that the toast does not cut them off', () => {
+  const GB = 1024 * 1024 * 1024;
+  const cases = [
+    () => assertRoomFor(20 * GB, 5 * GB),
+    () => beginUpload('x.zip', 500 * GB),
+    () => beginUpload('x.zip', -1),
+  ];
+  for (const run of cases) {
+    try {
+      run();
+      assert.fail('expected a refusal');
+    } catch (err: any) {
+      assert.ok(err instanceof UploadError, err?.message);
+      assert.ok(err.message.length <= 60, `too long (${err.message.length}): ${err.message}`);
+    }
+  }
 });
