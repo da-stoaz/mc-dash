@@ -6,12 +6,84 @@ import fs from 'fs/promises';
 import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
-import { ServerRecord, ServerStatus } from '../types';
+import { ResourceConfig, ServerRecord, ServerStatus } from '../types';
+import { containerMemoryPlan } from './memoryPlan';
+import { javaToolOptions } from './jvmTuning';
 
 // Fixed in-container RCON port. We never publish it to the host: the backend
 // runs with host networking and reaches each server container directly on its
 // bridge IP, so a single constant port is fine across all servers.
 export const RCON_PORT = 25575;
+
+const MB = 1024 * 1024;
+
+export type MemoryHostConfig = {
+  Memory?: number;
+  MemoryReservation?: number;
+  MemorySwap?: number;
+  MemorySwappiness?: number;
+};
+
+/**
+ * The cgroup memory settings for one server.
+ *
+ * Three knobs, doing three different jobs:
+ *
+ *   Memory            hard ceiling. Sized at heap + JVM overhead, not at heap,
+ *                     because everything a JVM allocates outside -Xmx still
+ *                     counts against the cgroup. Capping at exactly -Xmx means
+ *                     the kernel kills the server precisely when the heap fills.
+ *
+ *   MemoryReservation soft limit, set to the *idle* footprint. It reserves
+ *                     nothing; it tells the kernel which containers to reclaim
+ *                     from first when the host is under pressure. A server that
+ *                     has handed heap back sits below its reservation and is
+ *                     left alone, while one squatting on its peak gets pushed
+ *                     back toward the floor. This is what makes "idle servers
+ *                     take up less RAM" hold under contention rather than only
+ *                     when nothing is competing.
+ *
+ *   MemorySwap        with swapMode 'off', set equal to Memory, which in cgroup
+ *                     terms means zero swap for this container. A server that
+ *                     blows its ceiling is then OOM-killed instead of paging.
+ *                     That is the trade this whole feature exists to make: one
+ *                     dead server, loudly, beats an unresponsive host — and an
+ *                     unresponsive host takes SSH with it.
+ */
+export function memoryHostConfig(
+  resources: ResourceConfig | undefined,
+  swapMode: 'off' | 'limit' | 'host' = config.containerSwapMode
+): MemoryHostConfig {
+  const plan = containerMemoryPlan(resources);
+  // No configured ceiling: leave the container unlimited rather than invent a
+  // number. Docker treats 0/undefined as "no limit" and so does the ledger.
+  if (!plan) return {};
+
+  const memory = plan.capMb * MB;
+  const limits: MemoryHostConfig = {
+    Memory: memory,
+    MemoryReservation: Math.min(plan.floorMb, plan.capMb) * MB,
+  };
+
+  if (swapMode === 'off') {
+    // Docker's convention: MemorySwap is memory *plus* swap, so equal means none.
+    limits.MemorySwap = memory;
+  } else if (swapMode === 'limit') {
+    limits.MemorySwap = memory * 2;
+    limits.MemorySwappiness = 0;
+  }
+
+  return limits;
+}
+
+// Docker reports a daemon that can't do swap accounting in prose, not a code —
+// and the wording differs between rootless, cgroup v1 without CONFIG_MEMCG_SWAP,
+// and a v2 host with the controller disabled. Match on the shared vocabulary.
+export function isSwapLimitUnsupported(err: unknown): boolean {
+  const message = (err as { message?: unknown })?.message;
+  if (typeof message !== 'string') return false;
+  return /swap/i.test(message) && /(not supported|unsupported|no such file|cannot|capabilit)/i.test(message);
+}
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -291,7 +363,6 @@ export class DockerService {
       workdir: string;
       cmd: string[];
       port: number;
-      memoryBytes?: number;
       nanoCpus?: number;
     }
   ): Promise<string> {
@@ -308,9 +379,16 @@ export class DockerService {
 
     await this.ensureImage(options.image);
 
-    const container = await this.docker.createContainer({
+    // Elastic-heap defaults for pack start scripts that build their own `java`
+    // line, which our variables.txt / user_jvm_args.txt rewrites never see. The
+    // JVM reads this before the command line, so a script that sets a flag
+    // explicitly still wins. See jvmTuning.javaToolOptions.
+    const toolOptions = javaToolOptions();
+
+    const spec = (limits: MemoryHostConfig) => ({
       name,
       Image: options.image,
+      Env: toolOptions ? [`JAVA_TOOL_OPTIONS=${toolOptions}`] : undefined,
       // Run the Minecraft process as the same user as the backend so the world
       // files it writes into the bind mount stay readable/writable by MC Dash
       // (otherwise root-owned files break snapshots/restores). undefined => use
@@ -332,12 +410,78 @@ export class DockerService {
           // to 127.0.0.1 so RCON is never exposed on the LAN.
           [`${RCON_PORT}/tcp`]: [{ HostIp: '127.0.0.1', HostPort: '' }],
         },
-        Memory: options.memoryBytes,
+        ...limits,
         NanoCPUs: options.nanoCpus,
       },
     });
 
-    return container.id;
+    const limits = memoryHostConfig(server.resources);
+    try {
+      const container = await this.docker.createContainer(spec(limits));
+      return container.id;
+    } catch (err) {
+      // Rootless Docker and kernels built without CONFIG_MEMCG_SWAP reject the
+      // swap keys outright. Losing swap containment is a real downgrade — the
+      // hard Memory cap and the start gate still hold, but a server over its
+      // limit can now page — so it degrades loudly rather than silently, and
+      // only for the keys that were refused.
+      if (!isSwapLimitUnsupported(err) || limits.MemorySwap === undefined) throw err;
+      const { MemorySwap, MemorySwappiness, ...withoutSwap } = limits;
+      logger.warn(
+        { serverId: server.id, err },
+        'Docker rejected the swap limit (rootless daemon or kernel without swap accounting); ' +
+          'creating the container without it. Servers can still be pushed into host swap — ' +
+          'consider enabling swap accounting or removing swap from this host.'
+      );
+      const container = await this.docker.createContainer(spec(withoutSwap));
+      return container.id;
+    }
+  }
+
+  /**
+   * The Docker host's own memory and CPU, as the daemon sees them. This is the
+   * authority on how big the machine is: when MC Dash runs on Docker Desktop the
+   * daemon lives in a VM sized quite differently from the OS running the
+   * backend, and budgeting against the wrong machine is worse than not budgeting.
+   */
+  async hostInfo(): Promise<{ memTotalBytes: number; ncpu: number } | null> {
+    try {
+      const info = (await this.docker.info()) as { MemTotal?: number; NCPU?: number };
+      if (!info?.MemTotal) return null;
+      return { memTotalBytes: info.MemTotal, ncpu: info.NCPU ?? 0 };
+    } catch (err) {
+      logger.debug({ err }, 'Unable to read docker info');
+      return null;
+    }
+  }
+
+  /**
+   * Server ids whose container is running *right now*, straight from Docker.
+   *
+   * The capacity ledger needs this rather than the stored status: a server the
+   * DB still calls 'running' after a host reboot or a crashed container would
+   * otherwise reserve memory nothing is using, and block real starts until
+   * someone noticed. Returns null when Docker can't be reached, so callers can
+   * fall back to stored status instead of concluding that nothing is running.
+   */
+  async runningServerIds(): Promise<Set<string> | null> {
+    try {
+      const prefix = this.containerName('');
+      const containers = await this.docker.listContainers({ filters: { name: [prefix] } });
+      const ids = new Set<string>();
+      for (const container of containers) {
+        for (const rawName of container.Names ?? []) {
+          // Docker prefixes every name with '/'; the filter is a substring match,
+          // so re-check the prefix rather than trusting it.
+          const name = rawName.replace(/^\//, '');
+          if (name.startsWith(prefix)) ids.add(name.slice(prefix.length));
+        }
+      }
+      return ids;
+    } catch (err) {
+      logger.debug({ err }, 'Unable to list running containers for capacity accounting');
+      return null;
+    }
   }
 
   async status(server: ServerRecord): Promise<ServerStatus> {
@@ -492,13 +636,18 @@ export class DockerService {
 
   async updateResources(server: ServerRecord): Promise<void> {
     const container = await this.getContainer(server);
-    const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : 0;
     const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : 0;
+    // MemorySwap has to move together with Memory: Docker rejects an update
+    // whose new Memory exceeds the swap limit still on the cgroup, so raising a
+    // server's RAM would fail if we sent Memory alone.
+    const limits = memoryHostConfig(server.resources);
     try {
       await container.update({
-        Memory: memoryBytes,
+        Memory: limits.Memory ?? 0,
+        MemoryReservation: limits.MemoryReservation ?? 0,
+        ...(limits.MemorySwap !== undefined ? { MemorySwap: limits.MemorySwap } : {}),
         NanoCPUs: nanoCpus,
-      });
+      } as Parameters<Container['update']>[0]);
     } catch (err) {
       logger.error({ err }, 'Failed to update container resources');
       throw err;
