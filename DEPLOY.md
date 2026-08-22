@@ -88,7 +88,26 @@ the host instead, route `/api/*` to :4000 with the prefix stripped and
 everything else to :3000, and point the tunnel at the proxy. Then set
 `NEXT_PUBLIC_API_BASE_URL=/api` and rebuild the frontend.
 
-**3. Close the back door.** The tunnel is pointless if :3000/:4000 are also
+**3. Mind the request body limit.** Cloudflare caps request bodies at 100 MB on
+Free and Pro (200 MB on Business); nginx defaults to 1 MB. Server packs pass
+100 MB routinely. The failure is often silent rather than loud: the proxy stops
+reading the socket while the connection stays open, so the browser's progress bar
+parks a few megabytes in and no error ever reaches the page.
+
+Note this is a limit on the *request* body only — responses are unrestricted,
+which is why a multi-gigabyte snapshot downloads fine from the same host that
+refuses a 200 MB upload.
+
+MC Dash handles this by never sending a big file as one request: the browser
+slices it and the backend reassembles the slices on disk. Slices start at 8 MB
+and grow with the file (aiming for ~200 requests whatever its size), never
+exceeding `MC_DASH_UPLOAD_CHUNK_MAX_MB` — 64 MB, comfortably under the 100 MB
+ceiling. Nothing to configure, but if you impose your own limit anywhere in the
+chain, keep it above that. If you front MC Dash with nginx, set
+`client_max_body_size` generously anyway so the single-request path still works
+for small files and for curl.
+
+**4. Close the back door.** The tunnel is pointless if :3000/:4000 are also
 reachable directly.
 
 ```bash
@@ -104,7 +123,7 @@ ordering: set `MC_DASH_TRUST_PROXY` **only** once the port is unreachable
 directly, otherwise anyone can forge `X-Forwarded-For` and walk past the login
 throttle.
 
-**4. Know the revocation story.** Sessions are stateless signed cookies with a
+**5. Know the revocation story.** Sessions are stateless signed cookies with a
 7-day TTL. Changing `MC_DASH_PASSWORD` does **not** log anyone out — rotating
 `MC_DASH_SESSION_SECRET` (and restarting) is what kills every live session.
 
@@ -116,6 +135,21 @@ throttle.
 - **Login seems to work then immediately logs out**: cookie was dropped. Ensure
   `MC_DASH_COOKIE_SECURE=false` when serving over plain HTTP, and that
   `MC_DASH_FRONTEND_ORIGIN` exactly matches the URL in your browser bar.
+- **Upload freezes at a low percentage and never errors**: something between the
+  browser and MC Dash is refusing the request body and has stopped reading the
+  socket, so the browser sits on a connection that is open but going nowhere. On
+  Cloudflare that is the 100 MB plan limit; on nginx it is `client_max_body_size`,
+  which defaults to a mere 1 MB. Check what the proxy saw:
+
+  ```bash
+  sudo tail -f /var/log/nginx/error.log     # nginx
+  journalctl -u cloudflared -f              # Cloudflare Tunnel
+  ```
+
+  Uploads are chunked at `MC_DASH_UPLOAD_CHUNK_MB` (8 MB) precisely so no request
+  is large enough to hit these limits — if you are still seeing this, something in
+  the chain is capping bodies below that, or you are on a build from before
+  chunking landed.
 - **Server pack uploads but the Minecraft container won't start / is empty**:
   `MC_DASH_DATA_DIR` is not mounted to the same absolute path inside the
   backend container. Keep the `volumes:` entry as `${DIR}:${DIR}`.

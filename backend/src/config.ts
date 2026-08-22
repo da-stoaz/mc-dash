@@ -58,6 +58,27 @@ export function resolveContainerUser(
 
 const SESSION_TTL_DAYS = Number(process.env.MC_DASH_SESSION_TTL_DAYS ?? 7);
 
+function envNumber(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+// Server packs and snapshot archives are uploaded in chunks (see
+// services/uploadStaging), so this ceiling is disk, not memory — nothing here
+// is ever held in RAM whole.
+const maxUploadMb = Math.max(1, envNumber(process.env.MC_DASH_MAX_UPLOAD_MB, 4096));
+// Smallest slice a request will carry. The point of chunking is to stay under
+// whatever the proxy in front allows, and the tightest common ceiling is
+// Cloudflare's 100 MB — 8 MB leaves a wide margin and costs ~30 requests for a
+// 240 MB pack.
+const uploadChunkMb = Math.min(64, Math.max(1, envNumber(process.env.MC_DASH_UPLOAD_CHUNK_MB, 8)));
+// Slices grow with the file rather than staying at the floor, because chunks are
+// sent one after another: a 10 GB upload at 8 MB is 1280 sequential round trips,
+// and on a fast link the waiting costs more than the bytes. 64 MB still sits
+// comfortably under the 100 MB ceiling, and caps a retry's wasted work.
+const uploadChunkMaxMb = Math.max(uploadChunkMb, Math.min(90, envNumber(process.env.MC_DASH_UPLOAD_CHUNK_MAX_MB, 64)));
+
 // Fail closed. Anyone who gets past the login can upload a server pack and have
 // the backend run it through the host's Docker socket, so an unset
 // MC_DASH_PASSWORD must stop the boot rather than quietly serve an open API —
@@ -77,6 +98,9 @@ export const config = {
   dockerTlsVerify: process.env.DOCKER_TLS_VERIFY,
   dockerApiVersion: process.env.DOCKER_API_VERSION,
   dataRoot,
+  maxUploadBytes: maxUploadMb * 1024 * 1024,
+  uploadChunkBytes: uploadChunkMb * 1024 * 1024,
+  uploadChunkMaxBytes: uploadChunkMaxMb * 1024 * 1024,
   containerUser: resolveContainerUser(),
   javaImage: process.env.JAVA_IMAGE ?? 'eclipse-temurin:17-jre',
   serverPort: Number.isFinite(defaultServerPort) ? defaultServerPort : 25565,

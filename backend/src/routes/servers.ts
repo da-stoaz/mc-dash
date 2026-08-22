@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, raw, Request } from 'express';
 import multer from 'multer';
 import net from 'net';
 import path from 'path';
@@ -18,6 +18,15 @@ import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
+import {
+  UploadError,
+  appendChunk,
+  beginUpload,
+  claimUpload,
+  completeUpload,
+  discardUpload,
+  StagedFile,
+} from '../services/uploadStaging';
 
 const resourceSchema = z.object({
   minRamMb: z.number().int().positive(),
@@ -116,6 +125,79 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 const upload = multer({ dest: uploadDir });
+
+// --- Chunked uploads --------------------------------------------------------
+// Registered before the /:id routes so a session id can never be read as a
+// server id. See services/uploadStaging for why big files are split at all.
+
+const beginUploadSchema = z.object({
+  filename: z.string().min(1).max(255),
+  size: z.preprocess(parseNumber, z.number().int().positive()),
+});
+
+// Chunks arrive as raw bytes rather than multipart: there is nothing to name or
+// parse, and a body limit above the largest slice we ever ask for is the only
+// guard needed. The extra megabyte is slack for a client that rounds up.
+const chunkBody = raw({ type: 'application/octet-stream', limit: config.uploadChunkMaxBytes + 1024 * 1024 });
+
+// UploadError carries its own status; anything else is a real fault and belongs
+// in the shared error handler.
+function handledUploadError(res: any, err: unknown): boolean {
+  if (!(err instanceof UploadError)) return false;
+  res.status(err.status).json({ error: err.message });
+  return true;
+}
+
+router.post('/uploads', (req, res, next) => {
+  try {
+    const parsed = beginUploadSchema.parse(req.body);
+    res.status(201).json(beginUpload(parsed.filename, parsed.size));
+  } catch (err) {
+    if (!handledUploadError(res, err)) next(err);
+  }
+});
+
+router.put('/uploads/:uploadId/:index', chunkBody, async (req, res, next) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Chunk body must be non-empty application/octet-stream' });
+    }
+    const index = Number(req.params.index);
+    res.json(await appendChunk(String(req.params.uploadId), index, req.body));
+  } catch (err) {
+    if (!handledUploadError(res, err)) next(err);
+  }
+});
+
+router.post('/uploads/:uploadId/complete', (req, res, next) => {
+  try {
+    res.json(completeUpload(String(req.params.uploadId)));
+  } catch (err) {
+    if (!handledUploadError(res, err)) next(err);
+  }
+});
+
+router.delete('/uploads/:uploadId', (req, res) => {
+  discardUpload(String(req.params.uploadId));
+  res.status(204).end();
+});
+
+/**
+ * A file for a route to consume, however it arrived: as one multipart request
+ * (small files, curl, the pre-chunking clients) or as a completed chunked
+ * session referenced by `uploadId`. Returns null when neither is present, so
+ * callers keep their own "file required" wording.
+ *
+ * Ownership of the returned path transfers to the caller — rename it or delete
+ * it, exactly as with a multer temp file.
+ */
+function takeUploadedFile(req: Request): StagedFile | null {
+  if (req.file) return { path: req.file.path, originalname: req.file.originalname };
+  const field = (req.body as Record<string, unknown> | undefined)?.uploadId;
+  const uploadId = typeof field === 'string' ? field.trim() : '';
+  if (!uploadId) return null;
+  return claimUpload(uploadId);
+}
 
 function notFound(res: any) {
   return res.status(404).json({ error: 'Server not found' });
@@ -278,9 +360,16 @@ router.get('/:id/difficulty', async (req, res, next) => {
 
 router.post('/', upload.single('file'), async (req, res, next) => {
   let createdId: string | null = null;
+  let pack: StagedFile | null = null;
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Server pack zip required (field "file")' });
+    try {
+      pack = takeUploadedFile(req);
+    } catch (err) {
+      if (handledUploadError(res, err)) return;
+      throw err;
+    }
+    if (!pack) {
+      return res.status(400).json({ error: 'Server pack zip required (field "file" or a completed "uploadId")' });
     }
 
     const parsed = createServerSchema.parse(req.body);
@@ -319,9 +408,10 @@ router.post('/', upload.single('file'), async (req, res, next) => {
     });
     createdId = server.id;
 
-    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeName = pack.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
-    await fs.promises.rename(req.file.path, target);
+    await fs.promises.rename(pack.path, target);
+    pack = null;
 
     const updated =
       serverStore.update(server.id, { serverPackUrl: target, effectiveJavaImage: null, effectiveJavaSource: null, packRecommendedJava: null, packRecommendedJavaMajor: null, status: 'stopped' }) ??
@@ -331,8 +421,8 @@ router.post('/', upload.single('file'), async (req, res, next) => {
     if (createdId) {
       serverStore.delete(createdId);
     }
-    if (req.file) {
-      fs.promises.rm(req.file.path, { force: true }).catch(() => {});
+    if (pack) {
+      fs.promises.rm(pack.path, { force: true }).catch(() => {});
     }
     next(err);
   }
@@ -345,9 +435,16 @@ router.post('/', upload.single('file'), async (req, res, next) => {
 // of a deleted server.
 router.post('/import', upload.single('file'), async (req, res, next) => {
   let createdId: string | null = null;
+  let archive: StagedFile | null = null;
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Snapshot archive required (field "file")' });
+    try {
+      archive = takeUploadedFile(req);
+    } catch (err) {
+      if (handledUploadError(res, err)) return;
+      throw err;
+    }
+    if (!archive) {
+      return res.status(400).json({ error: 'Snapshot archive required (field "file" or a completed "uploadId")' });
     }
 
     const parsed = importServerSchema.parse(req.body);
@@ -380,7 +477,7 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
 
     preparing.add(server.id);
     serverStore.update(server.id, { status: 'creating' });
-    await importSnapshotArchive(server.id, req.file.path);
+    await importSnapshotArchive(server.id, archive.path);
     const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } =
       await recreateContainer(server);
     const updated = serverStore.update(server.id, {
@@ -407,7 +504,7 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
     res.status(apiErr.status).json(apiErr.body);
   } finally {
     if (createdId) preparing.delete(createdId);
-    if (req.file) fs.promises.rm(req.file.path, { force: true }).catch(() => {});
+    if (archive) fs.promises.rm(archive.path, { force: true }).catch(() => {});
   }
 });
 
@@ -416,24 +513,33 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
 // then runs Prepare, which re-extracts the new pack while cleanPackDir preserves
 // the worlds -- so mods/config update without wiping the save.
 router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
+  // Claimed up front so every exit path below can drop it in one place: the
+  // guards reject often (wrong id, server still running) and each rejection
+  // strands a 200 MB+ file otherwise.
+  let pack: StagedFile | null = null;
   try {
+    try {
+      pack = takeUploadedFile(req);
+    } catch (err) {
+      if (handledUploadError(res, err)) return;
+      throw err;
+    }
     const serverId = String(req.params.id);
     const server = serverStore.get(serverId);
     if (!server) {
-      if (req.file) fs.promises.rm(req.file.path, { force: true }).catch(() => {});
       return notFound(res);
     }
     if (['running', 'starting', 'restarting'].includes(server.status)) {
-      if (req.file) fs.promises.rm(req.file.path, { force: true }).catch(() => {});
       return res.status(409).json({ error: 'Stop the server before replacing its pack' });
     }
-    if (!req.file) {
-      return res.status(400).json({ error: 'Server pack zip required (field "file")' });
+    if (!pack) {
+      return res.status(400).json({ error: 'Server pack zip required (field "file" or a completed "uploadId")' });
     }
 
-    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeName = pack.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     const target = path.join(uploadDir, `${server.id}-${Date.now()}-${safeName}`);
-    await fs.promises.rename(req.file.path, target);
+    await fs.promises.rename(pack.path, target);
+    pack = null;
 
     const previousPack = server.serverPackUrl;
     const updated =
@@ -462,10 +568,11 @@ router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
 
     res.json(updated);
   } catch (err) {
-    if (req.file) {
-      fs.promises.rm(req.file.path, { force: true }).catch(() => {});
-    }
     next(err);
+  } finally {
+    if (pack) {
+      fs.promises.rm(pack.path, { force: true }).catch(() => {});
+    }
   }
 });
 
