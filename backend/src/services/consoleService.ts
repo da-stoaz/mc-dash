@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { dockerService } from './dockerService';
 import { sendRconCommands } from './rconClient';
 import { locateWorkingDir, readServerProperties } from './prepareService';
+import { classifyOutput, COMMAND_CATALOG, suggestCommand, VANILLA_COMMANDS, verbOf } from './commandCatalog';
 import { UserFacingError } from '../apiErrors';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
@@ -30,11 +31,36 @@ const COMMAND_TIMEOUT_MS = 15_000;
 const HISTORY_LIMIT = 200;
 const history = new Map<string, ConsoleEntry[]>();
 
+/**
+ * What each server has told us about its own commands. A modpack's commands
+ * aren't in any list we ship, so the server is the authority: anything it
+ * answers normally works, and anything it calls unknown does not. Learning both
+ * is what lets the console refuse a bad command without also refusing the
+ * modded ones it has never heard of.
+ */
+type CommandKnowledge = { works: Set<string>; missing: Set<string> };
+const knowledge = new Map<string, CommandKnowledge>();
+
+function knowledgeFor(serverId: string): CommandKnowledge {
+  let known = knowledge.get(serverId);
+  if (!known) {
+    known = { works: new Set(), missing: new Set() };
+    knowledge.set(serverId, known);
+  }
+  return known;
+}
+
+export type ConsoleStatus = 'ok' | 'unknown-command' | 'bad-arguments';
+
 export type ConsoleEntry = {
   id: string;
   command: string;
   output: string;
   at: string;
+  /** Whether the server actually accepted the command. */
+  status: ConsoleStatus;
+  /** The command it probably should have been, when we can guess. */
+  suggestion?: string;
 };
 
 /**
@@ -82,11 +108,6 @@ export function sanitizeCommand(raw: unknown): string {
   }
 
   return command;
-}
-
-/** The first word, which is what decides how the command behaves for us. */
-function verbOf(command: string): string {
-  return command.split(/\s+/)[0]?.toLowerCase() ?? '';
 }
 
 // `stop` takes the RCON listener down with the server, so it never replies —
@@ -139,6 +160,24 @@ async function resolveEndpoint(server: ServerRecord): Promise<Endpoint> {
  */
 export async function runConsoleCommand(server: ServerRecord, raw: unknown): Promise<ConsoleEntry> {
   const command = sanitizeCommand(raw);
+  const known = knowledgeFor(server.id);
+  const verb = verbOf(command);
+
+  // Refuse a command this server has already said it doesn't have. We only ever
+  // block on the server's own word, never on our vanilla list: a modpack's
+  // commands are absent from that list and must still get through.
+  if (known.missing.has(verb)) {
+    const suggestion = suggestCommand(verb, known.works);
+    throw new UserFacingError({
+      error: 'Unknown command',
+      code: 'CONSOLE_COMMAND_UNKNOWN',
+      status: 400,
+      reason: suggestion
+        ? `This server has no "${verb}" command. Did you mean "${suggestion}"?`
+        : `This server has no "${verb}" command.`,
+    });
+  }
+
   const endpoint = await resolveEndpoint(server);
 
   let output: string;
@@ -165,15 +204,40 @@ export async function runConsoleCommand(server: ServerRecord, raw: unknown): Pro
     }
   }
 
+  // The server's answer is the only reliable verdict on whether the command
+  // exists, so record it either way and let the next attempt benefit.
+  const status = classifyOutput(output);
+  if (status === 'unknown-command') known.missing.add(verb);
+  else known.works.add(verb);
+
   const entry: ConsoleEntry = {
     id: crypto.randomUUID(),
     command,
     output: output.trim(),
     at: new Date().toISOString(),
+    status,
+    suggestion: status === 'unknown-command' ? suggestCommand(verb, known.works) ?? undefined : undefined,
   };
   remember(server.id, entry);
-  logger.info({ serverId: server.id, command }, 'Console command executed');
+  logger.info({ serverId: server.id, command, status }, 'Console command executed');
   return entry;
+}
+
+/**
+ * The commands to offer for completion: the standard catalog, plus whatever
+ * this server has shown it accepts (a modpack's own commands), minus the ones
+ * it has said it doesn't have.
+ */
+export function knownCommands(serverId: string): { name: string; usage: string; summary: string }[] {
+  const known = knowledgeFor(serverId);
+  const listed = COMMAND_CATALOG.filter((entry) => !known.missing.has(entry.name));
+
+  const extras = [...known.works]
+    .filter((name) => !VANILLA_COMMANDS.has(name))
+    .sort()
+    .map((name) => ({ name, usage: name, summary: 'Added by this server’s mods' }));
+
+  return [...listed, ...extras];
 }
 
 function remember(serverId: string, entry: ConsoleEntry): void {
@@ -188,6 +252,16 @@ export function consoleHistory(serverId: string): ConsoleEntry[] {
   return history.get(serverId) ?? [];
 }
 
+/**
+ * Drop the visible scrollback. What we've learned about the server's commands
+ * survives on purpose — that's knowledge about the server, not a transcript.
+ */
 export function clearConsoleHistory(serverId: string): void {
   history.delete(serverId);
+}
+
+/** Forget a server entirely, for when it is deleted. */
+export function forgetServerConsole(serverId: string): void {
+  history.delete(serverId);
+  knowledge.delete(serverId);
 }

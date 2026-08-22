@@ -106,12 +106,26 @@ export type PlayerInfo = {
   names: string[];
 };
 
+// Whether the server actually accepted a command, read from its own answer.
+export type ConsoleStatus = 'ok' | 'unknown-command' | 'bad-arguments';
+
 // One command run through the server console, with what it printed back.
 export type ConsoleEntry = {
   id: string;
   command: string;
   output: string;
   at: string;
+  status: ConsoleStatus;
+  /** The command it probably should have been, when the backend can guess. */
+  suggestion?: string;
+};
+
+// A command the console offers for completion. Served per server, so a
+// modpack's own commands appear once the server has shown it accepts them.
+export type CatalogCommand = {
+  name: string;
+  usage: string;
+  summary: string;
 };
 
 export type FormState = {

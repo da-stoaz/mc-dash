@@ -4,6 +4,12 @@ import net from 'net';
 // Packets are little-endian: [int32 length][int32 id][int32 type][body NUL][NUL].
 // We avoid a third-party dependency because the surface we need is tiny: connect,
 // authenticate, run a handful of console commands, disconnect.
+//
+// Minecraft's server is much stricter than a Source server about how packets
+// arrive: it does one read() per packet and drops the connection unless the
+// declared length matches that read exactly. So we must never have two requests
+// in flight — writing a second packet before the first is answered lets TCP
+// coalesce them into one segment, and the server hangs up on the pair.
 
 const TYPE_AUTH = 3; // client -> server: authenticate
 const TYPE_EXEC = 2; // client -> server: run a command
@@ -12,9 +18,14 @@ const TYPE_RESPONSE_VALUE = 0; // server -> client: command output
 
 const AUTH_ID = 1;
 const BASE_CMD_ID = 100;
-// Command i is sent as id BASE_CMD_ID + i, immediately followed by an empty
-// "sentinel" command as id SENTINEL_BASE + i. See the data handler for why.
-const SENTINEL_BASE = BASE_CMD_ID + 1000;
+
+// Minecraft splits a response into packets of exactly this many bytes, so a
+// short one is the last one. Nothing else marks the end of a response.
+const CHUNK_BYTES = 4096;
+// A response whose length is an exact multiple of CHUNK_BYTES ends on a full
+// packet with no remainder to follow, which is indistinguishable from "more is
+// coming" until it doesn't. Wait this long for the rest before calling it done.
+const CHUNK_GRACE_MS = 300;
 
 function buildPacket(id: number, type: number, body: string): Buffer {
   const bodyBuf = Buffer.from(body, 'utf8');
@@ -52,13 +63,24 @@ export async function sendRconCommands(opts: RconOptions): Promise<string[]> {
     let buffer = Buffer.alloc(0);
     const responses: string[] = [];
     let authed = false;
+    // Index of the command awaiting a response, or -1 when nothing is in flight.
+    let inFlight = -1;
     let nextToSend = 0;
     let settled = false;
+    let chunkTimer: NodeJS.Timeout | null = null;
+
+    const clearChunkTimer = () => {
+      if (chunkTimer) {
+        clearTimeout(chunkTimer);
+        chunkTimer = null;
+      }
+    };
 
     const finish = (err: Error | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearChunkTimer();
       socket.removeAllListeners();
       socket.destroy();
       if (err) reject(err);
@@ -68,19 +90,17 @@ export async function sendRconCommands(opts: RconOptions): Promise<string[]> {
     const timer = setTimeout(() => finish(new Error(`RCON timeout after ${timeoutMs}ms`)), timeoutMs);
 
     const sendNext = () => {
+      clearChunkTimer();
       if (nextToSend >= commands.length) {
+        inFlight = -1;
         finish(null);
         return;
       }
       const index = nextToSend;
       nextToSend += 1;
+      inFlight = index;
+      // One packet, on its own, with nothing else pending. See the note above.
       socket.write(buildPacket(BASE_CMD_ID + index, TYPE_EXEC, commands[index]));
-      // The server answers requests in order, so the reply to this empty command
-      // can only arrive after the real command's output is complete. That is the
-      // only way to know where a response ends: output longer than 4096 bytes
-      // (`help`, a long `list`) is split across several packets that all carry
-      // the same id, with nothing to mark the last one.
-      socket.write(buildPacket(SENTINEL_BASE + index, TYPE_EXEC, ''));
     };
 
     socket.on('connect', () => {
@@ -98,6 +118,8 @@ export async function sendRconCommands(opts: RconOptions): Promise<string[]> {
         const id = buffer.readInt32LE(4);
         const type = buffer.readInt32LE(8);
         const body = buffer.toString('utf8', 12, 4 + size - 2);
+        // id + type + body + two trailing NULs, so the body is what's left.
+        const bodyBytes = size - 10;
         buffer = buffer.subarray(4 + size);
 
         if (!authed) {
@@ -110,27 +132,32 @@ export async function sendRconCommands(opts: RconOptions): Promise<string[]> {
             }
             authed = true;
             sendNext();
+            if (settled) return;
           }
           continue;
         }
 
-        if (type !== TYPE_RESPONSE_VALUE) continue;
+        if (type !== TYPE_RESPONSE_VALUE || id < BASE_CMD_ID) continue;
 
-        if (id >= SENTINEL_BASE) {
-          // That command's output is complete, whatever the sentinel replied
-          // with. Record an empty string for commands that said nothing, so the
-          // caller gets one entry per command rather than a hole.
-          const index = id - SENTINEL_BASE;
-          responses[index] = responses[index] ?? '';
+        const index = id - BASE_CMD_ID;
+        responses[index] = (responses[index] ?? '') + body;
+
+        // Only the command we are waiting on can advance the queue.
+        if (index !== inFlight) continue;
+
+        if (bodyBytes < CHUNK_BYTES) {
           sendNext();
           if (settled) return;
           continue;
         }
 
-        if (id >= BASE_CMD_ID) {
-          const index = id - BASE_CMD_ID;
-          responses[index] = (responses[index] ?? '') + body;
-        }
+        // A full-size packet means the response is probably split; give the
+        // remainder a moment to arrive before moving on.
+        clearChunkTimer();
+        chunkTimer = setTimeout(() => {
+          chunkTimer = null;
+          if (!settled) sendNext();
+        }, CHUNK_GRACE_MS);
       }
     });
   });

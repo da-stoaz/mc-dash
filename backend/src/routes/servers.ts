@@ -18,7 +18,7 @@ import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
-import { clearConsoleHistory, consoleHistory, runConsoleCommand } from '../services/consoleService';
+import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands, runConsoleCommand } from '../services/consoleService';
 import { assertCanStart, capacityReport, committedMbFor, floorMbFor } from '../services/hostCapacityService';
 import { hibernationService } from '../services/hibernationService';
 import { toServerViews } from '../services/serverView';
@@ -976,6 +976,14 @@ router.get('/:id/console', (req, res) => {
   res.json({ entries: consoleHistory(server.id) });
 });
 
+// The commands to offer for completion: the standard catalog plus anything this
+// server has shown it accepts, minus what it has said it doesn't have.
+router.get('/:id/console/commands', (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  res.json({ commands: knownCommands(server.id) });
+});
+
 // Run a single Minecraft command (`give`, `tp`, `kill`, …) and return what the
 // console printed. Every failure mode is a UserFacingError from consoleService,
 // so the UI can say why rather than just "failed".
@@ -1116,7 +1124,7 @@ router.delete('/:id', async (req, res) => {
 
   const removed = serverStore.delete(server.id);
   if (!removed) return notFound(res);
-  clearConsoleHistory(server.id);
+  forgetServerConsole(server.id);
   res.json({ ok: true });
 });
 
