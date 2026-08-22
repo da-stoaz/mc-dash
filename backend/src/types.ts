@@ -56,6 +56,10 @@ export interface ServerRecord {
   // what happened. A toast is gone in seconds and says nothing after a reload,
   // which left the red status chip as the only trace of a failed Prepare.
   lastError?: string | null;
+  // Stopped automatically because nobody was playing, and will start again
+  // when someone connects. Distinct from a manual stop so the UI can say so and
+  // so a restart of MC Dash knows to re-arm the wake listener.
+  hibernated?: boolean;
 }
 
 export interface ServerCreateInput {
@@ -92,6 +96,7 @@ export interface ServerUpdateInput {
   restartRequired?: boolean;
   packReady?: boolean;
   lastError?: string | null;
+  hibernated?: boolean;
 }
 
 export type SnapshotKind = 'manual' | 'auto-pre-restore';

@@ -83,11 +83,15 @@ if (!columns.find((col) => col.name === 'packReady')) {
   // Backfill: any existing server that already has a source zip has a pack.
   db.prepare(`UPDATE servers SET packReady = 1 WHERE serverPackUrl IS NOT NULL`).run();
 }
-
 // Why the last operation failed. Without it a server that fails to prepare
 // shows a red chip and nothing else once the toast is gone.
 if (!columns.find((col) => col.name === 'lastError')) {
   db.prepare(`ALTER TABLE servers ADD COLUMN lastError TEXT`).run();
+}
+// Auto-stopped because nobody was playing. Kept apart from a manual stop so the
+// UI can label it and so a backend restart knows to re-arm the wake listener.
+if (!columns.find((col) => col.name === 'hibernated')) {
+  db.prepare(`ALTER TABLE servers ADD COLUMN hibernated INTEGER NOT NULL DEFAULT 0`).run();
 }
 
 db.prepare(
@@ -125,6 +129,7 @@ type ServerRow = {
   restartRequired?: number;
   packReady?: number;
   lastError?: string | null;
+  hibernated?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -258,6 +263,7 @@ function mapRow(row: ServerRow): ServerRecord {
     restartRequired: row.restartRequired === 1,
     packReady: row.packReady === 1,
     lastError: row.lastError ?? null,
+    hibernated: row.hibernated === 1,
   };
 }
 
@@ -356,6 +362,9 @@ export class ServerStore {
     if (updates.packRecommendedJavaMajor !== undefined) {
       next.packRecommendedJavaMajor = updates.packRecommendedJavaMajor ?? null;
     }
+    if (updates.lastError !== undefined) {
+      next.lastError = updates.lastError ?? null;
+    }
     if (updates.serverPort !== undefined) {
       next.serverPort = updates.serverPort;
     }
@@ -380,8 +389,8 @@ export class ServerStore {
     if (updates.packReady !== undefined) {
       next.packReady = updates.packReady ? 1 : 0;
     }
-    if (updates.lastError !== undefined) {
-      next.lastError = updates.lastError ?? null;
+    if (updates.hibernated !== undefined) {
+      next.hibernated = updates.hibernated ? 1 : 0;
     }
 
     if (Object.keys(next).length === 0) {
