@@ -3,6 +3,7 @@ import { dockerService } from './dockerService';
 import { getPlayerCount } from './playerService';
 import { serverStore } from '../serverStore';
 import { metricsCollector } from './metricsCollector';
+import { toServerViews } from './serverView';
 import { preparing } from '../state';
 import { logger } from '../logger';
 
@@ -55,7 +56,8 @@ async function refreshStatuses() {
         }
       })
     );
-    for (const res of statusClients) send(res, 'servers', refreshed);
+    const view = toServerViews(refreshed);
+    for (const res of statusClients) send(res, 'servers', view);
   } catch (err) {
     logger.warn({ err }, 'status stream tick failed');
   } finally {

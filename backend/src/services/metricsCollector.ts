@@ -81,6 +81,22 @@ function toBucket(serverId: string, bucketStart: number, samples: Sample[]): Met
   };
 }
 
+// The most recent reading for one server, kept so callers that need "what is
+// this using right now" don't have to hit Docker again.
+export type LiveMetrics = {
+  cpuPercent: number;
+  cpuCores: number;
+  cpuCoresAvailable: number;
+  memoryBytes: number;
+  memoryLimitBytes: number;
+  memoryPercent: number;
+  at: number;
+};
+
+// A reading older than this is stale — the server stopped, or Docker stopped
+// answering. Better to report nothing than a number from four minutes ago.
+const LIVE_TTL_MS = 30_000;
+
 class MetricsCollector {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -88,6 +104,28 @@ class MetricsCollector {
   private readonly accums = new Map<string, Accumulator>();
   // serverId -> live listeners. A server with >=1 listener is "active".
   private readonly watchers = new Map<string, Set<MetricsListener>>();
+  // serverId -> latest reading. The collector is already polling every server
+  // for the history rollups; this just stops that work being thrown away, so
+  // the dashboard can show real CPU and memory without a second poll loop.
+  private readonly live = new Map<string, LiveMetrics>();
+
+  /** Latest reading for one server, or null when stopped or stale. */
+  liveFor(serverId: string): LiveMetrics | null {
+    const entry = this.live.get(serverId);
+    if (!entry) return null;
+    if (Date.now() - entry.at > LIVE_TTL_MS) return null;
+    return entry;
+  }
+
+  /** Latest readings for every server that has a fresh one. */
+  liveAll(): Map<string, LiveMetrics> {
+    const now = Date.now();
+    const fresh = new Map<string, LiveMetrics>();
+    for (const [id, entry] of this.live) {
+      if (now - entry.at <= LIVE_TTL_MS) fresh.set(id, entry);
+    }
+    return fresh;
+  }
 
   start() {
     if (this.timer) return;
@@ -140,6 +178,7 @@ class MetricsCollector {
       const liveIds = new Set(servers.map((s) => s.id));
       // Drop accumulators for servers that no longer exist.
       for (const id of this.accums.keys()) if (!liveIds.has(id)) this.accums.delete(id);
+      for (const id of this.live.keys()) if (!liveIds.has(id)) this.live.delete(id);
 
       for (const server of servers) {
         if (preparing.has(server.id)) continue;
@@ -166,11 +205,13 @@ class MetricsCollector {
         try {
           metrics = await dockerService.metrics(server);
         } catch {
+          this.live.delete(server.id);
           this.notify(server.id, null); // container missing/unreadable this tick
           continue;
         }
 
         if (metrics.status !== 'running') {
+          this.live.delete(server.id);
           acc.prev = undefined; // reset rate baseline so restart isn't a huge spike
           this.notify(server.id, null);
           continue;
@@ -192,6 +233,15 @@ class MetricsCollector {
           write: metrics.blkWriteBytes,
           tsMs: nowMs,
         };
+        this.live.set(server.id, {
+          cpuPercent: metrics.cpuPercent,
+          cpuCores: metrics.cpuCores,
+          cpuCoresAvailable: metrics.cpuCoresAvailable,
+          memoryBytes: metrics.memoryBytes,
+          memoryLimitBytes: metrics.memoryLimitBytes,
+          memoryPercent: metrics.memoryPercent,
+          at: nowMs,
+        });
         this.notify(server.id, metrics); // live push to the SSE room
       }
 

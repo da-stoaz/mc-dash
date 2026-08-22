@@ -52,6 +52,20 @@ export type ServerRecord = {
   packReady?: boolean;
   // Why the last operation failed; survives the toast and a page reload.
   lastError?: string | null;
+  /** Auto-stopped for being empty; starts again when a player connects. */
+  hibernated?: boolean;
+  /** What the server is using right now. Null when stopped. */
+  live?: {
+    cpuCores: number;
+    cpuPercent: number;
+    memoryMb: number;
+    memoryLimitMb: number;
+    memoryPercent: number;
+  } | null;
+  /** Players online at the last RCON read; null when unknown. */
+  players?: number | null;
+  /** How long it has been empty, driving the "sleeps in ..." hint. */
+  idleMs?: number | null;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
   game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
