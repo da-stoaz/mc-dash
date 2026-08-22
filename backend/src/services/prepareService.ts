@@ -5,6 +5,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
 import { dockerService, RCON_PORT } from './dockerService';
+import { heapPlan, mergeJvmArgs, tokenizeJvmArgs } from './jvmTuning';
 import { formatDifficulty, usesNumericFormat } from './difficulty';
 import fsSync from 'fs';
 import crypto from 'crypto';
@@ -96,7 +97,7 @@ async function findServerJar(workingDir: string): Promise<string | null> {
   return serverJar ? path.join(workingDir, serverJar.name) : null;
 }
 
-async function ensureStartScript(workingDir: string): Promise<string | null> {
+async function ensureStartScript(workingDir: string, server: ServerRecord): Promise<string | null> {
   const existing = await findStartScript(workingDir);
   if (existing) return existing;
 
@@ -104,7 +105,15 @@ async function ensureStartScript(workingDir: string): Promise<string | null> {
   if (!serverJar) return null;
 
   const scriptPath = path.join(workingDir, 'start.sh');
-  const command = `java -jar "${path.basename(serverJar)}" nogui`;
+  // A bare `java -jar` ignores the server's RAM settings entirely and takes the
+  // JVM default max heap — a quarter of host RAM — which is both wrong for the
+  // server and invisible to the capacity ledger. Spell the heap plan out.
+  const heap = heapPlan(server.resources);
+  const jvmArgs = heap
+    ? mergeJvmArgs([], heap, { elastic: config.elasticHeapEnabled, idleSeconds: config.elasticHeapIdleSeconds })
+    : [];
+  const argString = jvmArgs.length ? `${jvmArgs.join(' ')} ` : '';
+  const command = `java ${argString}-jar "${path.basename(serverJar)}" nogui`;
   // `exec` so java replaces the shell and becomes the process that receives
   // SIGTERM on `docker stop`. That lets the JVM shutdown hook run (save + exit)
   // instead of being SIGKILLed as exit 137 when the signal dies in the wrapper.
@@ -209,7 +218,7 @@ async function buildContainerFromPack(
   packRecommendedJava?: string;
   packRecommendedJavaMajor?: number;
 }> {
-  const scriptPath = await ensureStartScript(workingDir);
+  const scriptPath = await ensureStartScript(workingDir, server);
   if (!scriptPath) {
     throw new Error('Could not find a start script or server.jar inside the server pack');
   }
@@ -219,7 +228,6 @@ async function buildContainerFromPack(
   const containerWorkdir = toPosix(path.join('/server', path.relative(serverRoot, scriptDir)));
   const cmd = ['bash', '-c', buildStartCommand(path.basename(scriptPath))];
 
-  const memoryBytes = server.resources?.maxRamMb ? server.resources.maxRamMb * 1024 * 1024 : undefined;
   const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
 
   const packRecommendedJava = varsResult.recommendedJavaVersion ?? (await detectRecommendedJavaFromScript(scriptPath));
@@ -237,7 +245,6 @@ async function buildContainerFromPack(
     workdir: containerWorkdir,
     cmd,
     port: server.serverPort ?? config.serverPort,
-    memoryBytes,
     nanoCpus,
   });
 
@@ -285,10 +292,19 @@ async function applyVariablesTxt(workingDir: string, server: ServerRecord): Prom
       originalMap[entry.normalizedKey] = entry.value;
     });
 
-    // Respect user-set JVM args if present; otherwise derive from resources
+    // Keep whatever tuning the pack author chose and correct only the memory
+    // profile: heap sizing plus the elastic-heap flags. Overwriting JAVA_ARGS
+    // wholesale (as this used to) threw away GC and Netty tuning that packs ship
+    // for good reason, and left Aikar's AlwaysPreTouch in place whenever the
+    // start script set it instead. See jvmTuning.mergeJvmArgs.
     const desired: Record<string, string> = {};
-    if (server.resources.maxRamMb && server.resources.minRamMb) {
-      desired['JAVA_ARGS'] = `"-Xmx${server.resources.maxRamMb}M -Xms${server.resources.minRamMb}M"`;
+    const heap = heapPlan(server.resources);
+    if (heap) {
+      const merged = mergeJvmArgs(tokenizeJvmArgs(originalMap['JAVA_ARGS'] ?? ''), heap, {
+        elastic: config.elasticHeapEnabled,
+        idleSeconds: config.elasticHeapIdleSeconds,
+      });
+      desired['JAVA_ARGS'] = `"${merged.join(' ')}"`;
     }
 
     // Container already has Java; skip interactive installer
@@ -400,19 +416,22 @@ async function findVariablesTxt(root: string): Promise<string | null> {
 async function applyUserJvmArgs(workingDir: string, server: ServerRecord) {
   const argsPath = path.join(workingDir, 'user_jvm_args.txt');
   if (!(await pathExists(argsPath))) return;
-  if (!server.resources.minRamMb || !server.resources.maxRamMb) return;
+
+  const heap = heapPlan(server.resources);
+  if (!heap) return;
 
   try {
     const content = await fs.readFile(argsPath, 'utf8');
     const lines = content.split('\n');
-    const filtered = lines.filter((line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return true;
-      return !(trimmed.startsWith('-Xms') || trimmed.startsWith('-Xmx'));
+    // Comments carry the pack's own explanation of its flags; keep them, and
+    // rewrite only the argument lines.
+    const comments = lines.filter((line) => line.trim().startsWith('#'));
+    const existing = lines.filter((line) => line.trim() && !line.trim().startsWith('#')).flatMap(tokenizeJvmArgs);
+    const merged = mergeJvmArgs(existing, heap, {
+      elastic: config.elasticHeapEnabled,
+      idleSeconds: config.elasticHeapIdleSeconds,
     });
-    filtered.push(`-Xms${server.resources.minRamMb}M`);
-    filtered.push(`-Xmx${server.resources.maxRamMb}M`);
-    await fs.writeFile(argsPath, filtered.join('\n') + '\n');
+    await fs.writeFile(argsPath, [...comments, ...merged].join('\n') + '\n');
   } catch (err) {
     logger.warn({ err }, 'user_jvm_args.txt not updated (file may be missing)');
   }

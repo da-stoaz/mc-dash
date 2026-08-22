@@ -3,70 +3,12 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';
 import type { ServerRecord } from '../types';
+import { normalizeHostname, parseHandshake } from './minecraftProtocol';
+import { serveSleepingClient } from './sleepGateway';
+import { hibernationService } from './hibernationService';
 
 const MAX_HANDSHAKE_BYTES = 8 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5000;
-
-type VarIntResult = { value: number; size: number };
-
-function readVarInt(buffer: Buffer, offset: number): VarIntResult | null {
-  let result = 0;
-  let shift = 0;
-  let size = 0;
-
-  while (size < 5) {
-    if (offset + size >= buffer.length) return null;
-    const byte = buffer[offset + size];
-    result |= (byte & 0x7f) << shift;
-    size += 1;
-    if ((byte & 0x80) !== 0x80) {
-      return { value: result, size };
-    }
-    shift += 7;
-  }
-
-  return null;
-}
-
-function parseHandshakeHostname(buffer: Buffer): string | null {
-  if (buffer.length === 0) return null;
-  if (buffer[0] === 0xfe) {
-    throw new Error('Legacy ping packet');
-  }
-
-  const packetLength = readVarInt(buffer, 0);
-  if (!packetLength) return null;
-  const packetEnd = packetLength.size + packetLength.value;
-  if (buffer.length < packetEnd) return null;
-
-  let offset = packetLength.size;
-  const packetId = readVarInt(buffer, offset);
-  if (!packetId) return null;
-  if (packetId.value !== 0x00) {
-    throw new Error('Not a handshake packet');
-  }
-  offset += packetId.size;
-
-  const protocolVersion = readVarInt(buffer, offset);
-  if (!protocolVersion) return null;
-  offset += protocolVersion.size;
-
-  const hostLength = readVarInt(buffer, offset);
-  if (!hostLength) return null;
-  offset += hostLength.size;
-  if (offset + hostLength.value > buffer.length) return null;
-
-  const hostname = buffer.slice(offset, offset + hostLength.value).toString('utf8');
-  return hostname;
-}
-
-function normalizeHostname(value: string | null): string | undefined {
-  if (!value) return undefined;
-  const base = value.split('\0')[0];
-  const withoutPort = base.split(':')[0];
-  const trimmed = withoutPort.trim().replace(/\.$/, '').toLowerCase();
-  return trimmed.length ? trimmed : undefined;
-}
 
 function extractSubdomain(hostname: string | undefined): string | undefined {
   const domain = config.routerDomain;
@@ -156,12 +98,12 @@ export class RouterService {
       }
 
       try {
-        const hostnameRaw = parseHandshakeHostname(buffered);
-        if (!hostnameRaw) return;
+        const handshake = parseHandshake(buffered);
+        if (!handshake) return;
         resolved = true;
         clearTimeout(timeout);
 
-        const hostname = normalizeHostname(hostnameRaw);
+        const hostname = normalizeHostname(handshake.hostname);
         const subdomain = extractSubdomain(hostname);
         const target = findServerBySubdomain(subdomain);
 
@@ -174,6 +116,20 @@ export class RouterService {
           logger.warn({ hostname, subdomain }, 'Router could not resolve target subdomain');
           socket.end();
           cleanup();
+          return;
+        }
+
+        if (target.hibernated) {
+          // Nothing is listening upstream — the container is stopped. Answer in
+          // process so the player sees "sleeping" rather than a refused
+          // connection, and so a join attempt starts the server.
+          socket.removeAllListeners('data');
+          serveSleepingClient(socket, buffered, {
+            versionName: 'Sleeping',
+            motd: config.hibernationMotd,
+            wakeMessage: config.hibernationWakeMessage,
+            onWake: () => void hibernationService.wake(target.id, 'player'),
+          });
           return;
         }
 

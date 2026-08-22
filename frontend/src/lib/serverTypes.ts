@@ -52,6 +52,20 @@ export type ServerRecord = {
   packReady?: boolean;
   // Why the last operation failed; survives the toast and a page reload.
   lastError?: string | null;
+  /** Auto-stopped for being empty; starts again when a player connects. */
+  hibernated?: boolean;
+  /** What the server is using right now. Null when stopped. */
+  live?: {
+    cpuCores: number;
+    cpuPercent: number;
+    memoryMb: number;
+    memoryLimitMb: number;
+    memoryPercent: number;
+  } | null;
+  /** Players online at the last RCON read; null when unknown. */
+  players?: number | null;
+  /** How long it has been empty, driving the "sleeps in ..." hint. */
+  idleMs?: number | null;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
   game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
@@ -90,6 +104,40 @@ export type PlayerInfo = {
   online: number;
   max: number;
   names: string[];
+};
+
+// Whether the server actually accepted a command, read from its own answer.
+export type ConsoleStatus = 'ok' | 'unknown-command' | 'bad-arguments';
+
+// One command run through the server console, with what it printed back.
+export type ConsoleEntry = {
+  id: string;
+  command: string;
+  output: string;
+  at: string;
+  status: ConsoleStatus;
+  /** The command it probably should have been, when the backend can guess. */
+  suggestion?: string;
+};
+
+// One argument slot of a command, in the order the command takes them.
+export type CommandArg = {
+  /** As written in the usage, e.g. `<player>`, `[count]`, `set`. */
+  label: string;
+  /** Values worth offering. Empty when the argument is free-form. */
+  options: string[];
+  /** Fill this one from whoever is online rather than a fixed list. */
+  wantsPlayer: boolean;
+  optional: boolean;
+};
+
+// A command the console offers for completion. Served per server, so a
+// modpack's own commands appear once the server has shown it accepts them.
+export type CatalogCommand = {
+  name: string;
+  usage: string;
+  summary: string;
+  args: CommandArg[];
 };
 
 export type FormState = {

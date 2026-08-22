@@ -13,9 +13,12 @@ import { getApiErrorMessage } from '../lib/apiErrors';
 import { API_BASE, apiFetch } from '../lib/api';
 import { uploadInChunks } from '../lib/chunkedUpload';
 import { Logo } from '../components/Logo';
+import { CapacityBar } from '../components/CapacityBar';
+import { HostCapacity } from '../lib/hostCapacity';
 
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
+  const [capacity, setCapacity] = useState<HostCapacity | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showCreate, setShowCreate] = useState(false);
@@ -46,6 +49,30 @@ export default function Page() {
       shouldShowTimeoutProgress: true,
     });
   };
+
+  // The capacity ledger only moves when a server starts or stops, so it rides
+  // the server list rather than a poll of its own. A failure leaves the last
+  // reading on screen and stays quiet: the bar is context, and a toast every few
+  // seconds about a meter would be worse than a slightly stale meter.
+  const fetchCapacity = async () => {
+    try {
+      const res = await apiFetch(`${API_BASE}/host/capacity`);
+      if (!res.ok) return;
+      setCapacity(await res.json());
+    } catch {
+      // keep the previous reading
+    }
+  };
+
+  // Signature of everything the ledger is computed from, so the refetch fires on
+  // a real change rather than on every SSE frame.
+  const capacitySignature = servers
+    .map((server) => `${server.id}:${server.status}:${server.resources?.maxRamMb ?? 0}`)
+    .join('|');
+
+  useEffect(() => {
+    void fetchCapacity();
+  }, [capacitySignature]);
 
   const fetchServers = async () => {
     setLoading(true);
@@ -368,6 +395,8 @@ export default function Page() {
             )}
           </div>
         </div>
+
+        <CapacityBar capacity={capacity} servers={servers} />
 
         <StatusBar
           counts={statusCounts}

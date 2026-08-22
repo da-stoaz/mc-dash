@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal, FirewallModal } from '../../../components/ServerModals';
 import { ConfigurationCard } from '../../../components/server-details/ConfigurationCard';
+import { ConsoleCard } from '../../../components/server-details/ConsoleCard';
 import { FirewallCard } from '../../../components/server-details/FirewallCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
@@ -393,7 +394,7 @@ export default function ServerDetailsPage() {
         size="lg"
         classNames={{
           panel: 'pt-2',
-          // Phones get all four tabs spread across the width instead of a
+          // Phones get all five tabs spread across the width instead of a
           // horizontally scrolling strip with no visible scrollbar.
           tabList: 'max-md:w-full max-md:gap-0',
           tab: 'max-md:px-1',
@@ -411,6 +412,10 @@ export default function ServerDetailsPage() {
             />
             <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
           </div>
+        </Tab>
+
+        <Tab key="console" title="Console">
+          <ConsoleCard serverId={server.id} status={server.status} playerNames={players?.names ?? []} />
         </Tab>
 
         <Tab key="logs" title="Logs">

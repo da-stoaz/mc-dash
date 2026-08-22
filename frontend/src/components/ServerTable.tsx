@@ -3,6 +3,8 @@ import { Card, CardBody, Table, TableBody, TableCell, TableColumn, TableHeader, 
 import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 import { CopyButton } from './CopyButton';
+import { UsageCell } from './UsageCell';
+import { SleepChip } from './SleepChip';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 
 // Hostnames and pack filenames are both longer than the column can show, so
@@ -85,6 +87,7 @@ function ServerCard({
                 Restart required
               </Chip>
             )}
+            <SleepChip server={server} />
           </div>
         </div>
 
@@ -93,16 +96,10 @@ function ServerCard({
           <span className="truncate text-right">{packLabel}</span>
           <span className="muted">Port</span>
           <span className="text-right">{server.serverPort}</span>
-          <span className="muted">RAM</span>
+          <span className="muted">Usage</span>
           <span className="text-right">
-            {server.resources.minRamMb}–{server.resources.maxRamMb} MB
+            <UsageCell server={server} compact />
           </span>
-          {server.resources.cpuLimit && (
-            <>
-              <span className="muted">CPU cap</span>
-              <span className="text-right">{server.resources.cpuLimit} cores</span>
-            </>
-          )}
           {server.game.gameMode && (
             <>
               <span className="muted">Mode</span>
@@ -177,7 +174,7 @@ export function ServerTable({
           <TableColumn>Status</TableColumn>
           <TableColumn>Server pack</TableColumn>
           <TableColumn>Port</TableColumn>
-          <TableColumn>Resources</TableColumn>
+          <TableColumn width={160}>Usage</TableColumn>
           <TableColumn>Game</TableColumn>
           <TableColumn align="end">Actions</TableColumn>
         </TableHeader>
@@ -192,6 +189,7 @@ export function ServerTable({
                   <Chip color={statusColor[server.status]} variant="flat" size="sm">
                     {statusLabel[server.status]}
                   </Chip>
+                  <SleepChip server={server} />
                   {server.restartRequired && (
                     <Chip color="warning" variant="flat" size="sm">
                       Restart required
@@ -216,12 +214,7 @@ export function ServerTable({
                 <span className="text-sm">{server.serverPort}</span>
               </TableCell>
               <TableCell>
-                <div className="flex flex-col gap-1">
-                  <span>
-                    {server.resources.minRamMb}–{server.resources.maxRamMb} MB
-                  </span>
-                  {server.resources.cpuLimit && <span className="muted text-xs">{server.resources.cpuLimit} CPU</span>}
-                </div>
+                <UsageCell server={server} />
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">

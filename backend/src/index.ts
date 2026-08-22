@@ -1,12 +1,14 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import serversRouter from './routes/servers';
+import hostRouter from './routes/host';
 import authRouter from './routes/auth';
 import { assertAuthConfig, requireAuth } from './auth';
 import { config } from './config';
 import { logger } from './logger';
 import { routerService } from './services/routerService';
 import { metricsCollector } from './services/metricsCollector';
+import { hibernationService } from './services/hibernationService';
 import { uploadStaging } from './services/uploadStaging';
 
 // Before anything binds a port: refuse to come up unauthenticated by accident.
@@ -49,6 +51,7 @@ app.get('/config', requireAuth, (_req, res) => {
 
 app.use('/auth', authRouter);
 app.use('/servers', requireAuth, serversRouter);
+app.use('/host', requireAuth, hostRouter);
 
 // Simple error handler
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -65,4 +68,5 @@ app.listen(config.port, config.bindHost, () => {
 
 routerService.start();
 metricsCollector.start();
+hibernationService.start();
 uploadStaging.start();

@@ -137,6 +137,11 @@ const pruneStmt = db.prepare(
   `DELETE FROM metric_rollups WHERE resolution = ? AND bucketStart < ?`
 );
 
+const peakStmt = db.prepare(
+  `SELECT MAX(memMax) AS memMax, SUM(samples) AS samples FROM metric_rollups
+   WHERE serverId = ? AND resolution = ? AND bucketStart >= ?`
+);
+
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
@@ -165,6 +170,29 @@ class MetricsStore {
 
   resolutionFor(range: MetricRange) {
     return TIERS[range].resolution;
+  }
+
+  /**
+   * The highest memory reading this server has ever produced inside the 7-day
+   * window, as a percentage of its container limit, with the number of samples
+   * behind it.
+   *
+   * This is what turns the capacity ledger from a worst-case assumption into an
+   * informed one. A server configured for 6 GB that has never gone past 35% in a
+   * week of play is not a 6 GB server in any practical sense, and budgeting it
+   * as one is why the strict ledger refuses starts that would have been fine.
+   *
+   * Sample count is returned alongside deliberately: a peak drawn from twenty
+   * minutes of uptime is not evidence, and the caller has to be able to tell the
+   * difference between "observed low" and "barely observed".
+   */
+  peak(serverId: string): { memPercent: number; samples: number } | null {
+    const { resolution, windowSeconds } = TIERS['7d'];
+    const row = peakStmt.get(serverId, resolution, nowSeconds() - windowSeconds) as
+      | { memMax: number | null; samples: number | null }
+      | undefined;
+    if (!row || row.memMax === null || !row.samples) return null;
+    return { memPercent: row.memMax, samples: row.samples };
   }
 
   // Drop rows past each tier's retention window. Cheap; safe to call often.

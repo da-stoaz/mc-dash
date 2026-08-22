@@ -56,13 +56,142 @@ export function resolveContainerUser(
   return `${uid}:${gid}`;
 }
 
-const SESSION_TTL_DAYS = Number(process.env.MC_DASH_SESSION_TTL_DAYS ?? 7);
+// ---------------------------------------------------------------------------
+// Memory management
+//
+// A Docker `Memory` limit is a *cap*, not a reservation: nothing stops the sum
+// of every server's cap from exceeding physical RAM. Three servers capped at 8
+// GB each fit fine on a 12 GB box while they idle, and take the box down the
+// moment they all fill their heaps — first into swap, then into a freeze.
+//
+// So memory is managed on three levels, each with its own knobs below:
+//   1. per-JVM    — keep the *idle* footprint small and give heap back to the
+//                   OS (jvmTuning.ts)
+//   2. per-cgroup — a hard cap, a soft floor, and no swap (dockerService.ts)
+//   3. host-wide  — refuse to start a server whose cap doesn't fit in what's
+//                   left of the budget (hostCapacityService.ts)
+// ---------------------------------------------------------------------------
 
 function envNumber(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function envBool(raw: string | undefined, fallback: boolean): boolean {
+  const value = raw?.trim().toLowerCase();
+  if (value === undefined || value === '') return fallback;
+  return value === 'true' || value === '1' || value === 'yes' || value === 'on';
+}
+
+// Held back for the OS, MC Dash itself and page cache; never handed to servers.
+// 1.5 GB suits a small Linux host running only the dashboard — raise it if the
+// box does anything else.
+const memoryReserveMb = Math.max(0, envNumber(process.env.MC_DASH_HOST_RESERVE_MB, 1536));
+
+// Admission is two-tier, the way a cluster scheduler is.
+//
+// The *guaranteed* tier is every running server's idle floor (min RAM plus JVM
+// overhead) and is never overcommitted: whatever else happens, each running
+// server can always have that much. That is the promise, and it costs 1.5 GB
+// for a server whose ceiling is 6 GB.
+//
+// The *burst* tier is the sum of ceilings, and it is allowed to exceed physical
+// RAM by this multiple. Booking every ceiling in full is what makes a strict
+// ledger useless — a 12 GB host would run exactly one 6 GB server, even though
+// three of them idle at 3 GB together and never peak at the same moment. The
+// multiple is the bet you are taking on that "never at the same moment".
+//
+// 2.0 is a deliberate default rather than a neutral one: with container swap
+// off (the default), losing the bet costs one OOM-killed server, not a frozen
+// host. Set it to 1.0 to go back to strict worst-case admission.
+const memoryBurstRatio = Math.max(
+  1,
+  envNumber(process.env.MC_DASH_MEMORY_BURST_RATIO ?? process.env.MC_DASH_MEMORY_OVERCOMMIT_RATIO, 2)
+);
+
+// Weigh a server's *observed* 7-day peak against its configured ceiling when
+// deciding whether a start fits, instead of assuming every server always needs
+// its full ceiling. Falls back to the ceiling whenever there isn't enough
+// history to be evidence — see hostCapacityService.expectedPeakMb.
+const memoryUseObservedPeaks = envBool(process.env.MC_DASH_MEMORY_USE_OBSERVED_PEAKS, true);
+
+// How much headroom to add to an observed peak before trusting it. A server
+// that topped out at 2.0 GB last week can still want more this week — a new
+// modpack chunk, more players — so the figure the ledger uses is the observed
+// peak plus this margin, never the bare observation.
+const memoryObservedPeakMarginPercent = Math.max(
+  0,
+  envNumber(process.env.MC_DASH_MEMORY_OBSERVED_PEAK_MARGIN_PERCENT, 30)
+);
+
+// Minimum 30-minute buckets of history before an observed peak counts as
+// evidence at all. 48 is a full day of uptime; below that the peak is far more
+// likely to mean "hasn't been busy yet" than "doesn't need the memory".
+const memoryObservedPeakMinSamples = Math.max(1, envNumber(process.env.MC_DASH_MEMORY_OBSERVED_PEAK_MIN_BUCKETS, 48));
+
+// A JVM needs more than its heap: metaspace, code cache, thread stacks, GC
+// bookkeeping and direct buffers all live *outside* -Xmx but inside the cgroup.
+// Cap a container at exactly -Xmx and the kernel OOM-kills the server just as
+// the heap fills. Both the container cap and the capacity ledger add this on top.
+const jvmOverheadPercent = Math.max(0, envNumber(process.env.MC_DASH_JVM_OVERHEAD_PERCENT, 15));
+const jvmOverheadMinMb = Math.max(0, envNumber(process.env.MC_DASH_JVM_OVERHEAD_MIN_MB, 256));
+
+// Refuse starts that don't fit the budget. When off, the ledger is still
+// computed and shown in the UI — it just never blocks a start.
+const memoryAdmissionEnabled = envBool(process.env.MC_DASH_MEMORY_ADMISSION, true);
+
+// Second, independent gate: however the ledger looks, don't start a server when
+// the host has less genuinely-free memory than that server needs, plus this
+// floor. Catches memory eaten by things MC Dash doesn't know about.
+const hostFreeFloorMb = Math.max(0, envNumber(process.env.MC_DASH_HOST_FREE_FLOOR_MB, 512));
+
+// Whether a server container may use host swap:
+//   'off'   — MemorySwap == Memory, so the container cannot swap at all and a
+//             server that blows its cap is OOM-killed instead. One dead server
+//             beats a thrashing host, which is the whole point of this feature.
+//   'limit' — allow swap up to the cap again (2x Memory) but with swappiness 0,
+//             so the kernel only reaches for it under genuine pressure.
+//   'host'  — don't set anything; inherit the daemon default.
+const containerSwapRaw = (process.env.MC_DASH_CONTAINER_SWAP ?? 'off').trim().toLowerCase();
+const containerSwapMode: 'off' | 'limit' | 'host' =
+  containerSwapRaw === 'limit' || containerSwapRaw === 'host' ? containerSwapRaw : 'off';
+
+// Elastic heap: rewrite the pack's JVM flags so an idle server hands committed
+// heap back to the OS instead of sitting on its peak until restart. jvmTuning.ts.
+const elasticHeapEnabled = envBool(process.env.MC_DASH_ELASTIC_HEAP, true);
+// How long the JVM must go without a GC pause before it runs a reclaiming one.
+const elasticHeapIdleSeconds = Math.max(30, envNumber(process.env.MC_DASH_ELASTIC_HEAP_IDLE_SECONDS, 300));
+
+// ---------------------------------------------------------------------------
+// Hibernation
+//
+// Shrinking an idle JVM reclaims some of its heap. Stopping it reclaims all of
+// it, plus the CPU and the container overhead — a different order of saving, and
+// the only one that fixes a host where four servers exist but one is played on.
+// The cost is a cold start, paid by whoever wakes it.
+// ---------------------------------------------------------------------------
+
+const hibernationEnabled = envBool(process.env.MC_DASH_HIBERNATE, false);
+
+// Continuous stretch with zero players before a server sleeps. Counted from
+// RCON player counts only — see hibernationService for why an unreadable count
+// resets the clock rather than counting as empty.
+const hibernationIdleMs = Math.max(60, envNumber(process.env.MC_DASH_HIBERNATE_IDLE_MINUTES, 5) * 60) * 1000;
+
+// Hold the sleeping server's port so a join can start it again. Off means a
+// hibernated server can only be started from the dashboard, which is a
+// legitimate choice for a private server but a bad default for a public one.
+const hibernationWakeOnConnect = envBool(process.env.MC_DASH_HIBERNATE_WAKE_ON_CONNECT, true);
+
+// What the client shows in its server list while asleep, and on the disconnect
+// screen after a join has triggered the start.
+const hibernationMotd = process.env.MC_DASH_HIBERNATE_MOTD || 'Sleeping — join to wake this server up';
+const hibernationWakeMessage =
+  process.env.MC_DASH_HIBERNATE_WAKE_MESSAGE ||
+  'This server was asleep and is starting now.\nGive it about a minute, then reconnect.';
+
+const SESSION_TTL_DAYS = Number(process.env.MC_DASH_SESSION_TTL_DAYS ?? 7);
 
 // Server packs and snapshot archives are uploaded in chunks (see
 // services/uploadStaging), so this ceiling is disk, not memory — nothing here
@@ -139,6 +268,23 @@ export const config = {
   // Bind 127.0.0.1 when a tunnel/proxy fronts the API, so the port can't be hit
   // directly and bypass whatever gating sits in front of it.
   bindHost: process.env.MC_DASH_BIND_HOST || '0.0.0.0',
+  hibernationEnabled,
+  hibernationIdleMs,
+  hibernationWakeOnConnect,
+  hibernationMotd,
+  hibernationWakeMessage,
+  memoryReserveMb,
+  memoryBurstRatio,
+  memoryUseObservedPeaks,
+  memoryObservedPeakMarginPercent,
+  memoryObservedPeakMinSamples,
+  jvmOverheadPercent,
+  jvmOverheadMinMb,
+  memoryAdmissionEnabled,
+  hostFreeFloorMb,
+  containerSwapMode,
+  elasticHeapEnabled,
+  elasticHeapIdleSeconds,
 };
 
 // Ensure the data directory exists for SQLite
