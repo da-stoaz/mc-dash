@@ -3,9 +3,11 @@
 import { Card, CardBody, Chip, Tooltip } from '@heroui/react';
 import { MemoryStick, TriangleAlert } from 'lucide-react';
 import { HostCapacity } from '../lib/hostCapacity';
+import { ServerRecord } from '../lib/serverTypes';
 
 type Props = {
   capacity: HostCapacity | null;
+  servers: ServerRecord[];
 };
 
 function gb(valueMb: number) {
@@ -27,28 +29,49 @@ function gb(valueMb: number) {
 // Showing only peak made three servers idling at 3 GB look like a full 12 GB
 // box. Showing only the guarantee would hide the real risk. Showing only actual
 // usage would hide both. All three, then, in one bar.
-export function CapacityBar({ capacity }: Props) {
-  if (!capacity) return null;
+//
+// Live usage is summed from the server list rather than taken from the capacity
+// endpoint. The ledger only moves when a server starts or stops, so it is
+// fetched on those events — but usage moves constantly, and reading it from
+// that same once-in-a-while fetch left the headline number frozen at whatever
+// it was when something last changed state. The SSE list already carries a
+// fresh per-server reading every couple of seconds, so the bar and the table
+// now agree by construction instead of drifting apart between two sources.
 
-  const {
-    guaranteedMb,
-    expectedPeakMb,
-    ceilingMb,
-    budgetMb,
-    memory,
-    remainingGuaranteedMb,
-    remainingBurstMb,
-    actualMb,
-    actualCpuCores,
-    hostCpuCores,
-  } = capacity;
+// The same shell at the same height, with no data in it.
+//
+// Rendering nothing until the first fetch landed meant ~60px of card appeared
+// out of nowhere and shoved the status bar and the whole table down the page.
+function CapacitySkeleton() {
+  return (
+    <Card shadow="sm" className="mb-4 bg-white/5 border border-white/10">
+      <CardBody className="flex flex-col gap-2 py-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-h-6">
+          <MemoryStick size={16} className="shrink-0 text-white/25" aria-hidden />
+          <span className="text-sm muted">Reading host capacity…</span>
+        </div>
+        <div className="h-2.5 w-full rounded-full bg-white/10" />
+      </CardBody>
+    </Card>
+  );
+}
+
+export function CapacityBar({ capacity, servers }: Props) {
+  if (!capacity) return <CapacitySkeleton />;
+
+  const { guaranteedMb, expectedPeakMb, ceilingMb, budgetMb, memory, remainingGuaranteedMb, remainingBurstMb } =
+    capacity;
+
+  const running = servers.filter((server) => server.live);
+  const actualMb = running.reduce((sum, server) => sum + (server.live?.memoryMb ?? 0), 0);
+  const actualCpuCores = running.reduce((sum, server) => sum + (server.live?.cpuCores ?? 0), 0);
 
   const pctOfBudget = (valueMb: number) => (budgetMb > 0 ? Math.min(100, (valueMb / budgetMb) * 100) : 0);
   const guaranteedPct = pctOfBudget(guaranteedMb);
   const peakPct = pctOfBudget(expectedPeakMb);
   const actualPct = pctOfBudget(actualMb);
 
-  const live = capacity.servers.filter((server) => server.live);
+  const booked = capacity.servers.filter((server) => server.live);
   // How much room is left, judged by whichever tier binds first.
   const headroomMb = Math.min(remainingGuaranteedMb, remainingBurstMb);
   const full = headroomMb <= 0;
@@ -57,15 +80,18 @@ export function CapacityBar({ capacity }: Props) {
 
   // Worst case if every running server hit its configured ceiling at once.
   const oversubscribed = ceilingMb > budgetMb;
-  const measured = live.filter((server) => server.observedPeakTrusted).length;
+  const measured = booked.filter((server) => server.observedPeakTrusted).length;
 
   return (
     <Card shadow="sm" className="mb-4 bg-white/5 border border-white/10">
       <CardBody className="flex flex-col gap-2 py-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {/* min-h keeps the row's height steady as chips appear and disappear. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-h-6">
           <MemoryStick size={16} className="shrink-0 text-white/50" aria-hidden />
           <span className="text-sm font-medium">Memory in use</span>
-          <span className="text-sm">
+          {/* tabular-nums throughout: these redraw every couple of seconds, and
+              proportional digits make the whole row shuffle sideways each time. */}
+          <span className="text-sm tabular-nums">
             <span className="font-semibold">{gb(actualMb)}</span>
             <span className="muted"> / {gb(budgetMb)}</span>
           </span>
@@ -73,15 +99,15 @@ export function CapacityBar({ capacity }: Props) {
             size="sm"
             delay={200}
             closeDelay={0}
-            content={`Cores actually busy across all running servers, out of ${hostCpuCores} on the host.`}
+            content={`Cores actually busy across all running servers, out of ${capacity.hostCpuCores} on the host.`}
           >
-            <span className="text-sm cursor-help">
+            <span className="text-sm tabular-nums cursor-help">
               <span className="font-semibold">{actualCpuCores.toFixed(2)}</span>
-              <span className="muted"> / {hostCpuCores} cores</span>
+              <span className="muted"> / {capacity.hostCpuCores} cores</span>
             </span>
           </Tooltip>
-          <span className="muted text-xs">
-            {live.length} running · {gb(guaranteedMb)} reserved · {gb(memory.totalMb)} host
+          <span className="muted text-xs tabular-nums">
+            {running.length} running · {gb(guaranteedMb)} reserved · {gb(memory.totalMb)} host
           </span>
 
           {oversubscribed && (
@@ -95,7 +121,12 @@ export function CapacityBar({ capacity }: Props) {
                 don't all peak together — with container swap off, losing that bet costs one killed server rather
                 than a frozen host.`}
             >
-              <Chip size="sm" variant="flat" color={ceilingMb > capacity.burstAllowanceMb ? 'warning' : 'default'} className="cursor-help">
+              <Chip
+                size="sm"
+                variant="flat"
+                color={ceilingMb > capacity.burstAllowanceMb ? 'warning' : 'default'}
+                className="cursor-help tabular-nums"
+              >
                 {(ceilingMb / budgetMb).toFixed(1)}x oversubscribed
               </Chip>
             </Tooltip>
@@ -118,7 +149,7 @@ export function CapacityBar({ capacity }: Props) {
             </Chip>
           )}
 
-          <span className="ml-auto text-xs">
+          <span className="ml-auto text-xs tabular-nums">
             {full ? (
               <span className="text-danger">No room left — stop a server before starting another</span>
             ) : (
@@ -134,7 +165,7 @@ export function CapacityBar({ capacity }: Props) {
           content={`Solid: ${gb(actualMb)} actually in use right now. Mid: ${gb(
             guaranteedMb
           )} reserved so running servers can always idle. Faint: ${gb(expectedPeakMb)} of expected peak${
-            measured > 0 ? `, measured for ${measured} of ${live.length} servers` : ''
+            measured > 0 ? `, measured for ${measured} of ${booked.length} servers` : ''
           }.`}
         >
           <div
@@ -147,18 +178,18 @@ export function CapacityBar({ capacity }: Props) {
           >
             {/* Expected peak first, faint: what they could grow into. */}
             <div
-              className={`absolute inset-y-0 left-0 ${barColor} opacity-30 transition-[width]`}
+              className={`absolute inset-y-0 left-0 ${barColor} opacity-30 transition-[width] duration-500`}
               style={{ width: `${peakPct}%` }}
             />
             {/* The guarantee: memory held even while idle. */}
             <div
-              className={`absolute inset-y-0 left-0 ${barColor} opacity-60 transition-[width]`}
+              className={`absolute inset-y-0 left-0 ${barColor} opacity-60 transition-[width] duration-500`}
               style={{ width: `${guaranteedPct}%` }}
             />
             {/* Actual usage on top, solid — the only figure that is measured
                 rather than forecast, so it gets the most legible treatment. */}
             <div
-              className={`absolute inset-y-0 left-0 ${barColor} transition-[width]`}
+              className={`absolute inset-y-0 left-0 ${barColor} transition-[width] duration-500`}
               style={{ width: `${actualPct}%` }}
             />
           </div>

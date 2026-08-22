@@ -396,7 +396,7 @@ export default function Page() {
           </div>
         </div>
 
-        <CapacityBar capacity={capacity} />
+        <CapacityBar capacity={capacity} servers={servers} />
 
         <StatusBar
           counts={statusCounts}
