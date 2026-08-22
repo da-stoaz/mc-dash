@@ -2,7 +2,15 @@ import crypto from 'crypto';
 import { dockerService } from './dockerService';
 import { sendRconCommands } from './rconClient';
 import { locateWorkingDir, readServerProperties } from './prepareService';
-import { CatalogCommand, classifyOutput, COMMAND_CATALOG, suggestCommand, VANILLA_COMMANDS, verbOf } from './commandCatalog';
+import {
+  CatalogCommand,
+  classifyOutput,
+  COMMAND_CATALOG,
+  formatServerOutput,
+  suggestCommand,
+  VANILLA_COMMANDS,
+  verbOf,
+} from './commandCatalog';
 import { UserFacingError } from '../apiErrors';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
@@ -220,7 +228,7 @@ export async function runConsoleCommand(server: ServerRecord, raw: unknown): Pro
   const entry: ConsoleEntry = {
     id: crypto.randomUUID(),
     command,
-    output: output.trim(),
+    output: formatServerOutput(output, command),
     at: new Date().toISOString(),
     status,
     suggestion: status === 'unknown-command' ? suggestCommand(verb, known.works) ?? undefined : undefined,

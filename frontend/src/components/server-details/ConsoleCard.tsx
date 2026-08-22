@@ -124,8 +124,13 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
         .map((name) => ({ value: name, label: name, hint: 'online now' }));
     }
 
-    return arg.options
-      .filter((option) => option.toLowerCase().startsWith(prefix))
+    // Item ids are remembered by their tail ("hoe"), not their head, and the
+    // server prints them back with the `minecraft:` namespace people then type.
+    // So match on either end, prefixes first.
+    const bare = prefix.replace(/^minecraft:/, '');
+    const starts = arg.options.filter((option) => option.startsWith(bare));
+    const contains = arg.options.filter((option) => !option.startsWith(bare) && option.includes(bare));
+    return [...starts, ...contains]
       .slice(0, MAX_COMPLETIONS)
       .map((option) => ({ value: option, label: option, hint: arg.optional ? 'optional' : '' }));
   }, [catalog, entry, listOpen, playerNames, slot, tokens]);
