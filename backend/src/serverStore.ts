@@ -190,6 +190,19 @@ function backfillSubdomains() {
 
 backfillSubdomains();
 
+/**
+ * "Restart required" is a statement about a *running* process being out of date
+ * with the files on disk — a config change that could not be applied live.
+ *
+ * A server that isn't running has no such process. Its next action is a start,
+ * which reads server.properties and the JVM flags fresh, so the flag would only
+ * be telling the operator to do what they were already going to do. Deriving it
+ * here rather than at each call site means every consumer — the list, the
+ * detail page, the SSE stream, the dashboard's count and its filter — agrees,
+ * and a stale stored flag can never outlive the run it belonged to.
+ */
+const PROCESS_IS_LIVE = new Set<ServerStatus>(['running', 'starting', 'restarting']);
+
 function parseJsonField<T>(value: string): T {
   try {
     return JSON.parse(value) as T;
@@ -260,7 +273,7 @@ function mapRow(row: ServerRow): ServerRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     notes: row.notes ?? undefined,
-    restartRequired: row.restartRequired === 1,
+    restartRequired: row.restartRequired === 1 && PROCESS_IS_LIVE.has(row.status),
     packReady: row.packReady === 1,
     lastError: row.lastError ?? null,
     hibernated: row.hibernated === 1,

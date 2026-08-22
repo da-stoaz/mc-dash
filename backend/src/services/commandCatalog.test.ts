@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyOutput, COMMAND_CATALOG, parseUsageArgs, suggestCommand, VANILLA_COMMANDS, verbOf } from './commandCatalog';
+import {
+  classifyOutput,
+  COMMAND_CATALOG,
+  formatServerOutput,
+  parseUsageArgs,
+  suggestCommand,
+  VANILLA_COMMANDS,
+  verbOf,
+} from './commandCatalog';
 
 test('reads the command name off the front', () => {
   assert.equal(verbOf('give Alice minecraft:diamond 64'), 'give');
@@ -68,11 +76,16 @@ test('a bare word is a literal part of the command', () => {
 });
 
 test('free-form arguments offer nothing rather than guessing', () => {
-  const [, item, count] = parseUsageArgs('give <player> <item> [count]');
-  assert.deepEqual(item.options, []);
-  assert.equal(item.wantsPlayer, false);
+  // `<item>` is the exception — see the item-ids test below.
+  const [, , count] = parseUsageArgs('give <player> <item> [count]');
   assert.deepEqual(count.options, []);
   assert.equal(count.optional, true);
+
+  const [x, y, z] = parseUsageArgs('setworldspawn [x] [y] [z]');
+  for (const arg of [x, y, z]) {
+    assert.deepEqual(arg.options, []);
+    assert.equal(arg.wantsPlayer, false);
+  }
 });
 
 test('player and target slots are filled from who is online', () => {
@@ -95,4 +108,50 @@ test('every catalog entry carries the arguments its usage describes', () => {
   assert.deepEqual(gamemode.args[0].options, ['survival', 'creative', 'adventure', 'spectator']);
   // A command with no arguments has an empty list, never undefined.
   assert.deepEqual(COMMAND_CATALOG.find((entry) => entry.name === 'seed')?.args, []);
+});
+
+test('a rejected argument is a failure, not ordinary output', () => {
+  // The bug this covers: "Unknown item" fell through as success, so a command
+  // that did nothing rendered exactly like one that worked.
+  assert.equal(classifyOutput("Unknown item 'minecraft:diamond-hoe'"), 'bad-arguments');
+  assert.equal(classifyOutput('No player was found'), 'bad-arguments');
+  assert.equal(classifyOutput('Invalid name or UUID'), 'bad-arguments');
+  // The caret marker means refused, whatever the wording before it.
+  assert.equal(classifyOutput("Some mod's own complaint...give x<--[HERE]"), 'bad-arguments');
+});
+
+test('a missing command still outranks a bad argument', () => {
+  assert.equal(classifyOutput('Unknown or incomplete command, see below for error...x<--[HERE]'), 'unknown-command');
+});
+
+test('splits a run-together parse error onto two lines', () => {
+  const raw = "Unknown item 'minecraft:diamond-hoe'...lschranks minecraft:diamond-hoe<--[HERE]";
+  assert.equal(
+    formatServerOutput(raw, 'give Kuehlschranks minecraft:diamond-hoe'),
+    "Unknown item 'minecraft:diamond-hoe'\n...lschranks minecraft:diamond-hoe<--[HERE]"
+  );
+});
+
+test('splits it using the command when the echo was not truncated', () => {
+  const raw = 'Unknown or incomplete command, see below for errorfoo bar<--[HERE]';
+  assert.equal(
+    formatServerOutput(raw, 'foo bar'),
+    'Unknown or incomplete command, see below for error\nfoo bar<--[HERE]'
+  );
+});
+
+test('leaves ordinary output alone', () => {
+  assert.equal(formatServerOutput('Gave 64 [Diamond] to Alice', 'give Alice diamond 64'), 'Gave 64 [Diamond] to Alice');
+  assert.equal(formatServerOutput('  Set the time to 1000  '), 'Set the time to 1000');
+});
+
+test('offers item ids for the slots that take one', () => {
+  const [, item] = parseUsageArgs('give <player> <item> [count]');
+  assert.ok(item.options.includes('diamond_hoe'), 'diamond_hoe should be offered');
+  assert.ok(item.options.includes('netherite_pickaxe'));
+  assert.ok(item.options.includes('enchanted_golden_apple'));
+  // Underscores, material first — the shape people get wrong unaided.
+  assert.ok(item.options.every((id) => !id.includes('-')), 'no item id uses a hyphen');
+  // Still nothing for slots we genuinely cannot enumerate.
+  assert.deepEqual(parseUsageArgs('summon <entity> [x] [y] [z]')[0].options, []);
 });

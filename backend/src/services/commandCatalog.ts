@@ -30,6 +30,46 @@ export type CatalogCommand = {
 /** A usage entry before its arguments have been worked out. */
 type CatalogSeed = Omit<CatalogCommand, 'args'>;
 
+// Item ids are the one free-form argument people reliably get wrong — the
+// separator is an underscore and the order is material-first, so `diamond-hoe`
+// and `hoe_diamond` are both natural guesses and both wrong. Built by
+// combination rather than listed out, since that is exactly how they are named.
+const TOOL_MATERIALS = ['wooden', 'stone', 'iron', 'golden', 'diamond', 'netherite'];
+const TOOL_KINDS = ['sword', 'pickaxe', 'axe', 'shovel', 'hoe'];
+const ARMOUR_MATERIALS = ['leather', 'chainmail', 'iron', 'golden', 'diamond', 'netherite'];
+const ARMOUR_PIECES = ['helmet', 'chestplate', 'leggings', 'boots'];
+
+const NOTABLE_ITEMS = [
+  'turtle_helmet', 'elytra', 'shield', 'bow', 'crossbow', 'arrow', 'spectral_arrow', 'trident',
+  'fishing_rod', 'flint_and_steel', 'shears', 'lead', 'name_tag', 'saddle', 'compass', 'clock',
+  'spyglass', 'totem_of_undying', 'ender_pearl', 'ender_eye', 'experience_bottle', 'firework_rocket',
+  'diamond', 'emerald', 'iron_ingot', 'gold_ingot', 'netherite_ingot', 'netherite_scrap', 'copper_ingot',
+  'coal', 'charcoal', 'redstone', 'lapis_lazuli', 'quartz', 'amethyst_shard', 'echo_shard',
+  'stick', 'string', 'leather', 'feather', 'gunpowder', 'blaze_rod', 'blaze_powder', 'slime_ball',
+  'bread', 'cooked_beef', 'cooked_porkchop', 'golden_apple', 'enchanted_golden_apple', 'golden_carrot',
+  'cake', 'potion', 'splash_potion', 'milk_bucket', 'water_bucket', 'lava_bucket', 'bucket',
+  'torch', 'lantern', 'dirt', 'grass_block', 'stone', 'cobblestone', 'deepslate', 'sand', 'gravel',
+  'oak_log', 'oak_planks', 'obsidian', 'glass', 'chest', 'ender_chest', 'shulker_box', 'barrel',
+  'furnace', 'crafting_table', 'anvil', 'enchanting_table', 'brewing_stand', 'beacon', 'conduit',
+  'tnt', 'bed', 'white_bed', 'bookshelf', 'book', 'enchanted_book', 'writable_book', 'map',
+  'diamond_block', 'iron_block', 'gold_block', 'emerald_block', 'netherite_block', 'redstone_block',
+];
+
+const ITEM_IDS = [
+  ...TOOL_MATERIALS.flatMap((material) => TOOL_KINDS.map((kind) => `${material}_${kind}`)),
+  ...ARMOUR_MATERIALS.flatMap((material) => ARMOUR_PIECES.map((piece) => `${material}_${piece}`)),
+  ...NOTABLE_ITEMS,
+].sort();
+
+/**
+ * Placeholders we can offer real values for even though the usage line can't
+ * spell them out. Vanilla ids only — a modpack's items aren't here, and as
+ * everywhere else the console suggests rather than restricts.
+ */
+const WELL_KNOWN_VALUES: Record<string, string[]> = {
+  item: ITEM_IDS,
+};
+
 /**
  * Read a command's arguments off its usage line, so the usage string stays the
  * single place each command is described.
@@ -71,7 +111,12 @@ export function parseUsageArgs(usage: string): CommandArg[] {
         return { label: token, options: [token], wantsPlayer: false, optional };
       }
 
-      return { label: token, options: [], wantsPlayer: /player|target/i.test(inner), optional };
+      return {
+        label: token,
+        options: WELL_KNOWN_VALUES[inner.toLowerCase()] ?? [],
+        wantsPlayer: /player|target/i.test(inner),
+        optional,
+      };
     });
 }
 
@@ -191,13 +236,56 @@ export function verbOf(command: string): string {
  * used wrongly gets "Incorrect argument…" or "Expected…". Both are failures
  * worth flagging, but only the first means the command doesn't exist.
  */
+// Minecraft points at the character where parsing gave up with this marker.
+export const PARSE_MARKER = '<--[HERE]';
+
+const UNKNOWN_COMMAND = /^unknown (or incomplete )?command\b/i;
+const UNKNOWN_FUNCTION = /^unknown function\b/i;
+// "Unknown item 'x'", "No player was found", "Incorrect argument for command",
+// "Expected whitespace", "Invalid name or UUID" — a real command that the
+// server would not run as given.
+const ARGUMENT_ERROR = /^(unknown|invalid|incorrect|expected|no\s+\w+\s+was\s+found)\b/i;
+
 export function classifyOutput(output: string): 'ok' | 'unknown-command' | 'bad-arguments' {
   const text = output.trim();
   if (!text) return 'ok';
-  if (/^unknown (or incomplete )?command/i.test(text)) return 'unknown-command';
-  if (/^unknown function/i.test(text)) return 'unknown-command';
-  if (/^incorrect argument/i.test(text) || /^expected /i.test(text)) return 'bad-arguments';
+  if (UNKNOWN_COMMAND.test(text) || UNKNOWN_FUNCTION.test(text)) return 'unknown-command';
+  // Whatever the wording, the marker means the server refused to run it. This
+  // catches every "Unknown <thing>" the command dispatcher can produce without
+  // needing to know them all.
+  if (text.includes(PARSE_MARKER)) return 'bad-arguments';
+  if (ARGUMENT_ERROR.test(text)) return 'bad-arguments';
   return 'ok';
+}
+
+/**
+ * Make a command error readable.
+ *
+ * Minecraft's RCON concatenates every feedback line into one string with no
+ * separator, so a parse error arrives as
+ * `Unknown item 'minecraft:diamond-hoe'...hranks minecraft:diamond-hoe<--[HERE]`
+ * — the message and the caret line run together into nonsense. Put the caret
+ * line back on its own line.
+ */
+export function formatServerOutput(output: string, command?: string): string {
+  const text = output.trim();
+  const marker = text.indexOf(PARSE_MARKER);
+  if (marker < 0) return text;
+
+  // The caret line echoes the command around the failure. Minecraft prefixes it
+  // with "..." when it had to cut the front off to fit.
+  const truncated = text.lastIndexOf('...', marker);
+  if (truncated > 0) {
+    return `${text.slice(0, truncated).trimEnd()}\n${text.slice(truncated)}`;
+  }
+
+  // Short enough not to be truncated: the echo is the command verbatim.
+  if (command) {
+    const echo = text.lastIndexOf(command, marker);
+    if (echo > 0) return `${text.slice(0, echo).trimEnd()}\n${text.slice(echo)}`;
+  }
+
+  return text;
 }
 
 function editDistance(a: string, b: string): number {

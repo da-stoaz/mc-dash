@@ -30,7 +30,7 @@ import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard'
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { FailureBanner } from '../../../components/server-details/FailureBanner';
 import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
-import { FirewallState, FormState, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
+import { FirewallState, FormState, hasLiveProcess, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
 import { uploadInChunks } from '../../../lib/chunkedUpload';
@@ -199,6 +199,8 @@ export default function ServerDetailsPage() {
       setShowEdit(null);
       if (updated?.restartRequired) {
         notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else if (!hasLiveProcess(updated?.status)) {
+        notify('Saved', 'Applied the next time this server starts.', 'success');
       } else {
         notify('Saved', 'Changes applied live — no restart needed.', 'success');
       }
@@ -261,6 +263,8 @@ export default function ServerDetailsPage() {
       setShowFirewall(null);
       if (updated?.restartRequired) {
         notify('Firewall saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
+      } else if (!hasLiveProcess(updated?.status)) {
+        notify('Firewall saved', 'Applied the next time this server starts.', 'success');
       } else {
         notify('Firewall saved', 'Bans applied live — no restart needed.', 'success');
       }
