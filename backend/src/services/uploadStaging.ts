@@ -86,18 +86,54 @@ export function chunkSizeFor(size: number): number {
   return Math.min(config.uploadChunkMaxBytes, Math.max(config.uploadChunkBytes, wanted));
 }
 
+const mb = (bytes: number) => Math.round(bytes / 1024 / 1024);
+
+/**
+ * The real ceiling on a 20 GB snapshot is the disk, not a configured number, and
+ * finding out halfway through is expensive for everyone — the client has already
+ * spent minutes uploading, and a full disk takes the running servers down with
+ * it. So refuse up front, while the file is still only a declared size.
+ *
+ * Split out from the statfs call so the arithmetic can be tested without needing
+ * a disk of a particular size.
+ */
+export function assertRoomFor(size: number, availableBytes: number): void {
+  const needed = size + config.uploadDiskMarginBytes;
+  if (needed <= availableBytes) return;
+  throw new UploadError(
+    `Not enough disk space: ${mb(size)} MB upload needs ${mb(needed)} MB free (including a ` +
+      `${mb(config.uploadDiskMarginBytes)} MB reserve) but only ${mb(availableBytes)} MB is available`,
+    507
+  );
+}
+
+// statfs landed in Node 18.15. Older runtimes simply skip the check rather than
+// refusing every upload over a missing API.
+function availableBytes(dir: string): number | null {
+  const statfsSync = (fs as unknown as { statfsSync?: (p: string) => { bsize: number; bavail: number } }).statfsSync;
+  if (typeof statfsSync !== 'function') return null;
+  try {
+    const stats = statfsSync(dir);
+    return stats.bavail * stats.bsize;
+  } catch {
+    return null;
+  }
+}
+
 export function beginUpload(filename: string, size: number): { id: string; chunkSize: number } {
   if (!Number.isInteger(size) || size <= 0) {
     throw new UploadError('Upload size must be a positive number of bytes');
   }
   if (size > config.maxUploadBytes) {
     throw new UploadError(
-      `File is ${Math.round(size / 1024 / 1024)} MB; the limit is ${Math.round(config.maxUploadBytes / 1024 / 1024)} MB ` +
+      `File is ${mb(size)} MB; the limit is ${mb(config.maxUploadBytes)} MB ` +
         '(raise MC_DASH_MAX_UPLOAD_MB to allow more)',
       413
     );
   }
   ensureStagingDir();
+  const free = availableBytes(stagingDir);
+  if (free !== null) assertRoomFor(size, free);
   const id = crypto.randomUUID();
   const filePath = path.join(stagingDir, `${id}.part`);
   fs.writeFileSync(filePath, '');

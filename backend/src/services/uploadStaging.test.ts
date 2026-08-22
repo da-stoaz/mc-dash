@@ -10,7 +10,7 @@ process.env.SQLITE_PATH = path.join(TMP, 'test.sqlite');
 process.env.MC_DASH_MAX_UPLOAD_MB = '1';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { beginUpload, appendChunk, completeUpload, claimUpload, discardUpload, sweep, chunkSizeFor, UploadError } =
+const { beginUpload, appendChunk, completeUpload, claimUpload, discardUpload, sweep, chunkSizeFor, assertRoomFor, UploadError } =
   require('./uploadStaging');
 
 function chunk(byte: number, size: number): Buffer {
@@ -143,4 +143,24 @@ test('slices grow with the file so a huge upload is not thousands of round trips
   const huge = chunkSizeFor(40960 * MB);
   assert.equal(huge, 64 * MB, 'ceiling holds');
   assert.ok(huge < 100 * MB, 'must stay under the tightest common proxy limit');
+});
+
+test('an upload that would fill the disk is refused before a byte moves', () => {
+  const GB = 1024 * 1024 * 1024;
+  // 20 GB snapshot onto a disk with 30 GB free: fits, with the reserve intact.
+  assert.doesNotThrow(() => assertRoomFor(20 * GB, 30 * GB));
+
+  // Same file onto a disk with 21 GB free: it would technically fit, but would
+  // leave nothing for the extracted world the import is about to write.
+  assert.throws(
+    () => assertRoomFor(20 * GB, 21 * GB),
+    (err: any) => {
+      assert.equal(err.status, 507, 'Insufficient Storage, not a generic 400');
+      assert.match(err.message, /Not enough disk space/);
+      return true;
+    }
+  );
+
+  // And the obvious case.
+  assert.throws(() => assertRoomFor(20 * GB, 5 * GB), UploadError);
 });
