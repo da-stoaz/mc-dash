@@ -18,6 +18,9 @@ import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
+import { assertCanStart, capacityReport, committedMbFor, floorMbFor } from '../services/hostCapacityService';
+import { hibernationService } from '../services/hibernationService';
+import { toServerViews } from '../services/serverView';
 import {
   UploadError,
   appendChunk,
@@ -325,7 +328,7 @@ router.get('/', async (_req, res) => {
       return serverStore.update(server.id, { status }) ?? server;
     })
   );
-  res.json(refreshed);
+  res.json(toServerViews(refreshed));
 });
 
 // SSE: live server list. Registered before '/:id' so it isn't captured as an id.
@@ -588,6 +591,41 @@ router.patch('/:id', async (req, res, next) => {
       return res.status(409).json({ error: 'Stop the server before changing its Java image.' });
     }
 
+    // Raising a running server's RAM books host memory just as surely as
+    // starting another server does, and it skips the start gate entirely. Only
+    // the *increase* is checked, so lowering a setting is always allowed even on
+    // a host that is already over budget — that is the fix, not the problem.
+    // Min and max are checked against their own tiers: min is a guarantee that
+    // can't be overcommitted, max is peak demand that can.
+    if (parsed.resources && ['running', 'starting', 'restarting'].includes(existing.status)) {
+      const floorDeltaMb = floorMbFor(parsed.resources) - floorMbFor(existing.resources);
+      const ceilingDeltaMb = committedMbFor(parsed.resources) - committedMbFor(existing.resources);
+      const report = await capacityReport();
+      const gbOf = (valueMb: number) => `${(Math.max(0, valueMb) / 1024).toFixed(1)} GB`;
+
+      if (report.admissionEnabled && floorDeltaMb > 0 && report.remainingGuaranteedMb < floorDeltaMb) {
+        return res.status(409).json({
+          error: 'Not enough memory',
+          code: 'MEMORY_GUARANTEE_EXCEEDED',
+          reason:
+            `Raising min RAM needs ${gbOf(floorDeltaMb)} more guaranteed memory, but only ` +
+            `${gbOf(report.remainingGuaranteedMb)} of the host budget is unreserved.`,
+          details: 'Stop another server first, or apply the change while this one is stopped.',
+        });
+      }
+
+      if (report.admissionEnabled && ceilingDeltaMb > 0 && report.remainingBurstMb < ceilingDeltaMb) {
+        return res.status(409).json({
+          error: 'Not enough memory',
+          code: 'MEMORY_BURST_EXCEEDED',
+          reason:
+            `Raising max RAM adds ${gbOf(ceilingDeltaMb)} of peak demand, past the ` +
+            `${report.burstRatio}x burst limit on a ${gbOf(report.budgetMb)} host.`,
+          details: 'Stop another server first, or apply the change while this one is stopped.',
+        });
+      }
+    }
+
     let portChanged = false;
     let resolvedPort: number | undefined;
     if (parsed.serverPort !== undefined && parsed.serverPort !== existing.serverPort) {
@@ -787,6 +825,19 @@ router.get('/:id/status', async (req, res) => {
 router.post('/:id/start', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
+
+  // Before anything else, and before the status flips to 'starting': would this
+  // server's memory ceiling fit alongside what is already running? A refusal
+  // here costs a toast; the alternative is finding out when the host starts
+  // swapping and stops answering SSH. `force` is the operator's override for
+  // when they know a pack never approaches its ceiling.
+  try {
+    await assertCanStart(server, { force: req.body?.force === true });
+  } catch (err) {
+    const apiErr = toApiError(err, { error: 'Failed to start container', status: 409 });
+    return res.status(apiErr.status).json(apiErr.body);
+  }
+
   try {
     serverStore.update(server.id, { status: 'starting' });
 
@@ -806,8 +857,14 @@ router.post('/:id/start', async (req, res) => {
       }
     }
 
+    // A hibernated server has MC Dash sitting on its port so it can wake on
+    // connect. Hand it back first, and wait for the close: starting the
+    // container while we still hold the port fails with "port is already
+    // allocated", which would make a manual start of a sleeping server flaky.
+    await hibernationService.releasePort(server.id);
+
     const containerId = await dockerService.start(toStart);
-    const updated = serverStore.update(server.id, { status: 'starting', containerId, restartRequired: false });
+    const updated = serverStore.update(server.id, { status: 'starting', containerId, restartRequired: false, hibernated: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Start failed');
@@ -821,6 +878,10 @@ router.post('/:id/stop', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
+    // A manual stop clears the sleep state: the operator wants it down, not
+    // waiting for a player to bring it back. Release the port too, or the next
+    // start collides with our own listener.
+    await hibernationService.releasePort(server.id);
     serverStore.update(server.id, { status: 'stopping' });
 
     // Graceful shutdown: ask Minecraft to save the world and quit via its own
@@ -853,7 +914,7 @@ router.post('/:id/stop', async (req, res) => {
       await dockerService.stop(server, { timeoutSec: rconReachable ? 5 : 30 });
     }
 
-    const updated = serverStore.update(server.id, { status: 'stopped' });
+    const updated = serverStore.update(server.id, { status: 'stopped', hibernated: false });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Stop failed');
@@ -866,6 +927,18 @@ router.post('/:id/stop', async (req, res) => {
 router.post('/:id/restart', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
+
+  // Normally a no-op: a running server already holds its ceiling, so restarting
+  // it changes nothing and the check excludes it from its own budget. It bites
+  // in the case that matters — restarting a server whose container is actually
+  // gone, where the memory was freed and someone else has since claimed it.
+  try {
+    await assertCanStart(server, { force: req.body?.force === true });
+  } catch (err) {
+    const apiErr = toApiError(err, { error: 'Failed to restart container', status: 409 });
+    return res.status(apiErr.status).json(apiErr.body);
+  }
+
   try {
     serverStore.update(server.id, { status: 'restarting' });
     await dockerService.restart(server);
@@ -978,6 +1051,7 @@ router.delete('/:id/container', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
+    await hibernationService.releasePort(server.id);
     await dockerService.remove(server);
     const updated = serverStore.update(server.id, { containerId: null, status: 'stopped' });
     res.json(updated);
@@ -992,6 +1066,7 @@ router.delete('/:id', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
+    await hibernationService.releasePort(server.id);
     if (server.containerId) {
       await dockerService.remove(server);
     }
