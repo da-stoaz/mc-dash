@@ -12,6 +12,9 @@ const TYPE_RESPONSE_VALUE = 0; // server -> client: command output
 
 const AUTH_ID = 1;
 const BASE_CMD_ID = 100;
+// Command i is sent as id BASE_CMD_ID + i, immediately followed by an empty
+// "sentinel" command as id SENTINEL_BASE + i. See the data handler for why.
+const SENTINEL_BASE = BASE_CMD_ID + 1000;
 
 function buildPacket(id: number, type: number, body: string): Buffer {
   const bodyBuf = Buffer.from(body, 'utf8');
@@ -69,7 +72,15 @@ export async function sendRconCommands(opts: RconOptions): Promise<string[]> {
         finish(null);
         return;
       }
-      socket.write(buildPacket(BASE_CMD_ID + nextToSend, TYPE_EXEC, commands[nextToSend]));
+      const index = nextToSend;
+      nextToSend += 1;
+      socket.write(buildPacket(BASE_CMD_ID + index, TYPE_EXEC, commands[index]));
+      // The server answers requests in order, so the reply to this empty command
+      // can only arrive after the real command's output is complete. That is the
+      // only way to know where a response ends: output longer than 4096 bytes
+      // (`help`, a long `list`) is split across several packets that all carry
+      // the same id, with nothing to mark the last one.
+      socket.write(buildPacket(SENTINEL_BASE + index, TYPE_EXEC, ''));
     };
 
     socket.on('connect', () => {
@@ -103,11 +114,22 @@ export async function sendRconCommands(opts: RconOptions): Promise<string[]> {
           continue;
         }
 
-        if (type === TYPE_RESPONSE_VALUE && id >= BASE_CMD_ID) {
+        if (type !== TYPE_RESPONSE_VALUE) continue;
+
+        if (id >= SENTINEL_BASE) {
+          // That command's output is complete, whatever the sentinel replied
+          // with. Record an empty string for commands that said nothing, so the
+          // caller gets one entry per command rather than a hole.
+          const index = id - SENTINEL_BASE;
+          responses[index] = responses[index] ?? '';
+          sendNext();
+          if (settled) return;
+          continue;
+        }
+
+        if (id >= BASE_CMD_ID) {
           const index = id - BASE_CMD_ID;
           responses[index] = (responses[index] ?? '') + body;
-          nextToSend = index + 1;
-          sendNext();
         }
       }
     });

@@ -106,6 +106,14 @@ export type PlayerInfo = {
   names: string[];
 };
 
+// One command run through the server console, with what it printed back.
+export type ConsoleEntry = {
+  id: string;
+  command: string;
+  output: string;
+  at: string;
+};
+
 export type FormState = {
   name: string;
   subdomain: string;

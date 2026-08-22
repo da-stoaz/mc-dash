@@ -82,7 +82,9 @@ test('authenticates and runs commands in order, returning their output', async (
     assert.equal(auths.length, 1);
     assert.equal(auths[0].body, 'secret');
 
-    const execs = mock.received.filter((p) => p.type === TYPE_EXEC);
+    // Each command is followed by an empty sentinel command that marks the end
+    // of its response; only the real ones carry a body.
+    const execs = mock.received.filter((p) => p.type === TYPE_EXEC && p.body !== '');
     assert.deepEqual(execs.map((p) => p.body), ['ban Rino0609 Banned via MC Dash', 'pardon SomeoneElse']);
   } finally {
     await mock.close();
@@ -151,6 +153,46 @@ test('handles a command response split across TCP packets', async () => {
   try {
     const responses = await sendRconCommands({ host: '127.0.0.1', port, password, commands: ['list'] });
     assert.deepEqual(responses, ['echo:list']);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('reassembles output split across several RCON packets', async () => {
+  // Minecraft splits any response over 4096 bytes into several RESPONSE_VALUE
+  // packets that all carry the command's id, with nothing marking the last one.
+  const password = 'pw';
+  const chunks = ['part-one|', 'part-two|', 'part-three'];
+  const server = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    let authed = false;
+    socket.on('data', (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 12) {
+        const size = buffer.readInt32LE(0);
+        if (buffer.length < 4 + size) break;
+        const id = buffer.readInt32LE(4);
+        const type = buffer.readInt32LE(8);
+        const body = buffer.toString('utf8', 12, 4 + size - 2);
+        buffer = buffer.subarray(4 + size);
+        if (type === TYPE_AUTH) {
+          authed = body === password;
+          socket.write(encode(authed ? id : -1, TYPE_AUTH_RESPONSE, ''));
+        } else if (type === TYPE_EXEC && authed) {
+          if (body === 'help') {
+            for (const part of chunks) socket.write(encode(id, TYPE_RESPONSE_VALUE, part));
+          } else {
+            socket.write(encode(id, TYPE_RESPONSE_VALUE, ''));
+          }
+        }
+      }
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    const responses = await sendRconCommands({ host: '127.0.0.1', port, password, commands: ['help', 'list'] });
+    assert.deepEqual(responses, ['part-one|part-two|part-three', '']);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

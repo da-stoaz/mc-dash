@@ -8,6 +8,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - Basic dashboard to list servers, view statuses, and manage uploads.
 - Live per-server CPU and RAM on the server list, plus host totals — what servers are actually using, not just what they're allowed to use.
 - Memory management: idle servers hand heap back to the OS, containers can't touch swap, and a start is refused when the host has no budget left (see below).
+- Server console: run Minecraft commands (`/give`, `/tp`, `/kill`, …) against a live server over RCON and see the console output (see below).
 
 ## Quick start
 1. Install dependencies:
@@ -33,6 +34,8 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - `GET /servers/:id/status` — inspect Docker container status.
 - `POST /servers/:id/{start|stop|restart}` — issues container actions (expects container already built/created). `start` and `restart` are refused with 409 `MEMORY_GUARANTEE_EXCEEDED` / `MEMORY_BURST_EXCEEDED` / `HOST_MEMORY_LOW` when the host has no room; send `{"force": true}` to override.
 - `GET /servers/:id/logs` — streams Docker logs.
+- `POST /servers/:id/console` — run one Minecraft command on the live server over RCON. Body `{"command": "give Alice minecraft:diamond 64"}`; a leading `/` is accepted and stripped. Returns `{ id, command, output, at }`. Refused with 409 `CONSOLE_SERVER_NOT_RUNNING` / `CONSOLE_RCON_DISABLED`, or 502 `CONSOLE_RCON_FAILED` when the server doesn't answer.
+- `GET /servers/:id/console` — recent console entries for this server; `DELETE` clears them.
 
 ## Server pack workflow
 - Create a server with the server pack zip attached.
@@ -157,6 +160,29 @@ reconnect is the only honest option — it is what
 > start gate and the memory bar — works immediately, but until a server is
 > rebuilt it will still hold its full heap while idle.
 
+## Server console
+
+The **Console** tab on a server's page runs Minecraft commands against the live
+server and shows what the console printed back — `/give`, `/tp`, `/kill`,
+`/gamemode`, `/time set day`, anything the server understands.
+
+It talks to the server over RCON, which `prepare` turns on for every server
+(`enable-rcon=true` with a random `rcon.password` in `server.properties`). The
+RCON port is published on loopback only and never leaves the host, so the
+console is reachable from MC Dash and nowhere else.
+
+Notes:
+- The server must be running. A hibernating server has to be started (or woken
+  by a player) first; the console says so rather than failing silently.
+- A leading `/` is optional — the console strips it, so commands can be pasted
+  straight out of the chat box.
+- ↑ / ↓ recall earlier commands. The scrollback is kept in memory on the
+  backend so it survives a page reload, and resets when MC Dash restarts. It is
+  a convenience, not an audit log.
+- `stop` works, and is reported as a shutdown rather than an error — but the
+  toolbar's Stop button is the better path, since it also releases the port and
+  updates the server's state immediately.
+
 ## Docker rootless vs root
 - Rootless Docker cannot bind ports <1024 and has stricter cgroup limits (swap limits often unavailable; CPU/memory enforcement depends on host kernel). Volume permissions can also differ.
 - Rootful Docker allows full cgroup limits and privileged ports. If you rely on tight resource caps or privileged ports, prefer rootful or test rootless carefully.
@@ -168,6 +194,7 @@ reconnect is the only honest option — it is what
 - Prepare/build pipeline: `backend/src/services/prepareService.ts`.
 - Docker actions: `backend/src/services/dockerService.ts`.
 - Memory management: `backend/src/services/jvmTuning.ts` (JVM flags), `memoryPlan.ts` (cgroup limits), `hostCapacityService.ts` (ledger + start gate).
+- Server console: `backend/src/services/consoleService.ts` (validation + RCON round-trip), `rconClient.ts` (protocol), `frontend/src/components/server-details/ConsoleCard.tsx` (UI).
 - Frontend UI: `frontend/src/app/page.tsx`.
 
 ## Next steps
