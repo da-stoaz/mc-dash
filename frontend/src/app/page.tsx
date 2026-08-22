@@ -9,8 +9,9 @@ import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal, ImportModal, ImportFields } from '../components/ServerModals';
 import { useAuth } from '../components/AuthGate';
-import { extractApiErrorMessageFromText, getApiErrorMessage } from '../lib/apiErrors';
+import { getApiErrorMessage } from '../lib/apiErrors';
 import { API_BASE, apiFetch } from '../lib/api';
+import { uploadInChunks } from '../lib/chunkedUpload';
 import { Logo } from '../components/Logo';
 
 export default function Page() {
@@ -122,8 +123,16 @@ export default function Page() {
 
       setCreating(true);
       setUploadProgress(0);
+
+      // The pack travels first, in slices, so no single request runs into the
+      // body limit of whatever proxy sits in front. What follows is just the
+      // form fields plus a reference to the assembled file.
+      const uploadId = await uploadInChunks(packFile, {
+        onProgress: (fraction) => setUploadProgress(Math.round(fraction * 100)),
+      });
+
       const payload = new FormData();
-      payload.append('file', packFile);
+      payload.append('uploadId', uploadId);
       payload.append('name', form.name);
       if (form.subdomain) payload.append('subdomain', form.subdomain);
       payload.append('minRamMb', String(form.minRamMb));
@@ -137,35 +146,12 @@ export default function Page() {
       if (form.renderDistance) payload.append('renderDistance', String(form.renderDistance));
       if (form.seed) payload.append('seed', form.seed);
 
-      const resText = await new Promise<string>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${API_BASE}/servers`);
-        xhr.withCredentials = true;
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const percent = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(percent);
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setUploadProgress(100);
-            resolve(xhr.responseText);
-            return;
-          }
-          reject(new Error(extractApiErrorMessageFromText(xhr.responseText || '', 'Create failed')));
-        };
-        xhr.onerror = () => reject(new Error('Create failed'));
-        xhr.send(payload);
-      });
-      if (resText) {
-        try {
-          const parsed = JSON.parse(resText);
-          if (parsed?.error) throw new Error(parsed.error);
-        } catch {
-          // Non-JSON responses are fine on success.
-        }
+      setUploadProgress(100);
+      const res = await apiFetch(`${API_BASE}/servers`, { method: 'POST', body: payload });
+      if (!res.ok) {
+        throw new Error(await getApiErrorMessage(res, 'Create failed'));
       }
+
       setForm({ ...emptyForm });
       setPackFile(null);
       setShowCreate(false);
@@ -184,8 +170,13 @@ export default function Page() {
     try {
       setImporting(true);
       setImportProgress(0);
+
+      const uploadId = await uploadInChunks(archive, {
+        onProgress: (fraction) => setImportProgress(Math.round(fraction * 100)),
+      });
+
       const payload = new FormData();
-      payload.append('file', archive);
+      payload.append('uploadId', uploadId);
       payload.append('name', fields.name);
       if (fields.subdomain) payload.append('subdomain', fields.subdomain);
       payload.append('minRamMb', String(fields.minRamMb));
@@ -194,34 +185,14 @@ export default function Page() {
       if (fields.cpuLimit) payload.append('cpuLimit', fields.cpuLimit);
       if (fields.javaImage) payload.append('javaImage', fields.javaImage);
 
-      const resText = await new Promise<string>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${API_BASE}/servers/import`);
-        xhr.withCredentials = true;
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            setImportProgress(Math.round((event.loaded / event.total) * 100));
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setImportProgress(100);
-            resolve(xhr.responseText);
-            return;
-          }
-          reject(new Error(extractApiErrorMessageFromText(xhr.responseText || '', 'Import failed')));
-        };
-        xhr.onerror = () => reject(new Error('Import failed'));
-        xhr.send(payload);
-      });
-      if (resText) {
-        try {
-          const parsed = JSON.parse(resText);
-          if (parsed?.error) throw new Error(parsed.error);
-        } catch {
-          // Non-JSON success responses are fine.
-        }
+      // Import extracts the archive and builds the container before it answers,
+      // so this call can sit for a while after the bytes are all up.
+      setImportProgress(100);
+      const res = await apiFetch(`${API_BASE}/servers/import`, { method: 'POST', body: payload });
+      if (!res.ok) {
+        throw new Error(await getApiErrorMessage(res, 'Import failed'));
       }
+
       setShowImport(false);
       await fetchServers();
       notify('Server imported', 'Snapshot restored into a new server. It is ready to start.', 'success');

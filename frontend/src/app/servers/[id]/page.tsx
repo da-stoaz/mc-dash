@@ -29,8 +29,9 @@ import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard'
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
-import { extractApiErrorMessageFromText, getApiErrorMessage } from '../../../lib/apiErrors';
+import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
+import { uploadInChunks } from '../../../lib/chunkedUpload';
 
 export default function ServerDetailsPage() {
   const params = useParams<{ id: string }>();
@@ -210,37 +211,21 @@ export default function ServerDetailsPage() {
     try {
       setPackReplacing(true);
       setPackProgress(0);
-      const payload = new FormData();
-      payload.append('file', file);
 
-      const resText = await new Promise<string>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${API_BASE}/servers/${id}/pack`);
-        xhr.withCredentials = true;
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            setPackProgress(Math.round((event.loaded / event.total) * 100));
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setPackProgress(100);
-            resolve(xhr.responseText);
-            return;
-          }
-          reject(new Error(extractApiErrorMessageFromText(xhr.responseText || '', 'Pack upload failed')));
-        };
-        xhr.onerror = () => reject(new Error('Pack upload failed'));
-        xhr.send(payload);
+      // Sliced so no single request meets the body limit of the proxy in front.
+      const uploadId = await uploadInChunks(file, {
+        onProgress: (fraction) => setPackProgress(Math.round(fraction * 100)),
       });
-      if (resText) {
-        try {
-          const parsed = JSON.parse(resText);
-          if (parsed?.error) throw new Error(parsed.error);
-        } catch {
-          // Non-JSON success responses are fine.
-        }
+
+      const payload = new FormData();
+      payload.append('uploadId', uploadId);
+
+      setPackProgress(100);
+      const res = await apiFetch(`${API_BASE}/servers/${id}/pack`, { method: 'POST', body: payload });
+      if (!res.ok) {
+        throw new Error(await getApiErrorMessage(res, 'Pack upload failed'));
       }
+
       await fetchServer();
       notify('New pack uploaded', 'Now run Prepare to apply it — your world is preserved.', 'success');
     } catch (err: any) {

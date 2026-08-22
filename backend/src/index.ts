@@ -7,6 +7,7 @@ import { config } from './config';
 import { logger } from './logger';
 import { routerService } from './services/routerService';
 import { metricsCollector } from './services/metricsCollector';
+import { uploadStaging } from './services/uploadStaging';
 
 // Before anything binds a port: refuse to come up unauthenticated by accident.
 try {
@@ -64,3 +65,4 @@ app.listen(config.port, config.bindHost, () => {
 
 routerService.start();
 metricsCollector.start();
+uploadStaging.start();
