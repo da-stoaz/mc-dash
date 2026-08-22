@@ -160,7 +160,7 @@ router.post('/uploads', (req, res, next) => {
 router.put('/uploads/:uploadId/:index', chunkBody, async (req, res, next) => {
   try {
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: 'Chunk body must be non-empty application/octet-stream' });
+      return res.status(400).json({ error: 'Chunk body is empty' });
     }
     const index = Number(req.params.index);
     res.json(await appendChunk(String(req.params.uploadId), index, req.body));
@@ -369,7 +369,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       throw err;
     }
     if (!pack) {
-      return res.status(400).json({ error: 'Server pack zip required (field "file" or a completed "uploadId")' });
+      return res.status(400).json({ error: 'Server pack zip required' });
     }
 
     const parsed = createServerSchema.parse(req.body);
@@ -444,7 +444,7 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
       throw err;
     }
     if (!archive) {
-      return res.status(400).json({ error: 'Snapshot archive required (field "file" or a completed "uploadId")' });
+      return res.status(400).json({ error: 'Snapshot archive required' });
     }
 
     const parsed = importServerSchema.parse(req.body);
@@ -533,7 +533,7 @@ router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
       return res.status(409).json({ error: 'Stop the server before replacing its pack' });
     }
     if (!pack) {
-      return res.status(400).json({ error: 'Server pack zip required (field "file" or a completed "uploadId")' });
+      return res.status(400).json({ error: 'Server pack zip required' });
     }
 
     const safeName = pack.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -921,6 +921,15 @@ router.get('/:id/metrics/history', (req, res) => {
   res.json({ range, resolution: metricsStore.resolutionFor(range), points: metricsStore.query(server.id, range) });
 });
 
+// The reason the UI shows beside an errored server. Prefers the mapped, human
+// wording over a raw library message, and stays short enough to actually read.
+function failureReason(body: { reason?: unknown; error?: unknown }): string {
+  const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason : null;
+  const headline = typeof body.error === 'string' && body.error.trim() ? body.error : 'Prepare failed';
+  const text = reason ?? headline;
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+}
+
 router.post('/:id/prepare', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
@@ -935,7 +944,9 @@ router.post('/:id/prepare', async (req, res) => {
 
   try {
     preparing.add(server.id);
-    serverStore.update(server.id, { status: 'creating' });
+    // Clear the previous failure as the retry starts, so a stale reason can't
+    // sit beside a run that is currently in progress.
+    serverStore.update(server.id, { status: 'creating', lastError: null });
     const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } = server.serverPackUrl
       ? await prepareServer(server)
       : await recreateContainer(server);
@@ -948,12 +959,15 @@ router.post('/:id/prepare', async (req, res) => {
       packRecommendedJavaMajor: packRecommendedJavaMajor ?? null,
       restartRequired: false,
       packReady: true,
+      lastError: null,
     });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Prepare failed');
-    serverStore.update(server.id, { status: 'error' });
     const apiErr = toApiError(err, { error: 'Failed to prepare server pack', status: 500 });
+    // Persist the reason, not just the red chip: the toast is gone in seconds
+    // and shows nothing at all to someone who reloads or comes back later.
+    serverStore.update(server.id, { status: 'error', lastError: failureReason(apiErr.body) });
     res.status(apiErr.status).json(apiErr.body);
   } finally {
     preparing.delete(server.id);

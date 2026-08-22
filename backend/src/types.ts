@@ -52,6 +52,10 @@ export interface ServerRecord {
   notes?: string;
   restartRequired?: boolean;
   packReady?: boolean;
+  // Why the last operation failed, kept so a server sitting in 'error' can say
+  // what happened. A toast is gone in seconds and says nothing after a reload,
+  // which left the red status chip as the only trace of a failed Prepare.
+  lastError?: string | null;
 }
 
 export interface ServerCreateInput {
@@ -87,6 +91,7 @@ export interface ServerUpdateInput {
   blacklistEnabled?: boolean;
   restartRequired?: boolean;
   packReady?: boolean;
+  lastError?: string | null;
 }
 
 export type SnapshotKind = 'manual' | 'auto-pre-restore';

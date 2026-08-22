@@ -66,8 +66,18 @@ function envNumber(raw: string | undefined, fallback: number): number {
 
 // Server packs and snapshot archives are uploaded in chunks (see
 // services/uploadStaging), so this ceiling is disk, not memory — nothing here
-// is ever held in RAM whole.
-const maxUploadMb = Math.max(1, envNumber(process.env.MC_DASH_MAX_UPLOAD_MB, 4096));
+// is ever held in RAM whole. A snapshot of a long-lived server carries its whole
+// world and can reach tens of gigabytes, so this is deliberately loose: the
+// check that actually protects the host is free space (below), which knows what
+// the disk can take. This is only a backstop against an absurd declared size.
+const maxUploadMb = Math.max(1, envNumber(process.env.MC_DASH_MAX_UPLOAD_MB, 32768));
+// An upload needs room for more than itself: the archive is staged whole, then
+// extracted alongside it. Require this multiple of the declared size to be free
+// before accepting one, or the floor below, whichever is larger.
+const uploadDiskFactor = Math.max(1, envNumber(process.env.MC_DASH_UPLOAD_DISK_FACTOR, 1.5));
+// Floor for small uploads, where a multiple of the size would reserve nothing
+// worth having.
+const uploadDiskMinFreeMb = Math.max(0, envNumber(process.env.MC_DASH_UPLOAD_DISK_MIN_FREE_MB, 2048));
 // Smallest slice a request will carry. The point of chunking is to stay under
 // whatever the proxy in front allows, and the tightest common ceiling is
 // Cloudflare's 100 MB — 8 MB leaves a wide margin and costs ~30 requests for a
@@ -99,6 +109,8 @@ export const config = {
   dockerApiVersion: process.env.DOCKER_API_VERSION,
   dataRoot,
   maxUploadBytes: maxUploadMb * 1024 * 1024,
+  uploadDiskFactor,
+  uploadDiskMinFreeBytes: uploadDiskMinFreeMb * 1024 * 1024,
   uploadChunkBytes: uploadChunkMb * 1024 * 1024,
   uploadChunkMaxBytes: uploadChunkMaxMb * 1024 * 1024,
   containerUser: resolveContainerUser(),
