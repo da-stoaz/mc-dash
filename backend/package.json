@@ -15,6 +15,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "adm-zip": "^0.6.0",
     "better-sqlite3": "^12.5.0",
     "cors": "^2.8.5",
