@@ -34,6 +34,12 @@ function connector(version = '1.0.0-beta.46+1.20.1', deps: Record<string, string
   }));
   return zip.toBuffer();
 }
+function universalNecronomicon() {
+  const zip = new AdmZip(forge('necronomicon', '1.6.0', { forge: '*' }));
+  zip.addFile('META-INF/neoforge.mods.toml', Buffer.from('modLoader="javafml"\nloaderVersion="*"\n[[mods]]\nmodId="necronomicon"\nversion="1.6.0"\n[[dependencies.necronomicon]]\nmodId="neoforge"\nmandatory=true\nversionRange="*"\n'));
+  zip.addFile('fabric.mod.json', Buffer.from(JSON.stringify({ schemaVersion: 1, id: 'necronomicon', version: '1.6.0', depends: { fabric: '*', fabricloader: '>=0.15.0' } })));
+  return zip.toBuffer();
+}
 async function pack(t: any, jars: Record<string, Buffer>, vars = 'MINECRAFT_VERSION=1.20.1\nMODLOADER=Forge\nMODLOADER_VERSION=47.4.18\n') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mc-dash-deps-test-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -151,6 +157,59 @@ test('malformed Connector payload declarations are rejected during inspection', 
   const payload = zip.getEntries().find(e => e.entryName.endsWith('-mod.jar'))!;
   zip.deleteFile(payload);
   assert.throws(() => readMods(zip.toBuffer(), 'broken.jar', 'forge'), /Missing or oversized embedded JAR/);
+});
+
+test('universal JARs use the active loader descriptor, including embedded libraries', () => {
+  const jar = universalNecronomicon();
+  for (const [loader, dependency] of [['forge', 'forge'], ['neoforge', 'neoforge'], ['fabric', 'fabric']] as const) {
+    const mods = readMods(jar, 'Necronomicon.jar', loader);
+    assert.equal(mods.length, 1);
+    assert.equal(mods[0].loader, loader);
+    assert.equal(mods[0].requirements[0].id, dependency);
+    assert.equal(mods[0].version, '1.6.0');
+    const wrapper = forge('wrapper', '1', {}, {
+      'META-INF/jarjar/metadata.json': JSON.stringify({ jars: [{ path: 'META-INF/jarjar/necronomicon.jar' }] }),
+      'META-INF/jarjar/necronomicon.jar': jar,
+    });
+    const embedded = readMods(wrapper, 'wrapper.jar', loader).find(m => m.id === 'necronomicon')!;
+    assert.equal(embedded.loader, loader);
+    assert.equal(embedded.embedded, true);
+  }
+  const neoOnly = new AdmZip(jar);
+  neoOnly.deleteFile('META-INF/mods.toml');
+  neoOnly.deleteFile('fabric.mod.json');
+  assert.equal(readMods(neoOnly.toBuffer(), 'neo-only.jar', 'forge')[0].loader, 'neoforge');
+});
+
+test('Ascendra NightLib repair uses installed universal Necronomicon without downloading duplicates', async t => {
+  const existing = universalNecronomicon();
+  const root = await pack(t, {
+    'customnetherportals.jar': forge('customnetherportals', '3', { nightlib: '[1.3.0,)' }),
+    'item_obliterator.jar': forge('item_obliterator', '2', { necronomicon: '*' }),
+    'Necronomicon-Forge.jar': existing,
+  });
+  const sources = new Fixtures({ nightlib: [forge('nightlib', '1.3.0', { necronomicon: '[1.6,)' })] });
+  assert.deepEqual(await ensureModDependencies(root, sources), { installed: ['nightlib-0.jar'] });
+  assert.deepEqual(sources.requested, ['nightlib']);
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods/Necronomicon-Forge.jar')), existing);
+  const offline = new Fixtures({});
+  assert.deepEqual(await ensureModDependencies(root, offline), { installed: [] });
+  assert.deepEqual(offline.requested, []);
+});
+
+test('a downloaded universal dependency is validated against Forge metadata', async t => {
+  const root = await pack(t, { 'item_obliterator.jar': forge('item_obliterator', '2', { necronomicon: '[1.6,)' }) });
+  assert.deepEqual(await ensureModDependencies(root, new Fixtures({ necronomicon: [universalNecronomicon()] })), { installed: ['necronomicon-0.jar'] });
+});
+
+test('real duplicate IDs remain rejected and identify the conflicting file and loader', async t => {
+  const original = forge('root', '1', { lib: '[1,)' });
+  const root = await pack(t, { 'root.jar': original });
+  const duplicate = new AdmZip(forge('lib', '1'));
+  duplicate.addFile('META-INF/mods.toml', Buffer.from(duplicate.readAsText('META-INF/mods.toml') + '\n[[mods]]\nmodId="root"\nversion="2"\n'));
+  await assert.rejects(ensureModDependencies(root, new Fixtures({ lib: [duplicate.toBuffer()] })), (err: any) => /duplicate mod ID root; already provided by root.jar \(forge, 1\)/.test(err.reason));
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods/root.jar')), original);
+  assert.deepEqual(await fs.readdir(path.join(root, 'mods')), ['root.jar']);
 });
 
 test('bundled dependencies, provides aliases and client-only declarations are respected', () => {

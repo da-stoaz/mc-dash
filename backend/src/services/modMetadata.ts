@@ -150,10 +150,14 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
     const neo = text('META-INF/neoforge.mods.toml');
     const forge = text('META-INF/mods.toml');
     const fabric = text('fabric.mod.json');
+    // Universal JARs can ship all three descriptors. Read the one the active
+    // loader uses; the presence of NeoForge metadata does not make a Forge
+    // descriptor inactive (e.g. Necronomicon 1.6.0).
+    const useNeo = !!neo && !(preferred === 'forge' && forge);
     if ((neo || forge) && !(preferred === 'fabric' && fabric)) {
-      const meta = parse(neo ?? forge!) as any;
+      const meta = parse(useNeo ? neo! : forge!) as any;
       if (meta.clientSideOnly === true) return [];
-      const loader: Loader = neo ? 'neoforge' : 'forge';
+      const loader: Loader = useNeo ? 'neoforge' : 'forge';
       const implementation = manifest.match(/^Implementation-Version:\s*(.+)$/m)?.[1]?.trim();
       for (const mod of meta.mods ?? []) {
         if (typeof mod.modId !== 'string') continue;
