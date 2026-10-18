@@ -15,6 +15,8 @@ const MAX_DOWNLOAD = 128 * 1024 * 1024;
 const API = 'https://api.modrinth.com/v2';
 const CURSE = 'https://api.curseforge.com/v1';
 const HOSTS = new Set(['api.modrinth.com', 'cdn.modrinth.com', 'api.curseforge.com', 'edge.forgecdn.net', 'mediafilez.forgecdn.net', 'media.forgecdn.net']);
+// Project IDs need not match the IDs declared inside the mod's metadata.
+const MODRINTH_PROJECTS: Record<string, string> = { connectormod: 'u58R1TMW' };
 
 // A verified fallback for the reported crash, independent of API availability
 // or a CurseForge API key. Original publisher file (not a re-hosted copy):
@@ -125,6 +127,8 @@ export class DependencySources {
       }
     }
     const projects = new Set<string>();
+    const project = MODRINTH_PROJECTS[requirement.id];
+    if (project) projects.add(project);
     // Exact hash of the requiring mod identifies upstream dependency projects
     // even when the dependency's mod ID differs from its project slug.
     for (const parent of parents) {

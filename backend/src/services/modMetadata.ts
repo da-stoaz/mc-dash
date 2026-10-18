@@ -72,6 +72,34 @@ function matchesFabric(version: string, range: string): boolean | undefined {
   return results.includes(false) ? false : results.includes(undefined) ? undefined : true;
 }
 
+// Support numeric Maven versions and the common dotted qualifier form used by
+// Connector (1.0.0-beta.18+1.20.1). Other Maven syntax stays unknown rather than
+// being interpreted as semver: Maven does not discard the suffix after '+'.
+function compareMaven(a: string, b: string): number | undefined {
+  if (a === b) return 0;
+  const parseVersion = (value: string) => value.toLowerCase().match(/^(\d+(?:\.\d+)*)(?:-(alpha|beta|milestone|rc|snapshot|sp)(?:\.(\d+))?)?(\+[0-9a-z.-]+)?$/);
+  const aa = parseVersion(a), bb = parseVersion(b);
+  if (!aa || !bb) return undefined;
+  if ([aa, bb].some(v => v[2] && !v[3] && v[4])) return undefined;
+  const an = aa[1].split('.').map(BigInt), bn = bb[1].split('.').map(BigInt);
+  for (let i = 0; i < Math.max(an.length, bn.length); i++) {
+    if ((an[i] ?? 0n) !== (bn[i] ?? 0n)) return (an[i] ?? 0n) > (bn[i] ?? 0n) ? 1 : -1;
+  }
+  const qualifiers = ['alpha', 'beta', 'milestone', 'rc', 'snapshot', '', 'sp'];
+  const aq = qualifiers.indexOf(aa[2] ?? ''), bq = qualifiers.indexOf(bb[2] ?? '');
+  // A '+' suffix immediately after a numeric release is an unknown Maven
+  // qualifier, which sorts after the known qualifiers, including 'sp'.
+  const ar = !aa[2] && aa[4] ? qualifiers.length : aq;
+  const br = !bb[2] && bb[4] ? qualifiers.length : bq;
+  if (ar !== br) return ar > br ? 1 : -1;
+  const ap = BigInt(aa[3] ?? '0'), bp = BigInt(bb[3] ?? '0');
+  if (ap !== bp) return ap > bp ? 1 : -1;
+  if (aa[4] === bb[4]) return 0;
+  // An extra unknown qualifier sorts after the same version without it.
+  if (!aa[4] || !bb[4]) return aa[4] ? 1 : -1;
+  return undefined;
+}
+
 // Undefined means the loader has a version syntax we cannot confidently compare.
 // Never treat an unknown comparison as permission to install a downloaded JAR.
 export function matches(version: string, range: string | string[], kind: Requirement['kind']): boolean | undefined {
@@ -89,25 +117,14 @@ export function matches(version: string, range: string | string[], kind: Require
   // Maven's unbracketed version is a recommendation, not a hard restriction.
   if (!intervals) return /^[^\[\]()]+$/.test(range) ? true : undefined;
   if (intervals.join(',') !== range.replace(/\s/g, '')) return undefined;
-  const compare = (a: string, b: string): number | undefined => {
-    if (a === b) return 0;
-    // Numeric Maven versions allow more than 3 components. Qualifier ordering
-    // differs from semver, so leave those comparisons to Forge rather than guess.
-    if (!/^\d+(?:\.\d+)*$/.test(a) || !/^\d+(?:\.\d+)*$/.test(b)) return undefined;
-    const aa = a.split('.').map(BigInt), bb = b.split('.').map(BigInt);
-    for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
-      if ((aa[i] ?? 0n) !== (bb[i] ?? 0n)) return (aa[i] ?? 0n) > (bb[i] ?? 0n) ? 1 : -1;
-    }
-    return 0;
-  };
   const results = intervals.map(interval => {
     const parts = interval.slice(1, -1).split(',').map(s => s.trim());
     if (parts.length === 1) {
-      const result = compare(version, parts[0]);
+      const result = compareMaven(version, parts[0]);
       return interval.startsWith('[') && interval.endsWith(']') && result !== undefined ? result === 0 : undefined;
     }
-    const low = parts[0] ? compare(version, parts[0]) : 1;
-    const high = parts[1] ? compare(version, parts[1]) : -1;
+    const low = parts[0] ? compareMaven(version, parts[0]) : 1;
+    const high = parts[1] ? compareMaven(version, parts[1]) : -1;
     if (low === undefined || high === undefined) return undefined;
     return (low > 0 || (low === 0 && interval[0] === '[')) && (high < 0 || (high === 0 && interval.endsWith(']')));
   });
@@ -126,7 +143,10 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
       return entry.getData().toString('utf8');
     }
     const mods: Mod[] = [];
-    const nested = new Set<string>();
+    const nested = new Map<string, boolean>();
+    // Manifest attributes may wrap onto continuation lines. Only the main
+    // section describes this JAR; named entry sections must not override it.
+    const manifest = (text('META-INF/MANIFEST.MF') ?? '').replace(/\r?\n /g, '').split(/\r?\n\r?\n/)[0];
     const neo = text('META-INF/neoforge.mods.toml');
     const forge = text('META-INF/mods.toml');
     const fabric = text('fabric.mod.json');
@@ -134,7 +154,6 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
       const meta = parse(neo ?? forge!) as any;
       if (meta.clientSideOnly === true) return [];
       const loader: Loader = neo ? 'neoforge' : 'forge';
-      const manifest = (text('META-INF/MANIFEST.MF') ?? '').replace(/\r?\n /g, '');
       const implementation = manifest.match(/^Implementation-Version:\s*(.+)$/m)?.[1]?.trim();
       for (const mod of meta.mods ?? []) {
         if (typeof mod.modId !== 'string') continue;
@@ -147,8 +166,6 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
         }
         mods.push({ id: mod.modId, version: String(mod.version ?? '').replace('${file.jarVersion}', implementation ?? '${file.jarVersion}'), requirements: reqs, conflicts, file, loader, embedded });
       }
-      const jarjar = text('META-INF/jarjar/metadata.json');
-      if (jarjar) for (const jar of JSON.parse(jarjar).jars ?? []) nested.add(jar.path);
     } else if (fabric) {
       const meta = JSON.parse(fabric);
       if (meta.environment === 'client' || (Array.isArray(meta.environment) && !meta.environment.some((e: string) => e === '*' || e === 'server'))) return [];
@@ -157,12 +174,20 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
         mods.push({ id: meta.id, version: String(meta.version), requirements: requirements(meta.depends), conflicts: requirements(meta.breaks), file, loader: 'fabric', embedded });
         for (const id of meta.provides ?? []) mods.push({ id, version: String(meta.version), requirements: [], conflicts: [], file, loader: 'fabric', embedded });
       }
-      for (const jar of meta.jars ?? []) nested.add(jar.file);
+      for (const jar of meta.jars ?? []) nested.set(jar.file, true);
     }
-    for (const name of nested) {
+    if (((neo || forge) && !(preferred === 'fabric' && fabric)) || !fabric) {
+      const jarjar = text('META-INF/jarjar/metadata.json');
+      if (jarjar) for (const jar of JSON.parse(jarjar).jars ?? []) nested.set(jar.path, true);
+      // Connector is a service wrapper: its primary mod is declared here,
+      // outside standard jarjar metadata, and can itself bundle libraries.
+      const payload = manifest.match(/^Embedded-Dependencies-Mod:\s*(.+)$/mi)?.[1]?.trim();
+      if (payload) nested.set(payload, embedded);
+    }
+    for (const [name, nestedEmbedded] of nested) {
       const entry = zip.getEntry(name);
       if (!entry || entry.header.size > 128 * 1024 * 1024) throw new Error(`Missing or oversized embedded JAR ${name} in ${label}`);
-      mods.push(...read(entry.getData(), `${label}!/${name}`, true, depth + 1));
+      mods.push(...read(entry.getData(), `${label}!/${name}`, nestedEmbedded, depth + 1));
     }
     return mods;
   }

@@ -19,6 +19,12 @@ function problem(message: string): never {
 // Each downloaded JAR must satisfy *all* current requirements, not just the
 // first mod that requested it. Backtracking handles new transitive constraints.
 function nextMissing(mods: Mod[], runtime?: Runtime, strictFiles = new Set<string>()): Requirement[] | undefined {
+  // Re-evaluate after each addition: installing Connector can enable Fabric
+  // mods that were already present in the original Forge pack.
+  if (runtime) {
+    const connector = mods.some(m => m.loader === 'forge' && m.id === 'connectormod');
+    mods = mods.filter(m => m.loader === runtime.loader || (connector && runtime.loader === 'forge' && m.loader === 'fabric'));
+  }
   const requirements = new Map<string, Requirement[]>();
   for (const mod of mods) {
     for (const conflict of mod.conflicts) {
@@ -68,12 +74,6 @@ export async function ensureModDependencies(root: string, sources = new Dependen
     const file = path.join(modsDir, entry.name);
     try { inventory.push(...readMods(await fs.readFile(file), file, runtime?.loader)); }
     catch (err: any) { problem(`Cannot inspect ${entry.name}: ${err.message}`); }
-  }
-  // Connector explicitly enables Fabric mods on Forge. Without it, metadata
-  // for a foreign loader does not describe mods this server will actually load.
-  if (runtime) {
-    const connector = inventory.some(m => m.id === 'connector');
-    inventory = inventory.filter(m => m.loader === runtime.loader || (connector && runtime.loader === 'forge' && m.loader === 'fabric'));
   }
   let missing: Requirement[] | undefined;
   try { missing = nextMissing(inventory, runtime); } catch (err: any) { problem(err.message); }

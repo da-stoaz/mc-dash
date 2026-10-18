@@ -21,6 +21,19 @@ function fabric(id: string, version: string, deps: Record<string, any> = {}, ext
   for (const [name, data] of Object.entries(files)) zip.addFile(name, data);
   return zip.toBuffer();
 }
+function connector(version = '1.0.0-beta.46+1.20.1', deps: Record<string, string> = {}) {
+  const zip = new AdmZip();
+  const payload = `META-INF/jarjar/Connector-${version}-mod.jar`;
+  // Match the publisher's wrapper, including a folded manifest attribute and
+  // a primary payload which does not appear in jarjar/metadata.json.
+  zip.addFile('META-INF/MANIFEST.MF', Buffer.from(`Manifest-Version: 1.0\r\nEmbedded-Dependencies-Mod: ${payload.slice(0, 40)}\r\n ${payload.slice(40)}\r\n\r\n`));
+  zip.addFile(payload, forge('connectormod', '${file.jarVersion}', { forge: '[47,)', minecraft: '[1.20.1,1.21)', ...deps }, {
+    'META-INF/MANIFEST.MF': `Manifest-Version: 1.0\r\nImplementation-Version: ${version}\r\n\r\n`,
+    'META-INF/jarjar/metadata.json': JSON.stringify({ jars: [{ path: 'META-INF/jarjar/bundled.jar' }] }),
+    'META-INF/jarjar/bundled.jar': forge('connector_bundled', '1.0'),
+  }));
+  return zip.toBuffer();
+}
 async function pack(t: any, jars: Record<string, Buffer>, vars = 'MINECRAFT_VERSION=1.20.1\nMODLOADER=Forge\nMODLOADER_VERSION=47.4.18\n') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mc-dash-deps-test-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -46,7 +59,7 @@ test('Maven ranges respect inclusive/exclusive bounds, exact versions, unions an
   for (const [version, range, expected] of [
     ['1.3.0', '[1.3.0,)', true], ['1.2.9', '[1.3.0,)', false], ['2.0', '[1.3,2.0)', false],
     ['1.20.1', '[1.20.1]', true], ['1.20.2', '[1.20.1]', false], ['1.3', '(,1.2],[1.3,)', true],
-    ['1.2.3.10', '[1.2.3.9,)', true], ['1.3.0-beta', '[1.3.0,)', undefined], ['1.3.0-beta', '[1.3.0]', undefined],
+    ['1.2.3.10', '[1.2.3.9,)', true], ['1.3.0-beta', '[1.3.0,)', false], ['1.3.0-beta', '[1.3.0]', false],
     ['1.0', '(, 1.1)', true],
   ] as const) assert.equal(matches(version, range, 'maven'), expected, `${version} ${range}`);
   assert.equal(matches('1.4.0', ['>=1.3.0 <2', '>=3'], 'fabric'), true);
@@ -60,6 +73,84 @@ test('Maven ranges respect inclusive/exclusive bounds, exact versions, unions an
   assert.equal(matches('1.3.0-rc1', '~1.2.0', 'fabric'), false);
   assert.equal(matches('1.2.0-alpha.1', '1.2.x', 'fabric'), true);
   assert.equal(matches('release-string', '=release-string', 'fabric'), true);
+});
+
+test('Maven dotted prerelease ranges validate Connector versions without semver build stripping', () => {
+  for (const [version, range, expected] of [
+    ['1.0.0-beta.3+1.20.1', '[1.0.0-beta.18,)', false],
+    ['1.0.0-beta.18+1.20.1', '[1.0.0-beta.18,)', true],
+    ['1.0.0-beta.46+1.20.1', '[1.0.0-beta.18,)', true],
+    ['1.0.0-beta.9+1.20.1', '[1.0.0-beta.18,)', false],
+    ['1.0.0-beta.18+1.20.1', '(,1.0.0-beta.18]', false],
+    ['1.0.0-beta.46+1.20.1', '[1.0.0,)', false],
+    ['1.0.0-rc.1', '[1.0.0-beta.18,1.0.0)', true],
+    ['1.0.0-sp.1', '[1.0.0,)', true],
+    ['1.0.0+mc', '[1.0.0-sp.1,)', true],
+    ['1.0.0-beta+mc', '[1.0.0,)', undefined],
+    ['1.0.0-custom', '[1.0.0,)', undefined],
+    ['${file.jarVersion}', '[1.0.0-beta.18,)', undefined],
+  ] as const) assert.equal(matches(version, range, 'maven'), expected, `${version} ${range}`);
+});
+
+test('Connector wrapper exposes its primary mod and keeps its bundled libraries embedded', () => {
+  assert.deepEqual(readMods(connector(), 'connector.jar', 'forge').map(m => [m.id, m.version, m.embedded]), [
+    ['connectormod', '1.0.0-beta.46+1.20.1', false], ['connector_bundled', '1.0', true],
+  ]);
+});
+
+test('an installed Connector wrapper satisfies Extras without downloading a duplicate', async t => {
+  const root = await pack(t, {
+    'Connector.jar': connector(),
+    'extras.jar': forge('connectorextras_architectury_bridge', '1.11.2+1.20.1', { connectormod: '[1.0.0-beta.18, )' }),
+  });
+  const sources = new Fixtures({});
+  assert.deepEqual(await ensureModDependencies(root, sources), { installed: [] });
+  assert.deepEqual(sources.requested, []);
+});
+
+test('missing Connector rejects beta.3, installs a compatible wrapper and checks newly enabled Fabric mods', async t => {
+  const root = await pack(t, {
+    'extras.jar': forge('connectorextras_architectury_bridge', '1', { connectormod: '[1.0.0-beta.18, )' }),
+    'fabric-mod.jar': fabric('fabric_mod', '1.0.0', { fabric_lib: '>=2.0.0' }),
+  });
+  const sources = new Fixtures({
+    connectormod: [connector('1.0.0-beta.3+1.20.1'), connector()],
+    fabric_lib: [fabric('fabric_lib', '2.0.0')],
+  });
+  assert.deepEqual((await ensureModDependencies(root, sources)).installed, ['connectormod-1.jar', 'fabric_lib-0.jar']);
+  const offline = new Fixtures({});
+  assert.deepEqual(await ensureModDependencies(root, offline), { installed: [] });
+  assert.deepEqual(offline.requested, []);
+});
+
+test('a genuinely outdated installed Connector is preserved and reports its version without network', async t => {
+  const old = connector('1.0.0-beta.3+1.20.1');
+  const root = await pack(t, {
+    'Connector.jar': old,
+    'extras.jar': forge('connectorextras_architectury_bridge', '1', { connectormod: '[1.0.0-beta.18,)' }),
+  });
+  const sources = new Fixtures({ connectormod: [connector()] });
+  await assert.rejects(ensureModDependencies(root, sources), (err: any) => /installed: 1.0.0-beta.3\+1.20.1/.test(err.reason));
+  assert.deepEqual(sources.requested, []);
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods/Connector.jar')), old);
+});
+
+test('Connector enables Fabric dependencies on Forge while foreign mods without it stay inactive', async t => {
+  for (const withConnector of [false, true]) {
+    const root = await pack(t, {
+      ...(withConnector ? { 'Connector.jar': connector() } : {}),
+      'fabric-mod.jar': fabric('fabric_mod', '1.0.0', { fabric_lib: '>=2.0.0' }),
+    });
+    const sources = new Fixtures({ fabric_lib: [fabric('fabric_lib', '2.0.0')] });
+    assert.deepEqual((await ensureModDependencies(root, sources)).installed, withConnector ? ['fabric_lib-0.jar'] : []);
+  }
+});
+
+test('malformed Connector payload declarations are rejected during inspection', () => {
+  const zip = new AdmZip(connector());
+  const payload = zip.getEntries().find(e => e.entryName.endsWith('-mod.jar'))!;
+  zip.deleteFile(payload);
+  assert.throws(() => readMods(zip.toBuffer(), 'broken.jar', 'forge'), /Missing or oversized embedded JAR/);
 });
 
 test('bundled dependencies, provides aliases and client-only declarations are respected', () => {
@@ -226,6 +317,27 @@ test('Modrinth uses parent file hashes to discover dependencies whose project sl
   }) as typeof fetch;
   const sources = new DependencySources(fetcher, '');
   assert.deepEqual((await ensureModDependencies(root, sources)).installed, ['library.jar']);
+  assert.equal(urls.length, 3);
+});
+
+test('Connector resolves via its official project ID when parent hash lookup is unavailable', async t => {
+  const root = await pack(t, { 'extras.jar': forge('connectorextras_architectury_bridge', '1', { connectormod: '[1.0.0-beta.18,)' }) });
+  const jar = connector();
+  const artifact = { filename: 'Connector.jar', url: 'https://cdn.modrinth.com/Connector.jar', hashes: { sha512: crypto.createHash('sha512').update(jar).digest('hex') } };
+  const urls: string[] = [];
+  const fetcher = (async (url: string) => {
+    urls.push(url);
+    if (url.includes('/version_file/')) return new Response('', { status: 404 });
+    if (url.includes('/project/u58R1TMW/version?')) {
+      const query = new URL(url).searchParams;
+      assert.equal(query.get('game_versions'), '["1.20.1"]');
+      assert.equal(query.get('loaders'), '["forge"]');
+      return new Response(JSON.stringify([{ id: 'release', project_id: 'u58R1TMW', game_versions: ['1.20.1'], loaders: ['forge'], version_type: 'beta', files: [artifact] }]));
+    }
+    if (url === artifact.url) return new Response(jar);
+    assert.fail(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  assert.deepEqual((await ensureModDependencies(root, new DependencySources(fetcher, ''))).installed, ['Connector.jar']);
   assert.equal(urls.length, 3);
 });
 
