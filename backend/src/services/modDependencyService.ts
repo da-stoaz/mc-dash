@@ -116,7 +116,11 @@ export async function ensureModDependencies(root: string, sources = new Dependen
         if (!candidate.mods.some(m => !m.embedded && m.loader === target.loader && m.id === req.id && reqs.every(r => matches(m.version, r.range, r.kind) === true))) {
           throw new Error(`${artifact.filename} does not provide ${req.id} with the required version and loader`);
         }
-        if (candidate.mods.some(m => !m.embedded && mods.some(old => !old.embedded && old.id === m.id))) throw new Error(`${artifact.filename} would introduce duplicate mod IDs`);
+        const duplicate = candidate.mods.find(m => !m.embedded && mods.some(old => !old.embedded && old.id === m.id));
+        if (duplicate) {
+          const existing = mods.find(old => !old.embedded && old.id === duplicate.id)!;
+          throw new Error(`${artifact.filename} would introduce duplicate mod ID ${duplicate.id}; already provided by ${path.basename(existing.file)} (${existing.loader}, ${existing.version})`);
+        }
         if (additions.reduce((sum, a) => sum + a.bytes, candidate.bytes) > 256 * 1024 * 1024) throw new Error('Dependency download size limit exceeded');
         return await solve([...mods, ...candidate.mods], [...additions, candidate]);
       } catch (err: any) { errors.push(err.message); }
