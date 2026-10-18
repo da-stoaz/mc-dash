@@ -45,6 +45,16 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
   2. Apply JVM flags (min/max RAM) and `server.properties` (render distance, game mode, seed).
 3. Create a Docker container that mounts that directory and runs the correct start script (Forge/Fabric/etc.).
 
+## Automatic mod dependencies
+
+Prepare, Start, and Restart inspect modern Forge, NeoForge, and Fabric JAR metadata and install missing required server dependencies before launching Minecraft. This also repairs previously prepared servers on their next Start; no new ZIP upload is needed. Restart stops the container before modifying mods.
+
+The resolver checks Minecraft version, loader, the actual mod ID/version inside each downloaded JAR, all requesting mods' version constraints, and dependencies of dependencies. It recognizes embedded libraries and Fabric `provides` aliases, skips client-only and optional dependencies, and tries alternate versions if a candidate introduces a conflict. Downloads use publisher checksums, HTTPS, bounded retries, and verified CDN redirects. New files are staged until the whole dependency set passes; a failed install rolls back additions and preserves existing mods. Installed filenames, checksums, and sources are recorded in the pack's `.mc-dash-dependencies.json` and backend logs. Complete packs need no network access.
+
+Modrinth works without credentials. Set `CURSEFORGE_API_KEY` in the backend environment (or the root `.env` for Compose) to enable the [official CurseForge API](https://docs.curseforge.com/rest-api/). A pinned, checksum-verified fallback for [NightLib 1.3.0 on Forge 1.20.1](https://www.curseforge.com/minecraft/mc-mods/nightlib/files/8940234) works without a key, including resolving its Architectury dependency.
+
+This cannot guarantee every modpack boots. Private or removed files, disabled third-party downloads, incomplete metadata, unsupported version expressions, and unrelated Java/mod conflicts can still need manual repair. The resolver does not replace an existing incompatible mod or change the pack's Minecraft/loader version; it returns a dependency error instead. Quilt and legacy `mcmod.info` dependency resolution are not supported. Startup scripts that download or replace mods after the preflight check remain responsible for those changes.
+
 ## Subdomain routing (wildcard DNS)
 To avoid per-server DNS entries, you can route all `*.mc.example.com` hostnames to the same server and let mc-dash forward based on the hostname in the Minecraft handshake.
 

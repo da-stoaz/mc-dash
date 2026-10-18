@@ -29,6 +29,8 @@ services:
       # User the spawned Minecraft containers run as. Empty => same user as this
       # backend (root here), which keeps server files readable for snapshots.
       MC_CONTAINER_USER: ${MC_CONTAINER_USER:-}
+      # Optional: expands automatic dependency resolution to CurseForge-only mods.
+      CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
       # Auth — set a password to require login. Leave SESSION_SECRET stable so
       # sessions survive restarts.
       MC_DASH_PASSWORD: ${MC_DASH_PASSWORD:-}

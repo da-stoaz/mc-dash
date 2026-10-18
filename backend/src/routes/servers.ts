@@ -1,4 +1,4 @@
-import { Router, raw, Request } from 'express';
+import { Router, raw, Request, RequestHandler } from 'express';
 import multer from 'multer';
 import net from 'net';
 import path from 'path';
@@ -9,7 +9,7 @@ import { serverStore } from '../serverStore';
 import { metricsStore, MetricRange } from '../metricsStore';
 import { ServerRecord, ServerStatus } from '../types';
 import { logger } from '../logger';
-import { applyConfigFiles, prepareServer, recreateContainer, purgeServerData } from '../services/prepareService';
+import { applyConfigFiles, prepareServer, recreateContainer, purgeServerData, ensurePreparedModDependencies } from '../services/prepareService';
 import { syncBlacklistLive } from '../services/accessControlService';
 import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
 import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive } from '../services/snapshotService';
@@ -823,7 +823,21 @@ router.get('/:id/status', async (req, res) => {
   res.json({ status: safeStatus(updated ?? server) });
 });
 
-router.post('/:id/start', async (req, res) => {
+// Dependency repair mutates mods/. Serialize lifecycle requests so a second
+// request cannot start a container while the first is resolving dependencies.
+const lifecycleBusy = new Set<string>();
+function lifecycle(action: RequestHandler<{ id: string }>): RequestHandler<{ id: string }> {
+  return async (req, res, next) => {
+    const id = String(req.params.id);
+    if (lifecycleBusy.has(id)) { res.status(409).json({ error: 'A server lifecycle operation is already in progress' }); return; }
+    lifecycleBusy.add(id);
+    preparing.add(id);
+    try { await action(req, res, next); }
+    finally { lifecycleBusy.delete(id); preparing.delete(id); }
+  };
+}
+
+router.post('/:id/start', lifecycle(async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
 
@@ -840,7 +854,10 @@ router.post('/:id/start', async (req, res) => {
   }
 
   try {
+    const status = await dockerService.status(server);
+    if (['running', 'starting', 'restarting', 'stopping'].includes(status)) return res.status(409).json({ error: 'Stop the server before checking dependencies and starting it' });
     serverStore.update(server.id, { status: 'starting' });
+    await ensurePreparedModDependencies(server);
 
     // Migrate a legacy container that still runs as root (created before the
     // container-user fix) before starting it, so it stops writing root-owned
@@ -873,9 +890,9 @@ router.post('/:id/start', async (req, res) => {
     const apiErr = toApiError(err, { error: 'Failed to start container', status: 500 });
     res.status(apiErr.status).json(apiErr.body);
   }
-});
+}));
 
-router.post('/:id/stop', async (req, res) => {
+router.post('/:id/stop', lifecycle(async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
@@ -923,9 +940,9 @@ router.post('/:id/stop', async (req, res) => {
     const apiErr = toApiError(err, { error: 'Failed to stop container', status: 500 });
     res.status(apiErr.status).json(apiErr.body);
   }
-});
+}));
 
-router.post('/:id/restart', async (req, res) => {
+router.post('/:id/restart', lifecycle(async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
 
@@ -942,7 +959,11 @@ router.post('/:id/restart', async (req, res) => {
 
   try {
     serverStore.update(server.id, { status: 'restarting' });
-    await dockerService.restart(server);
+    // Never add/remove JARs under a running JVM. A failed check leaves the
+    // container stopped and returns the dependency error to the dashboard.
+    await dockerService.stop(server, { timeoutSec: 30 });
+    await ensurePreparedModDependencies(server);
+    await dockerService.start(server);
     const updated = serverStore.update(server.id, { status: 'restarting', restartRequired: false });
     res.json(updated);
   } catch (err: any) {
@@ -951,7 +972,7 @@ router.post('/:id/restart', async (req, res) => {
     const apiErr = toApiError(err, { error: 'Failed to restart container', status: 500 });
     res.status(apiErr.status).json(apiErr.body);
   }
-});
+}));
 
 router.get('/:id/logs', async (req, res) => {
   const server = serverStore.get(req.params.id);
@@ -1043,10 +1064,11 @@ function failureReason(body: { reason?: unknown; error?: unknown }): string {
   return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
-router.post('/:id/prepare', async (req, res) => {
+router.post('/:id/prepare', lifecycle(async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
-  if (server.status === 'running' || server.status === 'starting' || server.status === 'restarting') {
+  const currentStatus = await dockerService.status(server);
+  if ([server.status, currentStatus].some(status => ['running', 'starting', 'restarting', 'stopping'].includes(status))) {
     return res.status(409).json({ error: 'Stop the server before preparing a new container' });
   }
   // A source zip (native server) extracts the pack; an imported server has no
@@ -1085,7 +1107,7 @@ router.post('/:id/prepare', async (req, res) => {
   } finally {
     preparing.delete(server.id);
   }
-});
+}));
 
 router.delete('/:id/container', async (req, res) => {
   const server = serverStore.get(req.params.id);

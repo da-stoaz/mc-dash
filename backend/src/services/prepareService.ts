@@ -9,6 +9,7 @@ import { heapPlan, mergeJvmArgs, tokenizeJvmArgs } from './jvmTuning';
 import { formatDifficulty, usesNumericFormat } from './difficulty';
 import fsSync from 'fs';
 import crypto from 'crypto';
+import { ensureModDependencies } from './modDependencyService';
 
 const PRESERVE_DIRS = ['world', 'world_nether', 'world_the_end'];
 
@@ -225,6 +226,7 @@ async function buildContainerFromPack(
   await fs.chmod(scriptPath, 0o755);
 
   const scriptDir = path.dirname(scriptPath);
+  await ensureModDependencies(scriptDir);
   const containerWorkdir = toPosix(path.join('/server', path.relative(serverRoot, scriptDir)));
   const cmd = ['bash', '-c', buildStartCommand(path.basename(scriptPath))];
 
@@ -767,6 +769,15 @@ export async function recreateContainer(server: ServerRecord): Promise<{
   await applyAccessLists(workingDir, server);
 
   return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
+}
+
+// Check the directory the startup script actually runs in, including packs
+// which place it in a nested folder. Also repairs already-prepared servers.
+export async function ensurePreparedModDependencies(server: ServerRecord) {
+  const packDir = path.join(config.dataRoot, 'servers', server.id, 'pack');
+  const workingDir = await detectWorkingDir(packDir);
+  const script = await findStartScript(workingDir);
+  return ensureModDependencies(script ? path.dirname(script) : workingDir);
 }
 
 /**
