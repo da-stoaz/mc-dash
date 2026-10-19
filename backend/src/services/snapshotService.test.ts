@@ -20,6 +20,7 @@ const { createSnapshot, restoreSnapshot, deleteSnapshot, importSnapshotArchive }
 const { purgeServerData } = require('./prepareService');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { serverStore } = require('../serverStore');
+const { getSnapshotJob, beginSnapshotJob } = require('./snapshotJobStore');
 
 after(() => {
   try {
@@ -40,6 +41,64 @@ function writeFile(id: string, rel: string, content: string): void {
 }
 
 const fakeServer = (id: string) => ({ id, name: 'Test', status: 'stopped' }) as any;
+
+test('snapshot status is available during creation, prevents duplicates and records completion', async () => {
+  const id = 'job-completion';
+  writeFile(id, 'world/level.dat', 'world data');
+  const pending = createSnapshot(fakeServer(id));
+  assert.equal(getSnapshotJob(id).status, 'running');
+  assert.equal(serverStore.listSnapshots(id).length, 0);
+  await assert.rejects(createSnapshot(fakeServer(id)), /already being created/);
+  assert.equal(getSnapshotJob(id).status, 'running');
+  const snapshot = await pending;
+  assert.equal(getSnapshotJob(id).status, 'completed');
+  assert.equal(getSnapshotJob(id).snapshotId, snapshot.id);
+  assert.ok(getSnapshotJob(id).finishedAt);
+  assert.equal(serverStore.listSnapshots(id).length, 1);
+});
+
+test('snapshot failure remains available and a successful retry replaces it', async () => {
+  const id = 'job-failure';
+  await assert.rejects(createSnapshot(fakeServer(id)), /no data on disk/);
+  assert.equal(getSnapshotJob(id).status, 'failed');
+  assert.match(getSnapshotJob(id).error, /no data on disk/);
+  assert.equal(serverStore.listSnapshots(id).length, 0);
+  writeFile(id, 'world/level.dat', 'recovered');
+  await createSnapshot(fakeServer(id));
+  assert.equal(getSnapshotJob(id).status, 'completed');
+  assert.equal(getSnapshotJob(id).error, null);
+});
+
+test('backend initialization marks persisted unfinished jobs as interrupted', () => {
+  beginSnapshotJob('interrupted-job');
+  delete require.cache[require.resolve('./snapshotJobStore')];
+  const reloaded = require('./snapshotJobStore');
+  assert.equal(reloaded.getSnapshotJob('interrupted-job').status, 'failed');
+  assert.match(reloaded.getSnapshotJob('interrupted-job').error, /backend restart/);
+  assert.equal(reloaded.getSnapshotJob('job-completion').status, 'completed');
+});
+
+test('background snapshot endpoint responds before completion and status survives another request', async t => {
+  const id = 'background-request';
+  writeFile(id, 'world/level.dat', 'world data');
+  const { default: router } = require('../routes/servers');
+  const route = (method: string, routePath: string) => router.stack.find((layer: any) => layer.route?.path === routePath && layer.route.methods[method]).route.stack[0].handle;
+  t.mock.method(serverStore, 'get', () => fakeServer(id));
+  const reply = () => ({ code: 200, body: null as any, status(code: number) { this.code = code; return this; }, json(body: any) { this.body = body; return this; }, setHeader() {} });
+  const res = reply();
+  await route('post', '/:id/snapshots')({ params: { id }, body: { background: true } }, res);
+  assert.equal(res.code, 202);
+  assert.equal(res.body.status, 'running');
+  const duplicate = reply();
+  await route('post', '/:id/snapshots')({ params: { id }, body: { background: true } }, duplicate);
+  assert.equal(duplicate.code, 409);
+  const deadline = Date.now() + 5000;
+  while (getSnapshotJob(id).status === 'running' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  const later = reply();
+  route('get', '/:id/snapshots/job')({ params: { id } }, later);
+  assert.equal(later.body.status, 'completed');
+  assert.ok(serverStore.getSnapshot(later.body.snapshotId));
+});
 
 test('snapshot + restore round-trips full server data and preserves history', async () => {
   const id = 'srv-roundtrip';
