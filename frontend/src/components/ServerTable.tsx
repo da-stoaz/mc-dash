@@ -50,11 +50,10 @@ function ServerCard({
   actionLoading,
   onAction,
   onEdit,
-  onDeleteContainer,
   onDeleteServer,
 }: { server: ServerRecord; routerDomain: string | undefined } & Pick<
   Props,
-  'actionLoading' | 'onAction' | 'onEdit' | 'onDeleteContainer' | 'onDeleteServer'
+  'actionLoading' | 'onAction' | 'onEdit' | 'onDeleteServer'
 >) {
   const hostname = formatHostname(server.subdomain, routerDomain);
   const packLabel = server.serverPackName ?? (server.packReady ? 'Imported from snapshot' : 'No pack uploaded');
@@ -113,7 +112,6 @@ function ServerCard({
           busy={actionLoading[server.id]}
           onAction={onAction}
           onEdit={() => onEdit(server)}
-          onDeleteContainer={() => onDeleteContainer(server.id)}
           onDeleteServer={() => onDeleteServer(server.id)}
           align="start"
         />
@@ -128,7 +126,6 @@ type Props = {
   actionLoading: Record<string, string>;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
   onEdit: (server: ServerRecord) => void;
-  onDeleteContainer: (id: string) => void;
   onDeleteServer: (id: string) => void;
 };
 
@@ -138,7 +135,6 @@ export function ServerTable({
   actionLoading,
   onAction,
   onEdit,
-  onDeleteContainer,
   onDeleteServer,
 }: Props) {
   const routerDomain = useRouterDomain();
@@ -160,7 +156,6 @@ export function ServerTable({
               actionLoading={actionLoading}
               onAction={onAction}
               onEdit={onEdit}
-              onDeleteContainer={onDeleteContainer}
               onDeleteServer={onDeleteServer}
             />
           ))
@@ -229,7 +224,6 @@ export function ServerTable({
                   busy={actionLoading[server.id]}
                   onAction={onAction}
                   onEdit={() => onEdit(server)}
-                  onDeleteContainer={() => onDeleteContainer(server.id)}
                   onDeleteServer={() => onDeleteServer(server.id)}
                 />
               </TableCell>

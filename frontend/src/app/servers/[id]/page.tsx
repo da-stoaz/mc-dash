@@ -44,7 +44,7 @@ export default function ServerDetailsPage() {
   const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
-  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
+  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
   const [showFirewall, setShowFirewall] = useState<ServerRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [packReplacing, setPackReplacing] = useState(false);
@@ -298,25 +298,6 @@ export default function ServerDetailsPage() {
     }
   };
 
-  const deleteContainer = async (id: string) => {
-    setActionLoading((m) => ({ ...m, [id]: 'delete' }));
-    try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
-      await res.json().catch(() => null);
-      await fetchServer();
-      notify('Container deleted', 'World data is still on disk.', 'success');
-    } catch (err: any) {
-      notify('Delete failed', err?.message ?? 'Delete failed', 'danger');
-    } finally {
-      setActionLoading((m) => {
-        const next = { ...m };
-        delete next[id];
-        return next;
-      });
-    }
-  };
-
   const deleteServer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
@@ -462,19 +443,9 @@ export default function ServerDetailsPage() {
             <Card className="bg-rose-500/5 border border-rose-500/30">
               <CardHeader className="flex flex-col items-start gap-0.5">
                 <div className="text-lg font-semibold text-rose-100">Danger zone</div>
-                <div className="text-xs muted">Destructive actions for this server. World data stays on disk.</div>
+                <div className="text-xs muted">Permanently delete this server and all its files, including worlds and snapshots. This cannot be undone.</div>
               </CardHeader>
               <CardBody className="flex flex-col gap-2 sm:flex-row">
-                <Button
-                  size="sm"
-                  color="danger"
-                  variant="flat"
-                  startContent={<Trash2 size={14} />}
-                  onPress={() => setConfirmState('deleteContainer')}
-                  isDisabled={controlsDisabled || busy === 'delete'}
-                >
-                  Delete container
-                </Button>
                 <Button
                   size="sm"
                   color="danger"
@@ -483,7 +454,7 @@ export default function ServerDetailsPage() {
                   onPress={() => setConfirmState('deleteServer')}
                   isDisabled={controlsDisabled || busy === 'deleteServer'}
                 >
-                  Delete server
+                  Delete server and files
                 </Button>
               </CardBody>
             </Card>
@@ -502,22 +473,17 @@ export default function ServerDetailsPage() {
                 ? 'Stop server'
                 : confirmState === 'restart'
                   ? 'Restart server'
-                  : confirmState === 'deleteServer'
-                    ? 'Delete server'
-                    : 'Delete container';
-            const tone = confirmState === 'deleteContainer' || confirmState === 'deleteServer' ? 'danger' : 'warning';
+                  : 'Delete server and files';
+            const tone = confirmState === 'deleteServer' ? 'danger' : 'warning';
             const description =
-              confirmState === 'deleteContainer'
-                ? 'This will remove the Docker container for this server. World data stays on disk.'
-                : confirmState === 'deleteServer'
-                  ? 'This will remove the server entry and its container. World data stays on disk.'
-                  : 'Are you sure you want to proceed?';
+              confirmState === 'deleteServer'
+                ? 'This permanently deletes the server and all its files, including worlds, server packs, downloads, and snapshots. This cannot be undone.'
+                : 'Are you sure you want to proceed?';
 
             const handleConfirm = () => {
               if (!server) return;
               if (confirmState === 'stop') invokeAction(server.id, 'stop');
               if (confirmState === 'restart') invokeAction(server.id, 'restart');
-              if (confirmState === 'deleteContainer') deleteContainer(server.id);
               if (confirmState === 'deleteServer') deleteServer(server.id);
               setConfirmState(null);
               onClose();
@@ -532,7 +498,7 @@ export default function ServerDetailsPage() {
                     Cancel
                   </Button>
                   <Button color={tone} onPress={handleConfirm}>
-                    Confirm
+                    {confirmState === 'deleteServer' ? 'Delete server and files' : 'Confirm'}
                   </Button>
                 </ModalFooter>
               </>

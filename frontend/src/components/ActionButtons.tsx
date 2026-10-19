@@ -26,19 +26,18 @@ type Props = {
   busy?: string;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
   onEdit: () => void;
-  onDeleteContainer: () => void;
   onDeleteServer: () => void;
   align?: 'start' | 'end';
 };
 
-export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContainer, onDeleteServer, align = 'end' }: Props) {
+export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, align = 'end' }: Props) {
   const disabled = !!busy;
   const canStart = ['stopped', 'exited', 'error'].includes(server.status);
   const canStop = ['running', 'starting', 'restarting'].includes(server.status);
   const canRestart = server.status === 'running';
   const hasPack = Boolean(server.serverPackUrl) || Boolean(server.packReady);
   const canPrepare = ['stopped', 'exited', 'error'].includes(server.status) && hasPack;
-  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'delete' | 'deleteServer'>(null);
+  const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
 
   return (
     <div className={`flex flex-wrap gap-2 ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
@@ -109,22 +108,11 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContaine
               color="danger"
               variant="flat"
               startContent={<Trash2 size={16} />}
-              onPress={() => setConfirmState('delete')}
-              isDisabled={disabled || busy === 'delete'}
-              fullWidth
-            >
-              Delete container
-            </Button>
-            <Button
-              size="sm"
-              color="danger"
-              variant="flat"
-              startContent={<Trash2 size={16} />}
               onPress={() => setConfirmState('deleteServer')}
               isDisabled={disabled || busy === 'deleteServer'}
               fullWidth
             >
-              Delete server
+              Delete server and files
             </Button>
           </div>
         </PopoverContent>
@@ -138,14 +126,11 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContaine
                 ? 'Stop server'
                 : confirmState === 'restart'
                   ? 'Restart server'
-                  : confirmState === 'deleteServer'
-                    ? 'Delete server'
-                    : 'Delete container';
-            const actionColor = confirmState === 'delete' || confirmState === 'deleteServer' ? 'danger' : 'warning';
+                  : 'Delete server and files';
+            const actionColor = confirmState === 'deleteServer' ? 'danger' : 'warning';
             const actionFn = () => {
               if (confirmState === 'stop') onAction(server.id, 'stop');
               if (confirmState === 'restart') onAction(server.id, 'restart');
-              if (confirmState === 'delete') onDeleteContainer();
               if (confirmState === 'deleteServer') onDeleteServer();
               setConfirmState(null);
               onModalClose();
@@ -155,16 +140,15 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteContaine
               <>
                 <ModalHeader>{actionLabel}</ModalHeader>
                 <ModalBody className="text-sm">
-                  {confirmState === 'delete' && 'This will remove the Docker container for this server. World data stays on disk.'}
-                  {confirmState === 'deleteServer' && 'This will remove the server entry and its container. World data stays on disk.'}
-                  {confirmState !== 'delete' && confirmState !== 'deleteServer' && 'Are you sure you want to proceed?'}
+                  {confirmState === 'deleteServer' && 'This permanently deletes the server and all its files, including worlds, server packs, downloads, and snapshots. This cannot be undone.'}
+                  {confirmState !== 'deleteServer' && 'Are you sure you want to proceed?'}
                 </ModalBody>
                 <ModalFooter>
                   <Button variant="light" onPress={onModalClose}>
                     Cancel
                   </Button>
                   <Button color={actionColor} onPress={actionFn}>
-                    Confirm
+                    {confirmState === 'deleteServer' ? 'Delete server and files' : 'Confirm'}
                   </Button>
                 </ModalFooter>
               </>
