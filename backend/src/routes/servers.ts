@@ -13,6 +13,7 @@ import { applyConfigFiles, prepareServer, recreateContainer, purgeServerData, en
 import { syncBlacklistLive } from '../services/accessControlService';
 import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
 import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive } from '../services/snapshotService';
+import { getSnapshotJob } from '../services/snapshotJobStore';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
 import { preparing } from '../state';
@@ -1152,6 +1153,13 @@ router.delete('/:id', async (req, res) => {
 
 const snapshotCreateSchema = z.object({
   label: z.string().trim().max(200).optional(),
+  background: z.boolean().optional(),
+});
+
+router.get('/:id/snapshots/job', (req, res) => {
+  if (!serverStore.get(req.params.id)) return notFound(res);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(getSnapshotJob(req.params.id));
 });
 
 router.get('/:id/snapshots', (req, res) => {
@@ -1165,7 +1173,15 @@ router.post('/:id/snapshots', async (req, res, next) => {
     const server = serverStore.get(req.params.id);
     if (!server) return notFound(res);
     const parsed = snapshotCreateSchema.parse(req.body ?? {});
-    const snapshot = await createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' });
+    if (getSnapshotJob(server.id)?.status === 'running') {
+      return res.status(409).json({ error: 'A snapshot is already being created for this server.' });
+    }
+    const pending = createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' });
+    if (parsed.background) {
+      void pending.catch(err => logger.error({ err, serverId: server.id }, 'Snapshot creation failed'));
+      return res.status(202).json(getSnapshotJob(server.id));
+    }
+    const snapshot = await pending;
     res.status(201).json(snapshot);
   } catch (err: any) {
     if (err?.name === 'ZodError') return next(err);

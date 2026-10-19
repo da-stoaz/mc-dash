@@ -6,6 +6,7 @@ import { logger } from '../logger';
 import { serverStore } from '../serverStore';
 import { runServerRcon } from './rconService';
 import { ServerRecord, SnapshotKind, SnapshotRecord } from '../types';
+import { beginSnapshotJob, finishSnapshotJob } from './snapshotJobStore';
 
 // Subdirectory (relative to the server root) that holds the snapshot archives.
 // It is excluded from snapshots and preserved across restores so a server's
@@ -65,6 +66,21 @@ function toPermissionError(err: NodeJS.ErrnoException, serverRoot: string): Erro
 export async function createSnapshot(
   server: ServerRecord,
   options: { label?: string | null; kind?: SnapshotKind } = {}
+): Promise<SnapshotRecord> {
+  beginSnapshotJob(server.id);
+  try {
+    const snapshot = await archiveSnapshot(server, options);
+    finishSnapshotJob(server.id, snapshot.id, null);
+    return snapshot;
+  } catch (err) {
+    finishSnapshotJob(server.id, null, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+}
+
+async function archiveSnapshot(
+  server: ServerRecord,
+  options: { label?: string | null; kind?: SnapshotKind }
 ): Promise<SnapshotRecord> {
   const root = serverRootDir(server.id);
   if (!(await pathExists(root))) {

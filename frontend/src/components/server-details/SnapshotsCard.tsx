@@ -13,6 +13,13 @@ type SnapshotsCardProps = {
   onRestored?: () => void;
 };
 
+type SnapshotJob = {
+  status: 'running' | 'completed' | 'failed';
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+};
+
 const RUNNING_STATES: ServerStatus[] = ['running', 'starting', 'restarting', 'stopping', 'creating'];
 
 function formatBytes(bytes: number): string {
@@ -33,24 +40,43 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [label, setLabel] = useState('');
+  const [job, setJob] = useState<SnapshotJob | null>(null);
+  const creating = job?.status === 'running';
 
   const serverRunning = RUNNING_STATES.includes(status);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots`);
+      const jobRes = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots/job`, { signal, cache: 'no-store' });
+      if (!jobRes.ok) throw new Error(await getApiErrorMessage(jobRes, 'Could not check snapshot status'));
+      const nextJob = await jobRes.json() as SnapshotJob | null;
+      const res = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots`, { signal, cache: 'no-store' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load snapshots'));
-      setSnapshots((await res.json()) as Snapshot[]);
+      const nextSnapshots = await res.json() as Snapshot[];
+      if (signal?.aborted) return;
+      setJob(nextJob);
+      setSnapshots(nextSnapshots);
       setError(null);
     } catch (err) {
+      if (signal?.aborted) return;
       setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [serverId]);
 
   useEffect(() => {
-    load();
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    setLoading(true);
+    setJob(null);
+    setSnapshots([]);
+    const poll = async () => {
+      await load(controller.signal);
+      if (!controller.signal.aborted) timer = setTimeout(poll, 3000);
+    };
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [load]);
 
   const takeSnapshot = async () => {
@@ -60,9 +86,10 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
       const res = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: label.trim() || undefined }),
+        body: JSON.stringify({ label: label.trim() || undefined, background: true }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Snapshot failed'));
+      setJob(await res.json() as SnapshotJob);
       setLabel('');
       await load();
     } catch (err) {
@@ -140,14 +167,23 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
             color="primary"
             startContent={<Camera size={14} />}
             onPress={takeSnapshot}
-            isLoading={busy === 'create'}
-            isDisabled={busy !== null}
+            isLoading={busy === 'create' || creating}
+            isDisabled={busy !== null || creating || loading}
           >
             Take snapshot
           </Button>
         </div>
 
         {error && <div className="text-sm text-rose-300">{error}</div>}
+        {job && (
+          <div role={job.status === 'failed' ? 'alert' : 'status'} className={`text-sm ${job.status === 'failed' ? 'text-rose-300' : 'muted'}`}>
+            {creating
+              ? `Creating snapshot · started ${formatDate(job.startedAt)}. You can leave this page; creation continues on the server.`
+              : job.status === 'failed'
+                ? `Snapshot failed: ${job.error}`
+                : `Last snapshot completed ${formatDate(job.finishedAt!)}.`}
+          </div>
+        )}
 
         <Divider />
 
@@ -156,7 +192,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
             <Spinner size="sm" />
           </div>
         ) : snapshots.length === 0 ? (
-          <div className="text-sm muted py-2">No snapshots yet. Take one before risky changes.</div>
+          <div className="text-sm muted py-2">{error ? 'Snapshot status could not be refreshed. Retrying automatically…' : creating ? 'No completed snapshots yet. The new snapshot will appear here when ready.' : 'No completed snapshots yet.'}</div>
         ) : (
           <ul className="space-y-2">
             {snapshots.map((snap) => (
@@ -193,7 +229,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
                     startContent={<RotateCcw size={14} />}
                     onPress={() => restore(snap)}
                     isLoading={busy === snap.id}
-                    isDisabled={busy !== null || serverRunning}
+                    isDisabled={busy !== null || serverRunning || creating || loading}
                   >
                     Restore
                   </Button>
