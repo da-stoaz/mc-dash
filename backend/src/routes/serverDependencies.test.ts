@@ -43,6 +43,7 @@ test('Start checks dependencies before starting Docker, including existing prepa
   const res = response();
   await handler('start')({ params: { id: server.id } }, res);
   assert.equal(res.statusCode, 200);
+  assert.equal(res.body.lastError, null);
   assert.deepEqual(calls, ['status:starting', 'check', 'start', 'status:starting']);
   assert.equal(preparing.has(server.id), false);
 });
@@ -55,12 +56,17 @@ test('failed dependency check returns an actionable 422 and never launches Docke
   assert.equal(res.statusCode, 422);
   assert.equal(res.body.code, 'MOD_DEPENDENCY_UNRESOLVED');
   assert.equal(res.body.reason, 'nightlib missing');
+  const updates = serverStore.update.mock.calls.map((call: any) => call.arguments[1]);
+  assert.equal(updates[0].lastError, null);
+  assert.equal(updates.at(-1).lastError, 'nightlib missing');
   assert.equal(calls.includes('start'), false);
 });
 
 test('Restart stops Docker before touching mods, then starts only after dependencies pass', async t => {
   const { server, calls } = setup(t);
-  await handler('restart')({ params: { id: server.id } }, response());
+  const res = response();
+  await handler('restart')({ params: { id: server.id } }, res);
+  assert.equal(res.body.lastError, null);
   assert.deepEqual(calls, ['status:restarting', 'stop', 'check', 'start', 'status:restarting']);
 });
 

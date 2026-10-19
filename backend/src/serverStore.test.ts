@@ -30,6 +30,17 @@ function makeServer(name: string) {
   });
 }
 
+test('observing a running server permanently clears the previous failure', () => {
+  const server = makeServer('recovered-server');
+  serverStore.update(server.id, { status: 'error', lastError: 'Old prepare failure' });
+  assert.equal(serverStore.get(server.id).lastError, 'Old prepare failure');
+  serverStore.update(server.id, { status: 'running' });
+  assert.equal(serverStore.get(server.id).lastError, null);
+  assert.equal(serverStore.list().find((s: { id: string }) => s.id === server.id).lastError, null);
+  serverStore.update(server.id, { status: 'stopped' });
+  assert.equal(serverStore.get(server.id).lastError, null);
+});
+
 test('a stopped server never reports that it needs a restart', () => {
   // "Restart required" is about a running process being out of date with the
   // files on disk. Stopped, the next start reads them fresh, so the flag would
