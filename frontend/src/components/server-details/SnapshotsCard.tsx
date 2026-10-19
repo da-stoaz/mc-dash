@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, CardBody, CardHeader, Chip, Divider, Input, Spinner } from '@heroui/react';
 import { Camera, Download, RotateCcw, Trash2 } from 'lucide-react';
 import { API_BASE, apiFetch } from '../../lib/api';
@@ -41,45 +41,60 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
   const [busy, setBusy] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [job, setJob] = useState<SnapshotJob | null>(null);
+  const [statusKnown, setStatusKnown] = useState(false);
+  const revision = useRef(0);
+  const viewController = useRef<AbortController | null>(null);
   const creating = job?.status === 'running';
 
   const serverRunning = RUNNING_STATES.includes(status);
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    const requestRevision = ++revision.current;
+    const current = () => !signal?.aborted && revision.current === requestRevision;
     try {
       const jobRes = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots/job`, { signal, cache: 'no-store' });
-      if (!jobRes.ok) throw new Error(await getApiErrorMessage(jobRes, 'Could not check snapshot status'));
+      if (!jobRes.ok) {
+        if (current()) setStatusKnown(false);
+        throw new Error(await getApiErrorMessage(jobRes, 'Could not check snapshot status'));
+      }
       const nextJob = await jobRes.json() as SnapshotJob | null;
+      if (!current()) return;
+      // A slow or failed archive listing must not hide an accepted job.
+      setJob(nextJob);
+      setStatusKnown(true);
       const res = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots`, { signal, cache: 'no-store' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Failed to load snapshots'));
       const nextSnapshots = await res.json() as Snapshot[];
-      if (signal?.aborted) return;
-      setJob(nextJob);
+      if (!current()) return;
       setSnapshots(nextSnapshots);
       setError(null);
     } catch (err) {
-      if (signal?.aborted) return;
+      if (!current()) return;
       setError((err as Error).message);
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [serverId]);
 
   useEffect(() => {
     const controller = new AbortController();
+    viewController.current = controller;
     let timer: ReturnType<typeof setTimeout>;
     setLoading(true);
     setJob(null);
+    setStatusKnown(false);
     setSnapshots([]);
     const poll = async () => {
       await load(controller.signal);
       if (!controller.signal.aborted) timer = setTimeout(poll, 3000);
     };
     void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
+    return () => { controller.abort(); ++revision.current; clearTimeout(timer); };
   }, [load]);
 
   const takeSnapshot = async () => {
+    const signal = viewController.current?.signal;
+    ++revision.current;
     setBusy('create');
     setError(null);
     try {
@@ -89,13 +104,18 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
         body: JSON.stringify({ label: label.trim() || undefined, background: true }),
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Snapshot failed'));
-      setJob(await res.json() as SnapshotJob);
+      const accepted = await res.json() as SnapshotJob;
+      if (signal?.aborted) return;
+      ++revision.current;
+      setJob(accepted);
+      setStatusKnown(true);
       setLabel('');
-      await load();
+      await load(signal);
     } catch (err) {
+      if (signal?.aborted) return;
       setError((err as Error).message);
     } finally {
-      setBusy(null);
+      if (!signal?.aborted) setBusy(null);
     }
   };
 
@@ -168,7 +188,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
             startContent={<Camera size={14} />}
             onPress={takeSnapshot}
             isLoading={busy === 'create' || creating}
-            isDisabled={busy !== null || creating || loading}
+            isDisabled={busy !== null || creating || loading || !statusKnown}
           >
             Take snapshot
           </Button>
@@ -229,7 +249,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
                     startContent={<RotateCcw size={14} />}
                     onPress={() => restore(snap)}
                     isLoading={busy === snap.id}
-                    isDisabled={busy !== null || serverRunning || creating || loading}
+                    isDisabled={busy !== null || serverRunning || creating || loading || !statusKnown}
                   >
                     Restore
                   </Button>
