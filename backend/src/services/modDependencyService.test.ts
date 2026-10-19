@@ -87,6 +87,38 @@ test('Fabric compatibility parsing still rejects broken JSON structure', () => {
   }
 });
 
+test('Fabric schema 1 dependencies on installed client-only API modules work offline', async t => {
+  const clientApi = fabric('fabric-key-mapping-api-v1', '1.0', { client_transitive: '*' }, { environment: 'client' });
+  const api = fabric('fabric-api', '1.0', {}, { jars: [{ file: 'META-INF/jars/keys.jar' }] }, { 'META-INF/jars/keys.jar': clientApi });
+  const root = await pack(t, {
+    'emotecraft.jar': fabric('emotecraft', '1', { 'fabric-key-mapping-api-v1': '*' }),
+    'fabric-api.jar': api,
+  }, 'MINECRAFT_VERSION=26.1.2\nMODLOADER=Fabric\n');
+  const sources = new Fixtures({});
+  assert.deepEqual(await ensureModDependencies(root, sources), { installed: [] });
+  assert.deepEqual(sources.requested, []);
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods', 'fabric-api.jar')), api);
+});
+
+test('Fabric disabled dependency handling preserves absent, version and schema constraints', async t => {
+  for (const [schemaVersion, range, includeClient, includeActive] of [
+    [1, '*', false, false], [1, '>=2', true, false], [2, '*', true, false], [1, '>=2', true, true],
+  ] as const) {
+    const root = await pack(t, {
+      'root.jar': fabric('root', '1', { keys: range }, { schemaVersion }),
+      ...(includeClient ? { 'client.jar': fabric('keys', '1', {}, { environment: 'client' }) } : {}),
+      ...(includeActive ? { 'active.jar': fabric('keys', '1') } : {}),
+    }, 'MINECRAFT_VERSION=26.1.2\nMODLOADER=Fabric\n');
+    await assert.rejects(ensureModDependencies(root, new Fixtures({})), /Mod dependency check failed/);
+  }
+});
+
+test('client-only candidates cannot satisfy a missing server dependency', async t => {
+  const root = await pack(t, { 'root.jar': fabric('root', '1', { keys: '*' }) }, 'MINECRAFT_VERSION=26.1.2\nMODLOADER=Fabric\n');
+  await assert.rejects(ensureModDependencies(root, new Fixtures({ keys: [fabric('keys', '1', {}, { environment: 'client' })] })), /Mod dependency check failed/);
+  assert.deepEqual(await fs.readdir(path.join(root, 'mods')), ['root.jar']);
+});
+
 test('Maven ranges respect inclusive/exclusive bounds, exact versions, unions and numeric components', () => {
   for (const [version, range, expected] of [
     ['1.3.0', '[1.3.0,)', true], ['1.2.9', '[1.3.0,)', false], ['2.0', '[1.3,2.0)', false],

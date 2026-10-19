@@ -25,6 +25,8 @@ function nextMissing(mods: Mod[], runtime?: Runtime, strictFiles = new Set<strin
     const connector = mods.some(m => m.loader === 'forge' && m.id === 'connectormod');
     mods = mods.filter(m => m.loader === runtime.loader || (connector && runtime.loader === 'forge' && m.loader === 'fabric'));
   }
+  const disabled = mods.filter(m => m.serverDisabled);
+  mods = mods.filter(m => !m.serverDisabled);
   const requirements = new Map<string, Requirement[]>();
   for (const mod of mods) {
     for (const conflict of mod.conflicts) {
@@ -34,6 +36,12 @@ function nextMissing(mods: Mod[], runtime?: Runtime, strictFiles = new Set<strin
       }
     }
     for (const req of mod.requirements) {
+      // Fabric softens schema 0/1 dependencies when a matching version is
+      // installed but disabled for this environment, and no active ID exists.
+      // Keep absent modules and incompatible disabled versions unresolved.
+      if (mod.loader === 'fabric' && (mod.schemaVersion ?? 0) < 2 &&
+          !mods.some(m => m.id === req.id) &&
+          disabled.some(m => m.id === req.id && matches(m.version, req.range, req.kind) === true)) continue;
       if (BUILTINS.has(req.id)) {
         const installed = req.id === 'minecraft' ? runtime?.minecraft : req.id === runtime?.loader || (req.id === 'fabricloader' && runtime?.loader === 'fabric') ? runtime?.loaderVersion : undefined;
         const match = installed ? matches(installed, req.range, req.kind) : undefined;
@@ -72,7 +80,7 @@ export async function ensureModDependencies(root: string, sources = new Dependen
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.jar')) continue;
     const file = path.join(modsDir, entry.name);
-    try { inventory.push(...readMods(await fs.readFile(file), file, runtime?.loader)); }
+    try { inventory.push(...readMods(await fs.readFile(file), file, runtime?.loader, true)); }
     catch (err: any) { problem(`Cannot inspect ${entry.name}: ${err.message}`); }
   }
   let missing: Requirement[] | undefined;
@@ -106,17 +114,17 @@ export async function ensureModDependencies(root: string, sources = new Dependen
             stagedBytes += buffer.length;
             if (stagedBytes > 512 * 1024 * 1024) throw new Error('Total dependency download size limit exceeded');
             const staged = path.join(stage, String(downloads.size));
-            const found = readMods(buffer, staged, target.loader);
+            const found = readMods(buffer, staged, target.loader, true);
             await fs.writeFile(staged, buffer, { flag: 'wx' });
             return { artifact, staged, mods: found, bytes: buffer.length };
           })();
           downloads.set(artifact.url, pending);
         }
         const candidate = await pending;
-        if (!candidate.mods.some(m => !m.embedded && m.loader === target.loader && m.id === req.id && reqs.every(r => matches(m.version, r.range, r.kind) === true))) {
+        if (!candidate.mods.some(m => !m.serverDisabled && !m.embedded && m.loader === target.loader && m.id === req.id && reqs.every(r => matches(m.version, r.range, r.kind) === true))) {
           throw new Error(`${artifact.filename} does not provide ${req.id} with the required version and loader`);
         }
-        const duplicate = candidate.mods.find(m => !m.embedded && mods.some(old => !old.embedded && old.id === m.id));
+        const duplicate = candidate.mods.find(m => !m.serverDisabled && !m.embedded && mods.some(old => !old.serverDisabled && !old.embedded && old.id === m.id));
         if (duplicate) {
           const existing = mods.find(old => !old.embedded && old.id === duplicate.id)!;
           throw new Error(`${artifact.filename} would introduce duplicate mod ID ${duplicate.id}; already provided by ${path.basename(existing.file)} (${existing.loader}, ${existing.version})`);
