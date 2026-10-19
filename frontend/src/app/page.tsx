@@ -289,25 +289,6 @@ export default function Page() {
     }
   };
 
-  const deleteContainer = async (id: string) => {
-    setActionLoading((m) => ({ ...m, [id]: 'delete' }));
-    try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}/container`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Delete failed'));
-      await res.json().catch(() => null);
-      await fetchServers();
-      notify('Container deleted', 'World data is still on disk.', 'success');
-    } catch (err: any) {
-      notify('Delete failed', err?.message ?? 'Delete failed', 'danger');
-    } finally {
-      setActionLoading((m) => {
-        const next = { ...m };
-        delete next[id];
-        return next;
-      });
-    }
-  };
-
   const deleteServer = async (id: string) => {
     setActionLoading((m) => ({ ...m, [id]: 'deleteServer' }));
     try {
@@ -420,7 +401,6 @@ export default function Page() {
           actionLoading={actionLoading}
           onAction={invokeAction}
           onEdit={setShowEdit}
-          onDeleteContainer={deleteContainer}
           onDeleteServer={deleteServer}
         />
       </div>
