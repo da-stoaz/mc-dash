@@ -29,7 +29,7 @@ import { QuickSettingsCard } from '../../../components/server-details/QuickSetti
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { FailureBanner } from '../../../components/server-details/FailureBanner';
-import { clampPercent, HISTORY_LIMIT, MetricsHistory } from '../../../components/server-details/metricsUtils';
+import { clampPercent, HISTORY_LIMIT, LiveMetricsHistory, MetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, hasLiveProcess, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
@@ -41,7 +41,7 @@ export default function ServerDetailsPage() {
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
   const [players, setPlayers] = useState<PlayerInfo | null>(null);
-  const [history, setHistory] = useState<{ cpu: number[]; memory: number[] }>({ cpu: [], memory: [] });
+  const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteContainer' | 'deleteServer'>(null);
@@ -137,13 +137,15 @@ export default function ServerDetailsPage() {
 
   useEffect(() => {
     if (!metrics) return;
+    const timestamp = Date.now();
     const cpu = clampPercent(metrics.cpuPercent);
     const memory = clampPercent(metrics.memoryPercent);
     setHistory((prev) => ({
       cpu: [...prev.cpu, cpu].slice(-HISTORY_LIMIT),
       memory: [...prev.memory, memory].slice(-HISTORY_LIMIT),
+      timestamps: [...prev.timestamps, timestamp].slice(-HISTORY_LIMIT),
     }));
-  }, [metrics?.cpuPercent, metrics?.memoryPercent]);
+  }, [metrics]);
 
   // Seed the live buffer from persisted rollups so the graph isn't empty on
   // connect. Prepends the recent tail; live samples still stream in on top.
@@ -155,12 +157,16 @@ export default function ServerDetailsPage() {
         const res = await apiFetch(`${API_BASE}/servers/${serverId}/metrics/history?range=1h`);
         if (!res.ok) return;
         const data = (await res.json()) as MetricsHistory;
-        const tail = data.points.slice(-HISTORY_LIMIT);
+        const tail = data.points.filter((p) => p.t >= Date.now() - HISTORY_LIMIT * 1000);
         if (!active || tail.length === 0) return;
-        setHistory((prev) => ({
-          cpu: [...tail.map((p) => clampPercent(p.cpuAvg)), ...prev.cpu].slice(-HISTORY_LIMIT),
-          memory: [...tail.map((p) => clampPercent(p.memAvg)), ...prev.memory].slice(-HISTORY_LIMIT),
-        }));
+        setHistory((prev) => {
+          const seed = tail.filter((p) => p.t < (prev.timestamps[0] ?? Infinity));
+          return {
+            cpu: [...seed.map((p) => clampPercent(p.cpuAvg)), ...prev.cpu].slice(-HISTORY_LIMIT),
+            memory: [...seed.map((p) => clampPercent(p.memAvg)), ...prev.memory].slice(-HISTORY_LIMIT),
+            timestamps: [...seed.map((p) => p.t), ...prev.timestamps].slice(-HISTORY_LIMIT),
+          };
+        });
       } catch {
         // best-effort seed; live stream will fill in regardless
       }

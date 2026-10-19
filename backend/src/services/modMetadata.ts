@@ -13,6 +13,26 @@ export type Mod = {
 const MAX_METADATA = 2 * 1024 * 1024;
 const MAX_NESTED = 256;
 
+// Fabric's JsonReader accepts literal control characters inside quoted
+// strings (notably multiline descriptions). JSON.parse does not. Escape only
+// those characters, preserving their values and leaving other syntax strict.
+function parseFabricMetadata(source: string) {
+  let quoted = false;
+  let escaped = false;
+  let normalized = '';
+  for (const char of source.replace(/^\uFEFF/, '')) {
+    if (quoted && !escaped && char.charCodeAt(0) < 0x20) {
+      normalized += `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      continue;
+    }
+    normalized += char;
+    if (escaped) escaped = false;
+    else if (quoted && char === '\\') escaped = true;
+    else if (char === '"') quoted = !quoted;
+  }
+  return JSON.parse(normalized);
+}
+
 // Fabric uses a semver *superset*, not npm ranges: arbitrary numeric component
 // counts, exact partial versions, empty prereleases, and ^0.x means <1.0-.
 // https://wiki.fabricmc.net/documentation:fabric_mod_json_spec#versionrange
@@ -171,7 +191,7 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
         mods.push({ id: mod.modId, version: String(mod.version ?? '').replace('${file.jarVersion}', implementation ?? '${file.jarVersion}'), requirements: reqs, conflicts, file, loader, embedded });
       }
     } else if (fabric) {
-      const meta = JSON.parse(fabric);
+      const meta = parseFabricMetadata(fabric);
       if (meta.environment === 'client' || (Array.isArray(meta.environment) && !meta.environment.some((e: string) => e === '*' || e === 'server'))) return [];
       const requirements = (deps: Record<string, string | string[]> = {}) => Object.entries(deps).map(([id, range]) => ({ id, range, kind: 'fabric' as const, owner: meta.id }));
       if (typeof meta.id === 'string') {

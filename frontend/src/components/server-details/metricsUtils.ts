@@ -1,5 +1,11 @@
 export const HISTORY_LIMIT = 60;
 
+export type LiveMetricsHistory = {
+  cpu: number[];
+  memory: number[];
+  timestamps: number[];
+};
+
 export function formatBytes(bytes?: number | null) {
   if (!bytes || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];

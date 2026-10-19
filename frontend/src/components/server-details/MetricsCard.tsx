@@ -4,8 +4,6 @@ import { Cpu, HardDrive, MemoryStick, Network, Users } from 'lucide-react';
 import type { PlayerInfo, ServerMetrics, ServerStatus } from '../../lib/serverTypes';
 import { API_BASE, apiFetch } from '../../lib/api';
 import {
-  buildSparklineArea,
-  buildSparklinePath,
   clampPercent,
   formatBytes,
   formatUptime,
@@ -13,7 +11,10 @@ import {
   METRIC_RANGES,
   MetricRange,
   MetricsHistory,
+  LiveMetricsHistory,
 } from './metricsUtils';
+
+import { UsageChart } from './UsageChart';
 
 const CPU_STROKE = '#22d3ee';
 const CPU_FILL = 'rgba(34, 211, 238, 0.18)';
@@ -24,9 +25,6 @@ const RANGE_LABELS: Record<MetricRange, string> = { '1h': '1h', '1d': '1d', '7d'
 
 // Past this, player names collapse into a "+N more" chip instead of wrapping.
 const MAX_PLAYER_CHIPS = 5;
-
-// SVG coordinate height for sparklines; the box is stretched to fit its container.
-const CHART_H = 48;
 
 // Real elapsed time since an epoch (ms), for the chart's left timeline edge.
 function formatAgo(ms: number): string {
@@ -48,85 +46,6 @@ function formatCores(n: number): string {
 
 // Shared tile chrome so every panel in the card reads as one system.
 const TILE = 'rounded-lg border border-white/10 bg-white/5';
-
-type ChartProps = {
-  label: string;
-  /** Trend line (avg). */
-  values: number[];
-  /** Optional worst-case band rendered behind the line (max). */
-  band?: number[];
-  stroke: string;
-  fill: string;
-  /** y-axis ceiling; 100 for percentages, series peak for rates. */
-  max?: number;
-  avgLabel: string;
-  /** Timeline captions for the left (oldest) and right (now) edges. */
-  startLabel?: string;
-  endLabel?: string;
-  /** Shown when there aren't enough points to draw a line. */
-  emptyLabel?: string;
-};
-
-// Draws the worst-case (max) as a translucent band with the avg as a solid line
-// on top, so a glance shows both typical load and the spikes that cause lag/GC/OOM.
-// The header pairs Avg with Peak — the number that flags OOM/lag risk.
-function Chart({
-  label,
-  values,
-  band,
-  stroke,
-  fill,
-  max = 100,
-  avgLabel,
-  startLabel,
-  endLabel,
-  emptyLabel = 'Collecting data…',
-}: ChartProps) {
-  const hasData = values.length > 1;
-  const series = band ?? values; // max series when available, else the line itself
-  const linePath = buildSparklinePath(values, 100, CHART_H, max);
-  const areaPath = buildSparklineArea(series, 100, CHART_H, max);
-  const peak = hasData ? series.reduce((m, v) => Math.max(m, v), 0) : null;
-
-  return (
-    <div className={`${TILE} p-3`}>
-      <div className="flex items-center justify-between text-xs">
-        <span className="flex items-center gap-1.5 font-medium">
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: stroke }} />
-          {label}
-        </span>
-        <span className="muted tabular-nums">
-          Avg {avgLabel}
-          {peak != null && ` · Peak ${pct(peak)}`}
-        </span>
-      </div>
-      <div className="mt-2 h-24">
-        {hasData ? (
-          <svg viewBox={`0 0 100 ${CHART_H}`} className="h-full w-full" preserveAspectRatio="none">
-            <path d={areaPath} fill={fill} />
-            <path
-              d={linePath}
-              fill="none"
-              stroke={stroke}
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
-            />
-          </svg>
-        ) : (
-          <div className="flex h-full items-center justify-center text-xs muted">{emptyLabel}</div>
-        )}
-      </div>
-      {hasData && (startLabel || endLabel) && (
-        <div className="mt-1.5 flex items-center justify-between text-[10px] tabular-nums text-white/35">
-          <span>{startLabel}</span>
-          <span>{endLabel}</span>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function pct(value: number) {
   return `${Math.round(value)}%`;
@@ -184,6 +103,7 @@ function StatBlock({ icon, title, primary, secondary }: StatBlockProps) {
 // Current Network/Disk/Runtime live in the footer, so we don't repeat them here.
 function HistoryView({ history }: { history: MetricsHistory | null }) {
   const points = history?.points ?? [];
+  const timestamps = points.map((p) => p.t);
   const cpuAvg = points.map((p) => p.cpuAvg);
   const cpuMax = points.map((p) => p.cpuMax);
   const memAvg = points.map((p) => p.memAvg);
@@ -193,9 +113,11 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
 
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      <Chart
+      <UsageChart
         label="CPU usage"
         values={cpuAvg}
+        timestamps={timestamps}
+        resolution={history?.resolution}
         band={cpuMax}
         stroke={CPU_STROKE}
         fill={CPU_FILL}
@@ -203,9 +125,11 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
         startLabel={startLabel}
         endLabel="now"
       />
-      <Chart
+      <UsageChart
         label="Memory usage"
         values={memAvg}
+        timestamps={timestamps}
+        resolution={history?.resolution}
         band={memMax}
         stroke={MEM_STROKE}
         fill={MEM_FILL}
@@ -222,7 +146,7 @@ type MetricsCardProps = {
   metrics: ServerMetrics | null;
   players: PlayerInfo | null;
   status: ServerStatus | null;
-  history: { cpu: number[]; memory: number[] };
+  history: LiveMetricsHistory;
 };
 
 // A live count is only expected while the server is up. When it's knowingly
@@ -371,17 +295,19 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
 
           {tab === 'live' ? (
             <div className="grid gap-3 md:grid-cols-2">
-              <Chart
+              <UsageChart
                 label="CPU usage"
                 values={history.cpu}
+                timestamps={history.timestamps}
                 stroke={CPU_STROKE}
                 fill={CPU_FILL}
                 avgLabel={cpuAvgLive}
                 emptyLabel={liveChartEmptyLabel(status)}
               />
-              <Chart
+              <UsageChart
                 label="Memory usage"
                 values={history.memory}
+                timestamps={history.timestamps}
                 stroke={MEM_STROKE}
                 fill={MEM_FILL}
                 avgLabel={memAvgLive}
