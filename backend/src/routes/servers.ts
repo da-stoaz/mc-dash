@@ -41,6 +41,7 @@ const resourceSchema = z.object({
 
 const gameSchema = z.object({
   renderDistance: z.number().int().min(2).max(32).optional(),
+  entityBroadcastRangePercentage: z.number().int().min(10).max(1000).optional(),
   gameMode: z.enum(['survival', 'creative', 'adventure', 'spectator']).optional(),
   difficulty: z.enum(['peaceful', 'easy', 'normal', 'hard']).optional(),
   seed: z.string().optional(),
@@ -85,6 +86,7 @@ const createServerSchema = z.object({
   maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
   renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
+  entityBroadcastRangePercentage: z.preprocess(parseNumber, z.number().int().min(10).max(1000)).optional(),
   gameMode: z.preprocess(emptyToUndefined, z.enum(['survival', 'creative', 'adventure', 'spectator']).optional()),
   difficulty: z.preprocess(emptyToUndefined, z.enum(['peaceful', 'easy', 'normal', 'hard']).optional()),
   seed: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -406,6 +408,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       },
       game: {
         renderDistance: parsed.renderDistance,
+        entityBroadcastRangePercentage: parsed.entityBroadcastRangePercentage ?? 100,
         gameMode: parsed.gameMode,
         difficulty: parsed.difficulty,
         seed: parsed.seed,
@@ -698,6 +701,7 @@ router.patch('/:id', async (req, res, next) => {
     const difficultyChanged = !!game && game.difficulty !== existing.game.difficulty;
     const gameModeChanged = !!game && game.gameMode !== existing.game.gameMode;
     const renderDistanceChanged = !!game && game.renderDistance !== existing.game.renderDistance;
+    const entityBroadcastRangeChanged = !!game && game.entityBroadcastRangePercentage !== existing.game.entityBroadcastRangePercentage;
     const seedChanged = !!game && (game.seed ?? '') !== (existing.game.seed ?? '');
     const incomingResources = parsed.resources;
     const resourcesChanged =
@@ -709,6 +713,7 @@ router.patch('/:id', async (req, res, next) => {
       difficultyChanged &&
       !gameModeChanged &&
       !renderDistanceChanged &&
+      !entityBroadcastRangeChanged &&
       !seedChanged &&
       !resourcesChanged &&
       !portChanged &&

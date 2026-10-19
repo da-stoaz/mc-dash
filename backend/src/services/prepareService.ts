@@ -149,6 +149,9 @@ async function applyServerProperties(workingDir: string, server: ServerRecord) {
   if (typeof server.game.renderDistance === 'number') {
     props['view-distance'] = String(server.game.renderDistance);
   }
+  if (typeof server.game.entityBroadcastRangePercentage === 'number') {
+    props['entity-broadcast-range-percentage'] = String(server.game.entityBroadcastRangePercentage);
+  }
   if (server.game.gameMode) {
     const modeMap: Record<string, string> = {
       survival: '0',

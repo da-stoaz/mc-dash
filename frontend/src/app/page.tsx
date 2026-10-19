@@ -171,6 +171,7 @@ export default function Page() {
       if (form.serverPort) payload.append('serverPort', form.serverPort);
       if (form.cpuLimit) payload.append('cpuLimit', form.cpuLimit);
       if (form.renderDistance) payload.append('renderDistance', String(form.renderDistance));
+      payload.append('entityBroadcastRangePercentage', String(form.entityBroadcastRangePercentage));
       if (form.seed) payload.append('seed', form.seed);
 
       setUploadProgress(100);
@@ -248,6 +249,7 @@ export default function Page() {
           },
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
+            entityBroadcastRangePercentage: changes.entityBroadcastRangePercentage,
             gameMode: changes.gameMode,
             difficulty: changes.difficulty,
             seed: changes.seed,

@@ -106,3 +106,40 @@ test('Prepare refuses to mutate a running container even if its stored status is
   assert.equal(res.statusCode, 409);
   assert.deepEqual(calls, []);
 });
+
+test('entity broadcast range is validated before updating a server', async t => {
+  const { server } = setup(t);
+  const patch = router.stack.find((layer: any) => layer.route?.path === '/:id' && layer.route.methods.patch).route.stack[0].handle;
+  for (const value of [9, 1001, 50.5, '100']) {
+    let error: any;
+    await patch({ params: { id: server.id }, body: { game: { entityBroadcastRangePercentage: value } } }, response(), (err: any) => { error = err; });
+    assert.ok(error, `Expected rejection for ${value}`);
+  }
+  assert.equal(serverStore.update.mock.calls.length, 0);
+});
+
+test('entity broadcast range saves to server.properties and requires restart', async t => {
+  const { server } = setup(t);
+  const packDir = path.join(root, 'servers', server.id, 'pack');
+  fs.mkdirSync(packDir, { recursive: true });
+  fs.writeFileSync(path.join(packDir, 'server.properties'), 'entity-broadcast-range-percentage=75\nmotd=Keep me\n');
+  const patch = router.stack.find((layer: any) => layer.route?.path === '/:id' && layer.route.methods.patch).route.stack[0].handle;
+  let current: any = { ...server, resources: { minRamMb: 1024, maxRamMb: 2048 }, game: {} };
+  t.mock.method(serverStore, 'get', () => current);
+  t.mock.method(serverStore, 'update', (_id: string, changes: any) => { current = { ...current, ...changes }; return current; });
+
+  // Unmanaged settings in existing packs must survive unrelated config writes.
+  await prepare.applyConfigFiles(current);
+  assert.match(fs.readFileSync(path.join(packDir, 'server.properties'), 'utf8'), /entity-broadcast-range-percentage=75/);
+
+  for (const value of [10, 100, 1000]) {
+    const res = response();
+    await patch({ params: { id: server.id }, body: { game: { entityBroadcastRangePercentage: value } } }, res, (err: any) => { throw err; });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.game.entityBroadcastRangePercentage, value);
+    assert.equal(res.body.restartRequired, true);
+    const properties = fs.readFileSync(path.join(packDir, 'server.properties'), 'utf8');
+    assert.match(properties, new RegExp(`entity-broadcast-range-percentage=${value}\\n`));
+    assert.match(properties, /motd=Keep me/);
+  }
+});

@@ -20,6 +20,7 @@ export interface ResourceConfig {
 
 export interface GameConfig {
   renderDistance?: number;
+  entityBroadcastRangePercentage?: number;
   gameMode?: GameMode;
   difficulty?: Difficulty;
   seed?: string;

@@ -75,7 +75,7 @@ export type ServerRecord = {
   /** How long it has been empty, driving the "sleeps in ..." hint. */
   idleMs?: number | null;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
-  game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
+  game: { renderDistance?: number; entityBroadcastRangePercentage?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
 
 export type SnapshotKind = 'manual' | 'auto-pre-restore';
@@ -157,6 +157,7 @@ export type FormState = {
   maxRamMb: number;
   cpuLimit: string;
   renderDistance: number;
+  entityBroadcastRangePercentage: number;
   gameMode: GameMode;
   difficulty: Difficulty;
   seed: string;
@@ -178,6 +179,7 @@ export const emptyForm: FormState = {
   maxRamMb: 6144,
   cpuLimit: '',
   renderDistance: 10,
+  entityBroadcastRangePercentage: 100,
   gameMode: 'survival',
   difficulty: 'normal',
   seed: '',

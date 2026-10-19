@@ -198,6 +198,17 @@ export function CreateModal({
                   onChange={(e) => setForm({ ...form, renderDistance: Number(e.target.value) })}
                   isDisabled={isCreating}
                 />
+                <Input
+                  type="number"
+                  label="Entity broadcast range (%)"
+                  description="100% is the normal range; 50% halves it. Takes effect on restart."
+                  min={10}
+                  max={1000}
+                  step={1}
+                  value={String(form.entityBroadcastRangePercentage)}
+                  onChange={(e) => setForm({ ...form, entityBroadcastRangePercentage: Number(e.target.value) })}
+                  isDisabled={isCreating}
+                />
                 <Select
                   label="Game mode"
                   selectedKeys={[form.gameMode]}
@@ -434,6 +445,7 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
         maxRamMb: server.resources.maxRamMb ?? emptyForm.maxRamMb,
         cpuLimit: server.resources.cpuLimit?.toString() ?? '',
         renderDistance: server.game.renderDistance ?? emptyForm.renderDistance,
+        entityBroadcastRangePercentage: server.game.entityBroadcastRangePercentage ?? emptyForm.entityBroadcastRangePercentage,
         gameMode: server.game.gameMode ?? emptyForm.gameMode,
         difficulty: server.game.difficulty ?? emptyForm.difficulty,
         seed: server.game.seed ?? '',
@@ -570,6 +582,16 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                   label="Render distance"
                   value={String(local.renderDistance)}
                   onChange={(e) => setLocal({ ...local, renderDistance: Number(e.target.value) })}
+                />
+                <Input
+                  type="number"
+                  label="Entity broadcast range (%)"
+                  description="100% is the normal range; 50% halves it. Takes effect on restart."
+                  min={10}
+                  max={1000}
+                  step={1}
+                  value={String(local.entityBroadcastRangePercentage)}
+                  onChange={(e) => setLocal({ ...local, entityBroadcastRangePercentage: Number(e.target.value) })}
                 />
                 <Select
                   label="Game mode"

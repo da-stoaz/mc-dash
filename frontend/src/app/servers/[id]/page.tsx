@@ -193,6 +193,7 @@ export default function ServerDetailsPage() {
           },
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
+            entityBroadcastRangePercentage: changes.entityBroadcastRangePercentage,
             gameMode: changes.gameMode,
             difficulty: changes.difficulty,
             seed: changes.seed,
