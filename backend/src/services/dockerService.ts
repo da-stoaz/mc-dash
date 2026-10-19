@@ -485,31 +485,34 @@ export class DockerService {
   }
 
   async status(server: ServerRecord): Promise<ServerStatus> {
+    return (await this.statusDetails(server)).status;
+  }
+
+  async statusDetails(server: ServerRecord): Promise<{ status: ServerStatus; exitCode: number | null }> {
     try {
       const container = await this.getContainer(server);
       const inspect = await container.inspect();
       const state = inspect.State;
-      if (state.Health && state.Health.Status === 'healthy') return 'running';
+      if (state.Health && state.Health.Status === 'healthy') return { status: 'running', exitCode: null };
       if (state.Running) {
         if (server.status === 'starting' || server.status === 'restarting') {
           const ready = await this.isReady(container, server);
-          return ready ? 'running' : server.status;
+          return { status: ready ? 'running' : server.status, exitCode: null };
         }
-        if (server.status === 'stopping') return 'stopping';
-        return 'running';
+        if (server.status === 'stopping') return { status: 'stopping', exitCode: null };
+        return { status: 'running', exitCode: null };
       }
-      if (state.Status === 'created' || state.Status === 'paused') return 'stopped';
+      if (state.Status === 'created' || state.Status === 'paused') return { status: 'stopped', exitCode: null };
       if (state.Status === 'exited' || state.Status === 'dead') {
-        if (state.ExitCode === 0) return 'stopped';
-        return 'exited';
+        return { status: state.ExitCode === 0 ? 'stopped' : 'exited', exitCode: state.ExitCode ?? null };
       }
-      return 'error';
+      return { status: 'error', exitCode: null };
     } catch (err: any) {
       if (err?.statusCode === 404) {
-        return server.status === 'creating' ? 'creating' : 'stopped';
+        return { status: server.status === 'creating' ? 'creating' : 'stopped', exitCode: null };
       }
       logger.warn({ err }, 'Unable to inspect container');
-      return 'error';
+      return { status: 'error', exitCode: null };
     }
   }
 

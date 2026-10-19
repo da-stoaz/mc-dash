@@ -55,6 +55,7 @@ export type ServerRecord = {
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
   status: ServerStatus;
+  exitCode?: number | null;
   restartRequired?: boolean;
   packReady?: boolean;
   // Why the last operation failed; survives the toast and a page reload.
@@ -200,6 +201,13 @@ export const statusLabel: Record<ServerStatus, string> = {
   restarting: 'Restarting',
   stopping: 'Stopping',
   stopped: 'Stopped',
-  exited: 'Exited',
+  exited: 'Stopped',
   error: 'Error',
 };
+
+export function formatServerStatus(status: ServerStatus, exitCode?: number | null): string {
+  if ((status === 'stopped' || status === 'exited') && exitCode != null && exitCode !== 0) {
+    return `Stopped (${exitCode})`;
+  }
+  return statusLabel[status];
+}

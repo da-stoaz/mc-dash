@@ -337,11 +337,11 @@ export default function Page() {
   const filteredServers = useMemo(() => {
     const query = search.trim().toLowerCase();
     return servers.filter((server) => {
-      // Several selected statuses widen the result (Error *or* Exited); the
+      // Several selected statuses widen the result (Error *or* Stopped); the
       // search then narrows whatever that produced.
       if (statusFilter.length > 0) {
         const matchesStatus = statusFilter.some((key) =>
-          key === 'restart-required' ? Boolean(server.restartRequired) : server.status === key
+          key === 'restart-required' ? Boolean(server.restartRequired) : (key === 'stopped' && server.status === 'exited') || server.status === key
         );
         if (!matchesStatus) return false;
       }

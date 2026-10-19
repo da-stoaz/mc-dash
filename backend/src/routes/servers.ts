@@ -325,9 +325,9 @@ router.get('/', async (_req, res) => {
   const refreshed = await Promise.all(
     servers.map(async (server) => {
       if (preparing.has(server.id)) return server;
-      const status = await dockerService.status(server);
-      if (status === server.status) return server;
-      return serverStore.update(server.id, { status }) ?? server;
+      const { status, exitCode } = await dockerService.statusDetails(server);
+      const current = status === server.status ? server : serverStore.update(server.id, { status }) ?? server;
+      return { ...current, exitCode };
     })
   );
   res.json(toServerViews(refreshed));
@@ -338,10 +338,10 @@ router.get('/stream', (req, res) => {
   addStatusClient(res);
 });
 
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
-  res.json(server);
+  res.json(preparing.has(server.id) ? server : { ...server, ...await dockerService.statusDetails(server) });
 });
 
 // SSE: live record + metrics for a single server.

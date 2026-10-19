@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Card, CardBody, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
-import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
+import { ServerRecord, statusColor, formatServerStatus } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 import { CopyButton } from './CopyButton';
 import { UsageCell } from './UsageCell';
@@ -79,7 +79,7 @@ function ServerCard({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <Chip color={statusColor[server.status]} variant="flat" size="sm">
-              {statusLabel[server.status]}
+              {formatServerStatus(server.status, server.exitCode)}
             </Chip>
             {server.restartRequired && (
               <Chip color="warning" variant="flat" size="sm">
@@ -182,7 +182,7 @@ export function ServerTable({
               <TableCell>
                 <div className="flex flex-wrap gap-2">
                   <Chip color={statusColor[server.status]} variant="flat" size="sm">
-                    {statusLabel[server.status]}
+                    {formatServerStatus(server.status, server.exitCode)}
                   </Chip>
                   <SleepChip server={server} />
                   {server.restartRequired && (

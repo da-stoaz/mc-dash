@@ -406,7 +406,7 @@ export default function ServerDetailsPage() {
         </Tab>
 
         <Tab key="console" title="Console">
-          <ConsoleCard serverId={server.id} status={server.status} playerNames={players?.names ?? []} />
+          <ConsoleCard serverId={server.id} status={server.status} exitCode={server.exitCode} playerNames={players?.names ?? []} />
         </Tab>
 
         <Tab key="logs" title="Logs">
