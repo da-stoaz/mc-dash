@@ -61,6 +61,32 @@ class Fixtures extends DependencySources {
   }
 }
 
+test('Fabric metadata accepts literal controls without changing dependencies or installed jars', async t => {
+  const zip = new AdmZip();
+  const description = 'First line\r\nSecond\tline\u0000 with "quotes" and \\slashes';
+  const metadata = JSON.stringify({ schemaVersion: 1, id: 'weaponmaster', version: '4.4.4', description, depends: { library: '>=1.0' } });
+  zip.addFile('fabric.mod.json', Buffer.from('\uFEFF' + metadata.replace(/\\r/g, '\r').replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\u0000/g, '\u0000')));
+  const jar = zip.toBuffer();
+  const root = await pack(t, { 'weaponmaster.jar': jar, 'library.jar': fabric('library', '1.0') }, 'MINECRAFT_VERSION=26.1.1\nMODLOADER=Fabric\nMODLOADER_VERSION=0.18.0\n');
+  const mods = readMods(jar, 'weaponmaster.jar', 'fabric');
+  assert.equal(mods[0].id, 'weaponmaster');
+  assert.deepEqual(mods[0].requirements, [{ id: 'library', range: '>=1.0', kind: 'fabric', owner: 'weaponmaster' }]);
+  const sources = new Fixtures({});
+  assert.deepEqual(await ensureModDependencies(root, sources), { installed: [] });
+  assert.deepEqual(sources.requested, []);
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods', 'weaponmaster.jar')), jar);
+  await fs.unlink(path.join(root, 'mods', 'library.jar'));
+  assert.deepEqual(await ensureModDependencies(root, new Fixtures({ library: [fabric('library', '1.0')] })), { installed: ['library-0.jar'] });
+});
+
+test('Fabric compatibility parsing still rejects broken JSON structure', () => {
+  for (const source of ['{"id":"broken" "version":"1"}', '{"id":"unterminated}', '{"id":\u0000"broken"}']) {
+    const zip = new AdmZip();
+    zip.addFile('fabric.mod.json', Buffer.from(source));
+    assert.throws(() => readMods(zip.toBuffer(), 'broken.jar', 'fabric'), SyntaxError);
+  }
+});
+
 test('Maven ranges respect inclusive/exclusive bounds, exact versions, unions and numeric components', () => {
   for (const [version, range, expected] of [
     ['1.3.0', '[1.3.0,)', true], ['1.2.9', '[1.3.0,)', false], ['2.0', '[1.3,2.0)', false],

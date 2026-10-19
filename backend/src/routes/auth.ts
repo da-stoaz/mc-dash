@@ -7,6 +7,12 @@ import { logger } from '../logger';
 const router = Router();
 const loginSchema = z.object({ password: z.string().min(1) });
 
+// Session state must never be reused by browsers or reverse proxies.
+router.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 router.get('/me', (req, res) => {
   res.json({
     authRequired: authEnabled,

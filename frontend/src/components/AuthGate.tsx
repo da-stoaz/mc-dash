@@ -23,12 +23,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const check = async () => {
+  const check = async (afterLogin = false) => {
     try {
-      const res = await fetch(`${API_BASE}/auth/me`, { credentials: 'include' });
+      const res = await fetch(`${API_BASE}/auth/me`, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error('Session check failed');
       const data = await res.json();
       setAuthRequired(Boolean(data.authRequired));
       setStatus(data.authenticated ? 'in' : 'out');
+      if (afterLogin && !data.authenticated) {
+        setError('Password accepted, but the session could not be established. Check browser cookies and server configuration.');
+      }
     } catch {
       setAuthRequired(true);
       setStatus('out');
@@ -59,6 +63,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting) return;
+    // Read the actual field: autofill/password managers can update the DOM
+    // without updating React state before the form is submitted.
+    const submittedPassword = new FormData(event.currentTarget as HTMLFormElement).get('password');
+    if (typeof submittedPassword !== 'string' || !submittedPassword) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -66,14 +74,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password: submittedPassword }),
       });
       if (!res.ok) {
-        setError(res.status === 401 ? 'Incorrect password' : 'Login failed');
+        setError(res.status === 401 ? 'Incorrect password' : res.status === 429 ? 'Too many login attempts. Please wait and try again.' : 'Login failed');
         return;
       }
       setPassword('');
-      await check();
+      await check(true);
     } catch {
       setError('Could not reach the server.');
     } finally {
@@ -100,6 +108,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             <form onSubmit={submit} className="space-y-3">
               <Input
                 type="password"
+                name="password"
+                autoComplete="current-password"
+                required
                 label="Password"
                 value={password}
                 onValueChange={setPassword}
@@ -107,7 +118,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 isInvalid={Boolean(error)}
                 errorMessage={error ?? undefined}
               />
-              <Button color="primary" type="submit" fullWidth isLoading={submitting} isDisabled={!password}>
+              <Button color="primary" type="submit" fullWidth isLoading={submitting} isDisabled={submitting}>
                 Sign in
               </Button>
             </form>
