@@ -856,7 +856,7 @@ router.post('/:id/start', lifecycle(async (req, res) => {
   try {
     const status = await dockerService.status(server);
     if (['running', 'starting', 'restarting', 'stopping'].includes(status)) return res.status(409).json({ error: 'Stop the server before checking dependencies and starting it' });
-    serverStore.update(server.id, { status: 'starting' });
+    serverStore.update(server.id, { status: 'starting', lastError: null });
     await ensurePreparedModDependencies(server);
 
     // Migrate a legacy container that still runs as root (created before the
@@ -882,12 +882,12 @@ router.post('/:id/start', lifecycle(async (req, res) => {
     await hibernationService.releasePort(server.id);
 
     const containerId = await dockerService.start(toStart);
-    const updated = serverStore.update(server.id, { status: 'starting', containerId, restartRequired: false, hibernated: false });
+    const updated = serverStore.update(server.id, { status: 'starting', containerId, restartRequired: false, hibernated: false, lastError: null });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Start failed');
-    serverStore.update(server.id, { status: 'error' });
     const apiErr = toApiError(err, { error: 'Failed to start container', status: 500 });
+    serverStore.update(server.id, { status: 'error', lastError: failureReason(apiErr.body) });
     res.status(apiErr.status).json(apiErr.body);
   }
 }));
@@ -958,18 +958,18 @@ router.post('/:id/restart', lifecycle(async (req, res) => {
   }
 
   try {
-    serverStore.update(server.id, { status: 'restarting' });
+    serverStore.update(server.id, { status: 'restarting', lastError: null });
     // Never add/remove JARs under a running JVM. A failed check leaves the
     // container stopped and returns the dependency error to the dashboard.
     await dockerService.stop(server, { timeoutSec: 30 });
     await ensurePreparedModDependencies(server);
     await dockerService.start(server);
-    const updated = serverStore.update(server.id, { status: 'restarting', restartRequired: false });
+    const updated = serverStore.update(server.id, { status: 'restarting', restartRequired: false, lastError: null });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Restart failed');
-    serverStore.update(server.id, { status: 'error' });
     const apiErr = toApiError(err, { error: 'Failed to restart container', status: 500 });
+    serverStore.update(server.id, { status: 'error', lastError: failureReason(apiErr.body) });
     res.status(apiErr.status).json(apiErr.body);
   }
 }));

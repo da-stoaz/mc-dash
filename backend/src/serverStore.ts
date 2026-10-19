@@ -275,7 +275,7 @@ function mapRow(row: ServerRow): ServerRecord {
     notes: row.notes ?? undefined,
     restartRequired: row.restartRequired === 1 && PROCESS_IS_LIVE.has(row.status),
     packReady: row.packReady === 1,
-    lastError: row.lastError ?? null,
+    lastError: row.status === 'running' ? null : row.lastError ?? null,
     hibernated: row.hibernated === 1,
   };
 }
@@ -378,6 +378,9 @@ export class ServerStore {
     if (updates.lastError !== undefined) {
       next.lastError = updates.lastError ?? null;
     }
+    // Reconcile old persisted failures when polling observes a healthy server,
+    // including servers started before this fix or outside the dashboard.
+    if (updates.status === 'running') next.lastError = null;
     if (updates.serverPort !== undefined) {
       next.serverPort = updates.serverPort;
     }
