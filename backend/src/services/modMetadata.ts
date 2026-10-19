@@ -9,6 +9,7 @@ export type Requirement = { id: string; range: string | string[]; kind: 'maven' 
 export type Mod = {
   id: string; version: string; requirements: Requirement[]; conflicts: Requirement[];
   file: string; loader: Loader; embedded: boolean;
+  serverDisabled?: boolean; schemaVersion?: number;
 };
 const MAX_METADATA = 2 * 1024 * 1024;
 const MAX_NESTED = 256;
@@ -151,7 +152,7 @@ export function matches(version: string, range: string | string[], kind: Require
   return results.includes(true) ? true : results.includes(undefined) ? undefined : false;
 }
 
-export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[] {
+export function readMods(buffer: Buffer, file: string, preferred?: Loader, includeDisabled = false): Mod[] {
   let nestedCount = 0;
   function read(data: Buffer, label: string, embedded: boolean, depth: number): Mod[] {
     if (depth > 8 || ++nestedCount > MAX_NESTED) throw new Error(`Too many embedded JARs in ${file}`);
@@ -192,12 +193,14 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader): Mod[
       }
     } else if (fabric) {
       const meta = parseFabricMetadata(fabric);
-      if (meta.environment === 'client' || (Array.isArray(meta.environment) && !meta.environment.some((e: string) => e === '*' || e === 'server'))) return [];
+      const serverDisabled = meta.environment === 'client' || (Array.isArray(meta.environment) && !meta.environment.some((e: string) => e === '*' || e === 'server'));
+      if (serverDisabled && !includeDisabled) return [];
       const requirements = (deps: Record<string, string | string[]> = {}) => Object.entries(deps).map(([id, range]) => ({ id, range, kind: 'fabric' as const, owner: meta.id }));
       if (typeof meta.id === 'string') {
-        mods.push({ id: meta.id, version: String(meta.version), requirements: requirements(meta.depends), conflicts: requirements(meta.breaks), file, loader: 'fabric', embedded });
-        for (const id of meta.provides ?? []) mods.push({ id, version: String(meta.version), requirements: [], conflicts: [], file, loader: 'fabric', embedded });
+        mods.push({ id: meta.id, version: String(meta.version), requirements: serverDisabled ? [] : requirements(meta.depends), conflicts: serverDisabled ? [] : requirements(meta.breaks), file, loader: 'fabric', embedded, serverDisabled, schemaVersion: meta.schemaVersion ?? 0 });
+        for (const id of meta.provides ?? []) mods.push({ id, version: String(meta.version), requirements: [], conflicts: [], file, loader: 'fabric', embedded, serverDisabled, schemaVersion: meta.schemaVersion ?? 0 });
       }
+      if (serverDisabled) return mods;
       for (const jar of meta.jars ?? []) nested.set(jar.file, true);
     }
     if (((neo || forge) && !(preferred === 'fabric' && fabric)) || !fabric) {
