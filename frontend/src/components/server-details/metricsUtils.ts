@@ -45,9 +45,10 @@ export function buildSparklinePath(values: number[], width = 100, height = 36, m
   const step = values.length > 1 ? width / (values.length - 1) : width;
   return values
     .map((value, index) => {
+      if (!Number.isFinite(value)) return '';
       const x = index * step;
       const y = height - (value / scale) * height;
-      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+      return `${index === 0 || !Number.isFinite(values[index - 1]) ? 'M' : 'L'} ${x} ${y}`;
     })
     .join(' ');
 }
@@ -55,7 +56,11 @@ export function buildSparklinePath(values: number[], width = 100, height = 36, m
 export function buildSparklineArea(values: number[], width = 100, height = 36, max = 100) {
   const line = buildSparklinePath(values, width, height, max);
   if (!line) return '';
-  return `${line} L ${width} ${height} L 0 ${height} Z`;
+  // Close each contiguous segment separately so missing samples remain gaps.
+  return line.split('M ').filter(Boolean).map(segment => {
+    const coordinates = segment.trim().split(/[ML] /).map(pair => pair.trim().split(' ').map(Number));
+    return `M ${segment.trim()} L ${coordinates.at(-1)![0]} ${height} L ${coordinates[0][0]} ${height} Z`;
+  }).join(' ');
 }
 
 export const METRIC_RANGES = ['1h', '1d', '7d'] as const;

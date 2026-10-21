@@ -29,8 +29,8 @@ export function LifecycleToolbar({
   onRestart,
 }: LifecycleToolbarProps) {
   return (
-    <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-white/5 p-2 sm:flex sm:flex-wrap sm:items-center">
-      <Button
+    <div className="flex flex-wrap items-center gap-2">
+      {(canPrepare || busy === 'prepare') && <Button
         size="sm"
         color="warning"
         variant="flat"
@@ -45,8 +45,8 @@ export function LifecycleToolbar({
           : hasContainer
             ? 'Rebuild'
             : 'Prepare'}
-      </Button>
-      <Button
+      </Button>}
+      {(canStart || busy === 'start') && <Button
         size="sm"
         color="success"
         variant="flat"
@@ -55,8 +55,8 @@ export function LifecycleToolbar({
         isDisabled={controlsDisabled || !canStart || !hasContainer}
       >
         {busy === 'start' ? 'Starting...' : 'Start'}
-      </Button>
-      <Button
+      </Button>}
+      {(canStop || busy === 'stop') && <Button
         size="sm"
         variant="flat"
         startContent={<Square size={14} />}
@@ -64,8 +64,8 @@ export function LifecycleToolbar({
         isDisabled={controlsDisabled || !canStop}
       >
         {busy === 'stop' ? 'Stopping...' : 'Stop'}
-      </Button>
-      <Button
+      </Button>}
+      {(canRestart || busy === 'restart') && <Button
         size="sm"
         color="secondary"
         variant="flat"
@@ -74,7 +74,7 @@ export function LifecycleToolbar({
         isDisabled={controlsDisabled || !canRestart}
       >
         {busy === 'restart' ? 'Restarting...' : 'Restart'}
-      </Button>
+      </Button>}
     </div>
   );
 }

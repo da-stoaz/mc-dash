@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Card, CardBody, CardHeader, Divider } from '@heroui/react';
-import { Cpu, HardDrive, MemoryStick, Network, Users } from 'lucide-react';
+import { Card, CardBody, CardHeader } from '@heroui/react';
+import { Activity, Clock, Cpu, HardDrive, MemoryStick, Network, Users } from 'lucide-react';
 import type { PlayerInfo, ServerMetrics, ServerStatus } from '../../lib/serverTypes';
 import { API_BASE, apiFetch } from '../../lib/api';
 import {
@@ -15,6 +15,9 @@ import {
 } from './metricsUtils';
 
 import { UsageChart } from './UsageChart';
+import { useTpsHistory } from './useTpsHistory';
+
+const formatTps = (value: number) => `${value.toFixed(2)} TPS`;
 
 const CPU_STROKE = '#22d3ee';
 const CPU_FILL = 'rgba(34, 211, 238, 0.18)';
@@ -23,8 +26,6 @@ const MEM_FILL = 'rgba(59, 130, 246, 0.18)';
 
 const RANGE_LABELS: Record<MetricRange, string> = { '1h': '1h', '1d': '1d', '7d': '7d' };
 
-// Past this, player names collapse into a "+N more" chip instead of wrapping.
-const MAX_PLAYER_CHIPS = 5;
 
 // Real elapsed time since an epoch (ms), for the chart's left timeline edge.
 function formatAgo(ms: number): string {
@@ -58,21 +59,21 @@ function mean(values: number[]) {
 
 // A live percentage gauge. The value and the fill share the metric's brand
 // colour so it lines up visually with its sparkline below.
-type GaugeProps = { icon: ReactNode; label: string; percent: number; color: string; detail?: string };
+type GaugeProps = { icon: ReactNode; label: string; percent: number | null; color: string; detail?: string };
 
 function Gauge({ icon, label, percent, color, detail }: GaugeProps) {
   const value = clampPercent(percent);
   return (
     <div className={`${TILE} flex flex-col p-4`}>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-start">
         <span className="flex items-center gap-2 text-sm font-medium muted">
           {icon}
           {label}
         </span>
-        <span className="text-2xl font-semibold leading-none tabular-nums">{Math.round(value)}%</span>
+        <span className="mt-3 text-3xl font-semibold tabular-nums">{percent === null ? '—' : `${Math.round(value)}%`}</span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-        <div className="h-full rounded-full transition-[width]" style={{ width: `${value}%`, backgroundColor: color }} />
+        <div className="h-full rounded-full transition-[width]" style={{ width: `${percent === null ? 0 : value}%`, backgroundColor: color }} />
       </div>
       {/* Reserve the sub-line on both gauges so CPU and Memory stay the same height. */}
       <div className="mt-2 min-h-4 text-xs tabular-nums muted">{detail ?? ''}</div>
@@ -112,7 +113,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
   const startLabel = points.length ? formatAgo(points[0].t) : undefined;
 
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="divide-y divide-white/10">
       <UsageChart
         label="CPU usage"
         values={cpuAvg}
@@ -123,7 +124,8 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
         fill={CPU_FILL}
         avgLabel={points.length ? pct(mean(cpuAvg)) : '--'}
         startLabel={startLabel}
-        endLabel="now"
+        endLabel={points.length ? formatAgo(points[points.length - 1].t) : undefined}
+        emptyLabel="No recorded data in this range"
       />
       <UsageChart
         label="Memory usage"
@@ -135,7 +137,8 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
         fill={MEM_FILL}
         avgLabel={points.length ? pct(mean(memAvg)) : '--'}
         startLabel={startLabel}
-        endLabel="now"
+        endLabel={points.length ? formatAgo(points[points.length - 1].t) : undefined}
+        emptyLabel="No recorded data in this range"
       />
     </div>
   );
@@ -180,6 +183,7 @@ function liveChartEmptyLabel(status: ServerStatus | null): string {
 }
 
 export function MetricsCard({ serverId, metrics, players, status, history }: MetricsCardProps) {
+  const tps = useTpsHistory(serverId, status);
   const uptimeLabel = formatUptime(metrics?.uptimeSeconds ?? null);
   const [tab, setTab] = useState<'live' | MetricRange>('live');
   const [rangeData, setRangeData] = useState<MetricsHistory | null>(null);
@@ -203,6 +207,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
       }
     };
     setRangeData(null);
+    setRangeError(false);
     load();
     const timer = setInterval(load, 30000);
     return () => {
@@ -214,136 +219,97 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
   const cpuAvgLive = history.cpu.length ? pct(mean(history.cpu)) : '--';
   const memAvgLive = history.memory.length ? pct(mean(history.memory)) : '--';
 
+  const live = status === 'running';
+  const currentMetrics = live ? metrics : null;
+  const currentPlayers = live ? players : null;
+  const unavailable = live ? 'Waiting for a reading' : playerFallbackLabel(status);
+
   return (
-    <Card className={TILE}>
-      <CardHeader className="flex items-center gap-2 text-lg font-semibold">
-        <Cpu size={18} />
-        <span>Metrics</span>
-      </CardHeader>
-      <CardBody className="space-y-4">
+    <div className="space-y-5">
+      <section aria-label="Current server health" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <div className={`${TILE} p-4`}>
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-2 text-sm font-medium muted">
-              <Users size={16} />
-              Players online
-            </span>
-            <div className="text-2xl font-semibold leading-none tabular-nums">
-              {players ? (
-                <>
-                  {players.online}
-                  <span className="muted text-base font-normal"> / {players.max}</span>
-                </>
-              ) : (
-                <span className="muted text-sm font-normal">{playerFallbackLabel(status)}</span>
-              )}
-            </div>
+          <div className="flex items-center gap-2 text-sm muted"><Users size={16} />Players online</div>
+          <div className="mt-3 text-3xl font-semibold tabular-nums">{currentPlayers ? currentPlayers.online : '—'}
+            {currentPlayers && <span className="text-base font-normal muted"> / {currentPlayers.max}</span>}
           </div>
-          {players && players.names.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {players.names.slice(0, MAX_PLAYER_CHIPS).map((name) => (
-                <span
-                  key={name}
-                  className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs"
-                >
-                  {name}
-                </span>
-              ))}
-              {players.names.length > MAX_PLAYER_CHIPS && (
-                <span className="rounded-full px-2.5 py-0.5 text-xs muted">
-                  +{players.names.length - MAX_PLAYER_CHIPS} more
-                </span>
-              )}
+          <p className="mt-2 text-xs muted">{currentPlayers ? 'Connected right now' : playerFallbackLabel(status)}</p>
+        </div>
+        <Gauge icon={<Cpu size={16} />} label="CPU" percent={currentMetrics?.cpuPercent ?? null} color={CPU_STROKE}
+          detail={currentMetrics ? `${formatCores(currentMetrics.cpuCores)} / ${formatCores(currentMetrics.cpuCoresAvailable)} cores` : unavailable} />
+        <Gauge icon={<MemoryStick size={16} />} label="Memory" percent={currentMetrics?.memoryPercent ?? null} color={MEM_STROKE}
+          detail={currentMetrics ? `${formatBytes(currentMetrics.memoryBytes)} / ${formatBytes(currentMetrics.memoryLimitBytes)}` : unavailable} />
+        <div className={`${TILE} p-4`}>
+          <div className="flex items-center gap-2 text-sm muted"><Clock size={16} />Uptime</div>
+          <div className="mt-3 text-3xl font-semibold tabular-nums">{currentMetrics?.uptimeSeconds != null ? uptimeLabel : '—'}</div>
+          <p className="mt-2 text-xs muted">{currentMetrics ? 'Since the last start' : unavailable}</p>
+        </div>
+      </section>
+
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+        <Card className="border border-white/10 bg-white/[0.03] shadow-none">
+          <CardHeader className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5">
+            <div>
+              <h2 className="text-base font-semibold">Resource usage</h2>
+              <p className="mt-1 text-xs muted">{tab === 'live' ? 'Recent CPU and memory readings' : 'Average usage with peaks shaded'}</p>
             </div>
-          )}
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <Gauge
-            icon={<Cpu size={16} />}
-            label="CPU"
-            percent={metrics?.cpuPercent ?? 0}
-            color={CPU_STROKE}
-            detail={metrics ? `${formatCores(metrics.cpuCores)} / ${formatCores(metrics.cpuCoresAvailable)} cores` : undefined}
-          />
-          <Gauge
-            icon={<MemoryStick size={16} />}
-            label="Memory"
-            percent={metrics?.memoryPercent ?? 0}
-            color={MEM_STROKE}
-            detail={`${formatBytes(metrics?.memoryBytes)} / ${formatBytes(metrics?.memoryLimitBytes)}`}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs uppercase tracking-wide muted">Usage history</span>
-            <div className="flex items-center gap-0.5 rounded-md border border-white/10 bg-white/5 p-0.5">
+            <div role="group" aria-label="Resource history range" className="flex rounded-lg border border-white/10 p-1">
               {(['live', ...METRIC_RANGES] as const).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setTab(key)}
-                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                    tab === key ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white/80'
-                  }`}
-                >
+                <button key={key} type="button" aria-pressed={tab === key} onClick={() => setTab(key)}
+                  className={`rounded-md px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-cyan-400 ${tab === key ? 'bg-white/15 text-white' : 'text-gray-400 hover:text-white'}`}>
                   {key === 'live' ? `Live ${HISTORY_LIMIT}s` : RANGE_LABELS[key]}
                 </button>
               ))}
             </div>
-          </div>
+          </CardHeader>
+          <CardBody className="px-5 pb-5 pt-0">
+            {tab === 'live' ? (
+              <div className="divide-y divide-white/10">
+                <UsageChart label="CPU usage" values={history.cpu} timestamps={history.timestamps} stroke={CPU_STROKE} fill={CPU_FILL}
+                  avgLabel={cpuAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel={history.timestamps.length ? formatAgo(history.timestamps[0]) : undefined} endLabel="Latest" />
+                <UsageChart label="Memory usage" values={history.memory} timestamps={history.timestamps} stroke={MEM_STROKE} fill={MEM_FILL}
+                  avgLabel={memAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel={history.timestamps.length ? formatAgo(history.timestamps[0]) : undefined} endLabel="Latest" />
+              </div>
+            ) : rangeError ? (
+              <div role="status" className="py-12 text-center text-sm muted">Could not load history. Retrying automatically…</div>
+            ) : rangeData ? <HistoryView history={rangeData} /> : (
+              <div role="status" className="py-12 text-center text-sm muted">Loading history…</div>
+            )}
+          </CardBody>
+        </Card>
 
-          {tab === 'live' ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              <UsageChart
-                label="CPU usage"
-                values={history.cpu}
-                timestamps={history.timestamps}
-                stroke={CPU_STROKE}
-                fill={CPU_FILL}
-                avgLabel={cpuAvgLive}
-                emptyLabel={liveChartEmptyLabel(status)}
-              />
-              <UsageChart
-                label="Memory usage"
-                values={history.memory}
-                timestamps={history.timestamps}
-                stroke={MEM_STROKE}
-                fill={MEM_FILL}
-                avgLabel={memAvgLive}
-                emptyLabel={liveChartEmptyLabel(status)}
-              />
-            </div>
-          ) : rangeError ? (
-            <div className={`${TILE} flex h-16 items-center justify-center text-xs muted`}>Failed to load history</div>
-          ) : (
-            <HistoryView history={rangeData} />
+        <div className="space-y-5">
+          {tps.visible && (
+            <section aria-label="Server tick rate" className={`${TILE} p-5`}>
+              <h2 className="flex items-center gap-2 text-base font-semibold"><Activity size={16} />Server tick rate</h2>
+              <div className="mt-3 text-3xl font-semibold tabular-nums">{tps.current ? formatTps(tps.current.tps) : '—'}</div>
+              <p className="mt-1 text-xs muted">20 TPS is the target for smooth gameplay.</p>
+              <UsageChart label="TPS" values={tps.points.map(point => point.tps ?? NaN)} timestamps={tps.points.map(point => point.t)}
+                stroke="#34d399" fill="rgba(52, 211, 153, 0.18)" maxValue={Math.max(20, ...tps.points.map(point => point.tps ?? 0))}
+                formatValue={formatTps} avgLabel="" summary="Last minute" startLabel={tps.points.length ? formatAgo(tps.points[0].t) : undefined} endLabel="Latest"
+                emptyLabel={tps.unavailable ? 'Unavailable' : 'Collecting data…'} />
+              {tps.unavailable && tps.points.length > 1 && <p className="text-xs text-amber-300">Current reading unavailable; showing recent samples.</p>}
+            </section>
           )}
+          <section aria-label="Connected players" className={`${TILE} p-5`}>
+            <h2 className="text-base font-semibold">Connected players</h2>
+            {currentPlayers?.names.length ? (
+              <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+                {currentPlayers.names.map(name => <li key={name} className="flex items-center gap-2 break-all text-sm"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />{name}</li>)}
+              </ul>
+            ) : <p className="mt-3 text-sm muted">{currentPlayers ? currentPlayers.online ? 'Player names unavailable.' : 'No players connected.' : live ? 'Player list unavailable.' : 'Players will appear here when the server is running.'}</p>}
+          </section>
         </div>
+      </div>
 
-        <Divider className="bg-white/10" />
-
-        <div className="grid gap-4 md:grid-cols-3">
-          <StatBlock
-            icon={<Network size={16} />}
-            title="Network"
-            primary={`In: ${formatBytes(metrics?.networkRxBytes)}`}
-            secondary={`Out: ${formatBytes(metrics?.networkTxBytes)}`}
-          />
-          <StatBlock
-            icon={<HardDrive size={16} />}
-            title="Disk"
-            primary={`Read: ${formatBytes(metrics?.blkReadBytes)}`}
-            secondary={`Write: ${formatBytes(metrics?.blkWriteBytes)}`}
-          />
-          <StatBlock
-            icon={<MemoryStick size={16} />}
-            title="Runtime"
-            primary={`PIDs: ${metrics?.pids ?? '-'}`}
-            secondary={`Uptime: ${uptimeLabel}`}
-          />
+      <details className={`${TILE} p-4`}>
+        <summary className="cursor-pointer text-sm font-medium">Process diagnostics <span className="ml-2 text-xs font-normal muted">Network, disk I/O and processes</span></summary>
+        <p className="mt-4 text-xs muted">Cumulative transfers since the container started. Disk I/O is not storage usage.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          <StatBlock icon={<Network size={16} />} title="Network transfer" primary={`Received: ${currentMetrics ? formatBytes(currentMetrics.networkRxBytes) : '—'}`} secondary={`Sent: ${currentMetrics ? formatBytes(currentMetrics.networkTxBytes) : '—'}`} />
+          <StatBlock icon={<HardDrive size={16} />} title="Disk I/O" primary={`Read: ${currentMetrics ? formatBytes(currentMetrics.blkReadBytes) : '—'}`} secondary={`Written: ${currentMetrics ? formatBytes(currentMetrics.blkWriteBytes) : '—'}`} />
+          <StatBlock icon={<Cpu size={16} />} title="Processes" primary={`${currentMetrics?.pids ?? '—'} PIDs`} secondary="Inside this container" />
         </div>
-      </CardBody>
-    </Card>
+      </details>
+    </div>
   );
 }

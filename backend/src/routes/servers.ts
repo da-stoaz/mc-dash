@@ -23,6 +23,7 @@ import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands
 import { assertCanStart, capacityReport, committedMbFor, floorMbFor } from '../services/hostCapacityService';
 import { hibernationService } from '../services/hibernationService';
 import { toServerViews } from '../services/serverView';
+import { tpsService } from '../services/tpsService';
 import {
   UploadError,
   appendChunk,
@@ -1031,6 +1032,14 @@ router.delete('/:id/console', (req, res) => {
   if (!server) return notFound(res);
   clearConsoleHistory(server.id);
   res.json({ entries: [] });
+});
+
+router.get('/:id/tps', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  const status = await dockerService.status(server);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await tpsService.read({ ...server, status }));
 });
 
 router.get('/:id/metrics', async (req, res) => {

@@ -15,10 +15,9 @@ export function ServerTitle({ server }: ServerTitleProps) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="space-y-2">
-        <div className="text-2xl sm:text-3xl font-semibold tracking-tight break-words">{server.name}</div>
-        <div className="muted text-sm break-all">{server.id}</div>
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight break-words">{server.name}</h1>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="muted">Hostname</span>
+          <span className="muted">Join address</span>
           {hostname ? (
             <>
               <span className="font-mono text-sm break-all">{hostname}</span>

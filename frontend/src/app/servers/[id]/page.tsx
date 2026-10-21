@@ -25,7 +25,6 @@ import { FirewallCard } from '../../../components/server-details/FirewallCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
-import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { FailureBanner } from '../../../components/server-details/FailureBanner';
@@ -344,7 +343,7 @@ export default function ServerDetailsPage() {
     return (
       <div className="page space-y-4">
         <Button as={Link} href="/" variant="flat" startContent={<ArrowLeft size={16} />}>
-          Back
+          All servers
         </Button>
         <Card className="bg-white/5 border border-white/10">
           <CardBody>Server not found.</CardBody>
@@ -357,14 +356,13 @@ export default function ServerDetailsPage() {
     <div className="page space-y-4">
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <Button as={Link} href="/" variant="flat" startContent={<ArrowLeft size={16} />}>
-          Back
+          All servers
         </Button>
-        <span className="muted">Server details</span>
+        <span className="muted">Server overview</span>
       </div>
 
+      <div className="flex flex-wrap items-start justify-between gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
       <ServerTitle server={server} />
-
-      <FailureBanner message={server.lastError} />
 
       <LifecycleToolbar
         busy={busy}
@@ -380,6 +378,10 @@ export default function ServerDetailsPage() {
         onRestart={() => setConfirmState('restart')}
       />
 
+      </div>
+
+      <FailureBanner message={server.lastError} />
+
       <Tabs
         aria-label="Server sections"
         variant="underlined"
@@ -394,7 +396,7 @@ export default function ServerDetailsPage() {
         }}
       >
         <Tab key="overview" title="Overview">
-          <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
+          <div className="space-y-4">
             <MetricsCard
               serverId={serverId}
               metrics={metrics}
@@ -402,7 +404,6 @@ export default function ServerDetailsPage() {
               status={server.status}
               history={history}
             />
-            <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
           </div>
         </Tab>
 

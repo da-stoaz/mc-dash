@@ -21,3 +21,16 @@ test('returns null for unrecognized output', () => {
   assert.equal(parsePlayerList('Unknown command'), null);
   assert.equal(parsePlayerList(''), null);
 });
+
+test('UUID delimiters keep a comma-containing title with its player', () => {
+  const result = parsePlayerList('There are 2 of a max of 20 players online: Schimobi, the Nutcracker (00000000-0000-0000-0000-000000000001), Bruckinator67 (00000000-0000-0000-0000-000000000002)');
+  assert.deepEqual(result, { online: 2, max: 20, names: ['Schimobi, the Nutcracker', 'Bruckinator67'] });
+});
+
+test('ambiguous plain list does not invent a third player', () => {
+  assert.deepEqual(parsePlayerList('There are 2 of a max of 20 players online: Schimobi, the Nutcracker, Bruckinator67'), { online: 2, max: 20, names: [] });
+});
+
+test('formatting and colons within a display name do not truncate the roster', () => {
+  assert.deepEqual(parsePlayerList('§aThere are 1 of a max of 20 players online: [Title: Hero] Alice (00000000-0000-0000-0000-000000000001)'), { online: 1, max: 20, names: ['[Title: Hero] Alice'] });
+});

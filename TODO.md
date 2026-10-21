@@ -1,10 +1,8 @@
 - [x] Implement setting to configure entity-broadcast-range-percentage (default 100%).
 
-implement a new diagram which checks TPS. 
-forge tps
-/spark tps
-/spark healthreport
-/spark profiler start
+- [x] Add a TPS chart using spark tps with forge tps fallback.
+  Samples every 10 seconds on the overview, with up to 10 minutes of in-memory history.
+  spark healthreport and spark profiler start remain manual diagnostics in the console.
 
 
 check how it is possible to have only an .env.example but not an .env in root dir of hosted server: 
