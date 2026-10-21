@@ -22,6 +22,9 @@ type UsageChartProps = {
   maxValue?: number;
   formatValue?: (value: number) => string;
   summary?: string;
+  absoluteValues?: (number | null | undefined)[];
+  absolutePeaks?: (number | null | undefined)[];
+  formatAbsolute?: (value: number) => string;
 };
 
 function percent(value: number) {
@@ -37,7 +40,7 @@ function sampleTime(timestamp: number) {
 export function UsageChart({
   label, values, timestamps, band, resolution, stroke, fill, avgLabel,
   startLabel, endLabel, emptyLabel = 'Collecting data…',
-  maxValue = 100, formatValue = percent, summary,
+  maxValue = 100, formatValue = percent, summary, absoluteValues, absolutePeaks, formatAbsolute,
 }: UsageChartProps) {
   // Store the horizontal position so a stationary pointer stays aligned as live
   // samples arrive and the buffer rolls forward.
@@ -54,7 +57,12 @@ export function UsageChart({
   const bucketEnd = resolution ? new Date(timestamp + resolution * 1000).toLocaleTimeString(undefined, {
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   }) : null;
-  const description = !hasData ? 'No samples' : `${time}${bucketEnd ? ` – ${bucketEnd}` : ''}, ${band ? 'average ' : ''}${(Number.isFinite(values[index]) ? formatValue(values[index]) : 'Unavailable')}${band ? `, peak ${formatValue(band[index])}` : ''}`;
+  const absolute = (value: number | null | undefined) => value != null && Number.isFinite(value) && formatAbsolute ? ` · ${formatAbsolute(value)}` : '';
+  const absoluteSample = absolute(absoluteValues?.[index]).replace(/^ · /, '');
+  const absolutePeak = absolute(absolutePeaks?.[index]).replace(/^ · /, '');
+  const sampleLabel = Number.isFinite(values[index]) ? `${formatValue(values[index])}${absolute(absoluteValues?.[index])}` : 'Unavailable';
+  const peakLabel = band && Number.isFinite(band[index]) ? `${formatValue(band[index])}${absolute(absolutePeaks?.[index])}` : '';
+  const description = !hasData ? 'No samples' : `${time}${bucketEnd ? ` – ${bucketEnd}` : ''}, ${band ? 'average ' : ''}${(Number.isFinite(values[index]) ? sampleLabel : 'Unavailable')}${band ? `, peak ${peakLabel}` : ''}`;
 
   function inspect(event: PointerEvent<HTMLDivElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -133,13 +141,25 @@ export function UsageChart({
                       {bucketEnd && <span className="block">to {bucketEnd}</span>}
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2">
-                      <span>{band ? 'Average' : label}</span>
+                      <span>{band ? 'Average %' : formatAbsolute ? label.replace('usage', '%') : label}</span>
                       <span className="font-semibold" style={{ color: stroke }}>{formatValue(values[index])}</span>
                     </div>
+                    {absoluteSample && (
+                      <div className="mt-0.5 flex items-center justify-between gap-3">
+                        <span>{band ? 'Average usage' : label}</span>
+                        <span className="font-semibold" style={{ color: stroke }}>{absoluteSample}</span>
+                      </div>
+                    )}
                     {band && (
                       <div className="mt-0.5 flex items-center justify-between gap-2">
-                        <span className="text-white/60">Peak</span>
+                        <span className="text-white/60">Peak %</span>
                         <span>{formatValue(band[index])}</span>
+                      </div>
+                    )}
+                    {band && absolutePeak && (
+                      <div className="mt-0.5 flex items-center justify-between gap-3">
+                        <span className="text-white/60">Peak usage</span>
+                        <span>{absolutePeak}</span>
                       </div>
                     )}
                   </div>

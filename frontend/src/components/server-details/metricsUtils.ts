@@ -1,6 +1,8 @@
 export const HISTORY_LIMIT = 60;
 
 export type LiveMetricsHistory = {
+  cpuCores: (number | null)[];
+  memoryBytes: (number | null)[];
   cpu: number[];
   memory: number[];
   timestamps: number[];
@@ -69,6 +71,10 @@ export type MetricRange = (typeof METRIC_RANGES)[number];
 // One consolidated bucket as returned by GET /servers/:id/metrics/history.
 export type MetricPoint = {
   t: number; // bucket start, ms epoch
+  cpuCoresAvg?: number | null;
+  cpuCoresMax?: number | null;
+  memoryBytesAvg?: number | null;
+  memoryBytesMax?: number | null;
   cpuMin: number;
   cpuAvg: number;
   cpuMax: number;

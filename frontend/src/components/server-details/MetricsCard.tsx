@@ -17,6 +17,9 @@ import {
 import { UsageChart } from './UsageChart';
 import { useTpsHistory } from './useTpsHistory';
 
+const formatCpuAbsolute = (value: number) => `${Number(value.toFixed(2))} cores`;
+const formatMemoryAbsolute = (value: number) => `${(value / 1024 ** 3).toFixed(2)} GB`;
+
 const formatTps = (value: number) => `${value.toFixed(2)} TPS`;
 
 const CPU_STROKE = '#22d3ee';
@@ -116,6 +119,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
     <div className="divide-y divide-white/10">
       <UsageChart
         label="CPU usage"
+        absoluteValues={points.map(p => p.cpuCoresAvg)} absolutePeaks={points.map(p => p.cpuCoresMax)} formatAbsolute={formatCpuAbsolute}
         values={cpuAvg}
         timestamps={timestamps}
         resolution={history?.resolution}
@@ -129,6 +133,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
       />
       <UsageChart
         label="Memory usage"
+        absoluteValues={points.map(p => p.memoryBytesAvg)} absolutePeaks={points.map(p => p.memoryBytesMax)} formatAbsolute={formatMemoryAbsolute}
         values={memAvg}
         timestamps={timestamps}
         resolution={history?.resolution}
@@ -264,9 +269,9 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
           <CardBody className="px-5 pb-5 pt-0">
             {tab === 'live' ? (
               <div className="divide-y divide-white/10">
-                <UsageChart label="CPU usage" values={history.cpu} timestamps={history.timestamps} stroke={CPU_STROKE} fill={CPU_FILL}
+                <UsageChart label="CPU usage" values={history.cpu} absoluteValues={history.cpuCores} formatAbsolute={formatCpuAbsolute} timestamps={history.timestamps} stroke={CPU_STROKE} fill={CPU_FILL}
                   avgLabel={cpuAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel={history.timestamps.length ? formatAgo(history.timestamps[0]) : undefined} endLabel="Latest" />
-                <UsageChart label="Memory usage" values={history.memory} timestamps={history.timestamps} stroke={MEM_STROKE} fill={MEM_FILL}
+                <UsageChart label="Memory usage" values={history.memory} absoluteValues={history.memoryBytes} formatAbsolute={formatMemoryAbsolute} timestamps={history.timestamps} stroke={MEM_STROKE} fill={MEM_FILL}
                   avgLabel={memAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel={history.timestamps.length ? formatAgo(history.timestamps[0]) : undefined} endLabel="Latest" />
               </div>
             ) : rangeError ? (

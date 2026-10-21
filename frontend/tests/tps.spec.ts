@@ -12,7 +12,7 @@ async function setup(page: Page, state: string, status = 'running', populated = 
       state, current: state === 'available' ? { tps: 18.75, source: 'spark', window: '5s' } : null,
       sampledAt: Date.now(), points: state === 'available' ? [{ t: Date.now() - 10000, tps: 20 }, { t: Date.now(), tps: 18.75 }] : [],
     });
-    if (path.endsWith('/metrics/history')) return json({ points: [], resolution: 60 });
+    if (path.endsWith('/metrics/history')) return json({ points: populated ? [20_000, 10_000].map(age => ({ t: Date.now() - age, cpuAvg: 25, cpuMax: 50, memAvg: 50, memMax: 75, cpuCoresAvg: 1, cpuCoresMax: 2, memoryBytesAvg: 1024 ** 3, memoryBytesMax: 1.5 * 1024 ** 3 })) : [], resolution: 30 });
     if (path.endsWith('/tps-test')) return json(server);
     return json({});
   });
@@ -70,4 +70,23 @@ test('overview fits mobile and distinguishes missing readings from zero', async 
   await expect(page.getByRole('heading', { name: 'Connected players' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: testInfo.outputPath('overview-mobile.png'), fullPage: true });
+});
+
+
+test('resource tooltips include recorded cores and gigabytes in live and historical views', async ({ page }) => {
+  await setup(page, 'available', 'running', true);
+  const cpu = page.getByRole('slider', { name: /CPU usage history/ });
+  await cpu.focus();
+  await cpu.press('Home');
+  await expect(page.getByRole('tooltip')).toContainText('CPU usage1 cores');
+  await expect(cpu).toHaveAttribute('aria-valuetext', /1 cores/);
+  const memory = page.getByRole('slider', { name: /Memory usage history/ });
+  await memory.focus();
+  await memory.press('Home');
+  await expect(page.getByRole('tooltip')).toContainText('Memory usage1.00 GB');
+  await page.getByRole('button', { name: '1h', exact: true }).click();
+  await cpu.focus();
+  await expect(page.getByRole('tooltip')).toContainText('Peak usage2 cores');
+  await memory.focus();
+  await expect(page.getByRole('tooltip')).toContainText('Peak usage1.50 GB');
 });

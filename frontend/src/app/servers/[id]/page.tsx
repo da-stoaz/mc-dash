@@ -40,7 +40,7 @@ export default function ServerDetailsPage() {
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
   const [players, setPlayers] = useState<PlayerInfo | null>(null);
-  const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [] });
+  const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [], cpuCores: [], memoryBytes: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
@@ -140,6 +140,8 @@ export default function ServerDetailsPage() {
     const cpu = clampPercent(metrics.cpuPercent);
     const memory = clampPercent(metrics.memoryPercent);
     setHistory((prev) => ({
+      cpuCores: [...prev.cpuCores, metrics.cpuCores].slice(-HISTORY_LIMIT),
+      memoryBytes: [...prev.memoryBytes, metrics.memoryBytes].slice(-HISTORY_LIMIT),
       cpu: [...prev.cpu, cpu].slice(-HISTORY_LIMIT),
       memory: [...prev.memory, memory].slice(-HISTORY_LIMIT),
       timestamps: [...prev.timestamps, timestamp].slice(-HISTORY_LIMIT),
@@ -161,6 +163,8 @@ export default function ServerDetailsPage() {
         setHistory((prev) => {
           const seed = tail.filter((p) => p.t < (prev.timestamps[0] ?? Infinity));
           return {
+            cpuCores: [...seed.map(p => p.cpuCoresAvg ?? null), ...prev.cpuCores].slice(-HISTORY_LIMIT),
+            memoryBytes: [...seed.map(p => p.memoryBytesAvg ?? null), ...prev.memoryBytes].slice(-HISTORY_LIMIT),
             cpu: [...seed.map((p) => clampPercent(p.cpuAvg)), ...prev.cpu].slice(-HISTORY_LIMIT),
             memory: [...seed.map((p) => clampPercent(p.memAvg)), ...prev.memory].slice(-HISTORY_LIMIT),
             timestamps: [...seed.map((p) => p.t), ...prev.timestamps].slice(-HISTORY_LIMIT),
