@@ -333,7 +333,7 @@ router.get('/', async (_req, res) => {
       return { ...current, exitCode };
     })
   );
-  res.json(toServerViews(refreshed));
+  res.json(await toServerViews(refreshed));
 });
 
 // SSE: live server list. Registered before '/:id' so it isn't captured as an id.

@@ -56,7 +56,7 @@ async function refreshStatuses() {
         }
       })
     );
-    const view = toServerViews(refreshed);
+    const view = await toServerViews(refreshed);
     for (const res of statusClients) send(res, 'servers', view);
   } catch (err) {
     logger.warn({ err }, 'status stream tick failed');

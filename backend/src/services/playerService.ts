@@ -1,5 +1,7 @@
 import { runServerRcon } from './rconService';
 import { ServerRecord } from '../types';
+import { locateWorkingDir, readServerProperties } from './prepareService';
+import { preparing } from '../state';
 
 export type PlayerInfo = {
   online: number;
@@ -49,4 +51,22 @@ export async function getPlayerCount(server: ServerRecord): Promise<PlayerInfo |
   // Older/modded command implementations may not support the UUID argument.
   const fallback = await runServerRcon(server, ['list']);
   return fallback ? parsePlayerList(fallback[0] ?? '') : null;
+}
+
+/** Live limits take precedence over files, which may contain an unapplied edit. */
+export async function getPlayerSummary(server: ServerRecord): Promise<{ players: number | null; maxPlayers: number | null }> {
+  if (preparing.has(server.id)) return { players: null, maxPlayers: null };
+  if (server.status === 'running') {
+    const live = await getPlayerCount(server).catch(() => null);
+    if (live) return { players: live.online, maxPlayers: live.max };
+  }
+  let maxPlayers: number | null = null;
+  try {
+    const workingDir = await locateWorkingDir(server);
+    const raw = workingDir ? (await readServerProperties(workingDir))['max-players'] : undefined;
+    if (raw && /^\d+$/.test(raw) && Number.isSafeInteger(Number(raw))) maxPlayers = Number(raw);
+  } catch {
+    // Missing/unreadable files must not prevent the server list from loading.
+  }
+  return { players: ['stopped', 'exited'].includes(server.status) ? 0 : null, maxPlayers };
 }
