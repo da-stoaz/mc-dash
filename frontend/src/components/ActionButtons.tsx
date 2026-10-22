@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import Link from 'next/link';
 import {
   Button,
   Modal,
@@ -6,9 +7,10 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
+  Dropdown,
+  DropdownMenu,
+  DropdownItem,
+  DropdownTrigger,
 } from '@heroui/react';
 import {
   MoreHorizontal,
@@ -39,84 +41,59 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, 
   const canPrepare = ['stopped', 'exited', 'error'].includes(server.status) && hasPack;
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
 
+  const menuItems = [
+    { key: 'edit', label: 'Edit', icon: <Pencil size={16} /> },
+    ...(canRestart ? [{ key: 'restart', label: 'Restart', icon: <RefreshCw size={16} /> }] : []),
+    ...(canPrepare && server.containerId ? [{ key: 'prepare', label: 'Rebuild', icon: <Wand2 size={16} /> }] : []),
+    { key: 'deleteServer', label: 'Delete server and files', icon: <Trash2 size={16} /> },
+  ];
+  const preparing = busy === 'prepare' || server.status === 'creating';
+  const stopping = busy === 'stop' || server.status === 'stopping';
+  const restarting = busy === 'restart';
+  const needsSetup = canStart && !server.containerId && !hasPack;
+  const needsPrepare = canStart && !server.containerId && hasPack;
+  const primaryLabel = preparing ? (server.containerId ? 'Rebuilding…' : 'Preparing…')
+    : stopping ? 'Stopping…' : restarting ? 'Restarting…'
+    : busy === 'start' ? 'Starting…' : canStop ? 'Stop'
+    : needsPrepare ? 'Prepare' : needsSetup ? 'Set up' : 'Start';
+
   return (
-    <div className={`flex flex-wrap gap-2 ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex items-center gap-2 whitespace-nowrap ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
       <Button
+        as={needsSetup ? Link : 'button'}
+        href={needsSetup ? `/servers/${server.id}` : undefined}
         size="sm"
-        color="warning"
+        className="min-w-24"
+        color={canStop || stopping || restarting ? 'default' : needsPrepare || preparing ? 'warning' : 'success'}
         variant="flat"
-        startContent={<Wand2 size={16} />}
-        onPress={() => onAction(server.id, 'prepare')}
-        isDisabled={disabled || busy === 'prepare' || !canPrepare}
+        startContent={canStop || stopping ? <Square size={16} /> : needsPrepare || preparing ? <Wand2 size={16} /> : <Play size={16} />}
+        onPress={() => {
+          if (canStop) setConfirmState('stop');
+          else if (!needsSetup) onAction(server.id, needsPrepare ? 'prepare' : 'start');
+        }}
+        isDisabled={disabled || (!canStart && !canStop)}
       >
-        {busy === 'prepare'
-          ? server.containerId
-            ? 'Rebuilding…'
-            : 'Preparing…'
-          : server.containerId
-            ? 'Rebuild'
-            : 'Prepare'}
+        {primaryLabel}
       </Button>
-      {canStart && (
-        <Button
-          size="sm"
-          color="success"
-          variant="flat"
-          startContent={<Play size={16} />}
-          onPress={() => onAction(server.id, 'start')}
-          isDisabled={disabled || busy === 'start' || !server.containerId}
-        >
-          {busy === 'start' ? 'Starting…' : 'Start'}
-        </Button>
-      )}
-      {canStop && (
-        <Button
-          size="sm"
-          variant="flat"
-          startContent={<Square size={16} />}
-          onPress={() => setConfirmState('stop')}
-          isDisabled={disabled || busy === 'stop'}
-        >
-          {busy === 'stop' ? 'Stopping…' : 'Stop'}
-        </Button>
-      )}
-      {canRestart && (
-        <Button
-          size="sm"
-          color="secondary"
-          variant="flat"
-          startContent={<RefreshCw size={16} />}
-          onPress={() => setConfirmState('restart')}
-          isDisabled={disabled || busy === 'restart'}
-        >
-          {busy === 'restart' ? 'Restarting…' : 'Restart'}
-        </Button>
-      )}
-      <Button size="sm" variant="bordered" startContent={<Pencil size={16} />} onPress={onEdit}>
-        Edit
-      </Button>
-      <Popover placement="bottom-end">
-        <PopoverTrigger>
-          <Button size="sm" variant="flat" startContent={<MoreHorizontal size={16} />} isDisabled={disabled}>
-            More
+      <Dropdown placement="bottom-end">
+        <DropdownTrigger>
+          <Button size="sm" variant="flat" isIconOnly aria-label={`More actions for ${server.name}`} isDisabled={disabled}>
+            <MoreHorizontal size={18} />
           </Button>
-        </PopoverTrigger>
-        <PopoverContent>
-          <div className="p-3 space-y-2 text-sm min-w-[160px]">
-            <Button
-              size="sm"
-              color="danger"
-              variant="flat"
-              startContent={<Trash2 size={16} />}
-              onPress={() => setConfirmState('deleteServer')}
-              isDisabled={disabled || busy === 'deleteServer'}
-              fullWidth
-            >
-              Delete server and files
-            </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
+        </DropdownTrigger>
+        <DropdownMenu aria-label={`Actions for ${server.name}`} items={menuItems} onAction={key => {
+          if (key === 'edit') onEdit();
+          if (key === 'prepare') onAction(server.id, 'prepare');
+          if (key === 'restart' || key === 'deleteServer') setConfirmState(key);
+        }}>
+          {item => <DropdownItem key={item.key} startContent={item.icon}
+            color={item.key === 'deleteServer' ? 'danger' : 'default'}
+            className={item.key === 'deleteServer' ? 'text-danger' : undefined}
+            showDivider={item.key === 'prepare'}>
+            {item.label}
+          </DropdownItem>}
+        </DropdownMenu>
+      </Dropdown>
 
       <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
         <ModalContent>

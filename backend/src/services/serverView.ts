@@ -1,6 +1,8 @@
 import { ServerRecord } from '../types';
 import { metricsCollector } from './metricsCollector';
 import { hibernationService } from './hibernationService';
+import { getPlayerSummary } from './playerService';
+import { getGameSummary } from './gameSettingsService';
 
 // ---------------------------------------------------------------------------
 // The server record as the dashboard needs it.
@@ -11,9 +13,8 @@ import { hibernationService } from './hibernationService';
 // makes it impossible to tell whether any of the memory management is working —
 // which is exactly the complaint that prompted this.
 //
-// Everything here is read from caches the backend already maintains (the
-// metrics collector's latest sample, the hibernation service's last player
-// count), so decorating the list costs no extra Docker or RCON calls.
+// Metrics come from the collector. Player counts are queried for the shared
+// list refresh, independently of whether idle hibernation is enabled.
 // ---------------------------------------------------------------------------
 
 export type ServerLive = {
@@ -27,18 +28,21 @@ export type ServerLive = {
 export type ServerView = ServerRecord & {
   /** Null when the server isn't running, or its reading has gone stale. */
   live: ServerLive | null;
-  /** Players online at the last RCON read; null when unknown or not running. */
+  /** Live player count, zero when stopped, null when unknown. */
   players: number | null;
+  maxPlayers: number | null;
   /** Milliseconds this server has been empty, for the "sleeps in ..." hint. */
   idleMs: number | null;
 };
 
 const MB = 1024 * 1024;
 
-export function toServerView(server: ServerRecord): ServerView {
+export async function toServerView(server: ServerRecord): Promise<ServerView> {
   const sample = metricsCollector.liveFor(server.id);
+  const [players, game] = await Promise.all([getPlayerSummary(server), getGameSummary(server)]);
   return {
     ...server,
+    game,
     live: sample
       ? {
           cpuCores: sample.cpuCores,
@@ -48,11 +52,11 @@ export function toServerView(server: ServerRecord): ServerView {
           memoryPercent: sample.memoryPercent,
         }
       : null,
-    players: hibernationService.playersFor(server.id),
+    ...players,
     idleMs: hibernationService.idleMsFor(server.id),
   };
 }
 
-export function toServerViews(servers: ServerRecord[]): ServerView[] {
-  return servers.map(toServerView);
+export async function toServerViews(servers: ServerRecord[]): Promise<ServerView[]> {
+  return Promise.all(servers.map(toServerView));
 }

@@ -3,7 +3,32 @@ import { sendRconCommands } from './rconClient';
 import { locateWorkingDir, readServerProperties } from './prepareService';
 import { DIFFICULTIES, formatDifficulty, parseDifficulty, usesNumericFormat } from './difficulty';
 import { logger } from '../logger';
-import { Difficulty, ServerRecord } from '../types';
+import { Difficulty, GameConfig, GameMode, ServerRecord } from '../types';
+import { preparing } from '../state';
+
+/** Snapshot imports preserve the pack's settings without copying them to the
+ * database. Fill missing overview fields from the file without changing it. */
+export async function getGameSummary(server: ServerRecord): Promise<GameConfig> {
+  const game = { ...server.game };
+  if (preparing.has(server.id) || (game.gameMode != null && game.renderDistance != null)) return game;
+  try {
+    const dir = await locateWorkingDir(server);
+    if (!dir) return game;
+    const props = await readServerProperties(dir);
+    const modes: GameMode[] = ['survival', 'creative', 'adventure', 'spectator'];
+    const rawMode = props.gamemode?.trim().toLowerCase();
+    const mode = /^[0-3]$/.test(rawMode ?? '') ? modes[Number(rawMode)]
+      : modes.find(value => value === rawMode);
+    if (game.gameMode == null && mode) game.gameMode = mode;
+    const distance = props['view-distance'];
+    if (game.renderDistance == null && /^\d+$/.test(distance ?? '') && Number.isSafeInteger(Number(distance)) && Number(distance) > 0) {
+      game.renderDistance = Number(distance);
+    }
+  } catch {
+    // A missing file should not hide the server row or invent game settings.
+  }
+  return game;
+}
 
 export type DifficultyOptions = {
   // Difficulties this server can actually be set to. Vanilla Minecraft supports

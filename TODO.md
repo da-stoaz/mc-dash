@@ -1,3 +1,5 @@
+- [ ] Deferred: harden and isolate the public Minecraft router; audit port exposure and upstream DDoS protection. See [findings and proposed work](docs/router-security.md). Finish player-count/settings work first.
+
 - [x] Implement setting to configure entity-broadcast-range-percentage (default 100%).
 
 - [x] Add a TPS chart using spark tps with forge tps fallback.

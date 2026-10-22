@@ -72,6 +72,8 @@ export type ServerRecord = {
   } | null;
   /** Players online at the last RCON read; null when unknown. */
   players?: number | null;
+  /** Active server limit, or the configured limit when a live reading is unavailable. */
+  maxPlayers?: number | null;
   /** How long it has been empty, driving the "sleeps in ..." hint. */
   idleMs?: number | null;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
