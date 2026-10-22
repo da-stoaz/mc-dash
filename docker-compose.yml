@@ -1,6 +1,7 @@
 # MC Dash — deployment stack for a Linux host.
 #
 # Copy .env.example to .env and fill it in, then:
+#   See docs/memory-pool.md for the Minecraft-only host limit.
 #   docker compose up -d --build
 #
 # Notes specific to MC Dash:
@@ -18,12 +19,17 @@ services:
     build:
       context: ./backend
     image: mc-dash-backend
+    labels:
+      io.mc-dash.role: backend
     restart: unless-stopped
+    # Read-only verification of the host namespace; backend remains outside minecraft.slice.
+    cgroup: host
     # Host networking: backend on :4000, optional router on :25565, and the
     # spawned MC server ports are all published directly on the host.
     network_mode: host
     environment:
       PORT: "4000"
+      MC_DASH_MEMORY_POOL: ${MC_DASH_MEMORY_POOL:-true}
       # MUST be an absolute path, mounted to the identical path below.
       DATA_ROOT: ${MC_DASH_DATA_DIR:-/opt/mc-dash/data}
       # User the spawned Minecraft containers run as. Empty => same user as this
@@ -48,6 +54,7 @@ services:
       MC_ROUTER_PORT: ${MC_ROUTER_PORT:-25565}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
       # Identical host:container path so bind mounts the backend constructs
       # resolve correctly on the host.
       - ${MC_DASH_DATA_DIR:-/opt/mc-dash/data}:${MC_DASH_DATA_DIR:-/opt/mc-dash/data}
@@ -60,6 +67,8 @@ services:
         # the browser will use (your host's LAN IP), e.g. http://192.168.1.50:4000
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000}
     image: mc-dash-frontend
+    labels:
+      io.mc-dash.role: frontend
     restart: unless-stopped
     ports:
       - "3000:3000"

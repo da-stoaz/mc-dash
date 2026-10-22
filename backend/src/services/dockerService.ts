@@ -8,6 +8,9 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ResourceConfig, ServerRecord, ServerStatus } from '../types';
 import { containerMemoryPlan } from './memoryPlan';
+import { POOL_SLICE, readMemoryPool, requireMemoryPool, requireStartRoom, startupReservations } from './memoryPool';
+import { UserFacingError } from '../apiErrors';
+import { serverStore } from '../serverStore';
 import { javaToolOptions } from './jvmTuning';
 
 // Fixed in-container RCON port. We never publish it to the host: the backend
@@ -290,10 +293,12 @@ export class DockerService {
   // from the image name — custom and future base images may already ship curl,
   // and those should cost no build at all.
   private async imageHasDownloader(image: string): Promise<boolean> {
+    if (config.memoryPoolEnabled) requireMemoryPool(await readMemoryPool());
     let container: Container | undefined;
     try {
       container = await this.docker.createContainer({
         Image: image,
+        HostConfig: config.memoryPoolEnabled ? { CgroupParent: POOL_SLICE } : undefined,
         // Override any ENTRYPOINT the base sets, or we'd probe the wrong thing.
         Entrypoint: ['/bin/sh', '-c'],
         Cmd: ['command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1'],
@@ -319,7 +324,8 @@ export class DockerService {
       await fs.writeFile(path.join(contextDir, 'Dockerfile'), downloaderDockerfile(base));
       const context = tar.create({ cwd: contextDir, portable: true }, ['Dockerfile']);
 
-      const stream = await this.docker.buildImage(context as any, { t: tag, dockerfile: 'Dockerfile' });
+      if (config.memoryPoolEnabled) requireMemoryPool(await readMemoryPool());
+      const stream = await this.docker.buildImage(context as any, { t: tag, dockerfile: 'Dockerfile', ...(config.memoryPoolEnabled ? { cgroupparent: POOL_SLICE } : {}) });
       await new Promise<void>((resolve, reject) => {
         this.docker.modem.followProgress(
           stream,
@@ -366,6 +372,7 @@ export class DockerService {
       nanoCpus?: number;
     }
   ): Promise<string> {
+    if (config.memoryPoolEnabled) requireMemoryPool(await readMemoryPool());
     const name = this.containerName(server.id);
 
     try {
@@ -388,6 +395,7 @@ export class DockerService {
     const spec = (limits: MemoryHostConfig) => ({
       name,
       Image: options.image,
+      Labels: { 'io.mc-dash.role': 'minecraft', 'io.mc-dash.server-id': server.id },
       Env: toolOptions ? [`JAVA_TOOL_OPTIONS=${toolOptions}`] : undefined,
       // Run the Minecraft process as the same user as the backend so the world
       // files it writes into the bind mount stay readable/writable by MC Dash
@@ -401,6 +409,7 @@ export class DockerService {
         [`${RCON_PORT}/tcp`]: {},
       },
       HostConfig: {
+        ...(config.memoryPoolEnabled ? { CgroupParent: POOL_SLICE } : {}),
         Binds: [`${options.hostServerDir}:/server`],
         PortBindings: {
           [`${options.port}/tcp`]: [{ HostPort: String(options.port) }],
@@ -493,13 +502,13 @@ export class DockerService {
       const container = await this.getContainer(server);
       const inspect = await container.inspect();
       const state = inspect.State;
-      if (state.Health && state.Health.Status === 'healthy') return { status: 'running', exitCode: null };
       if (state.Running) {
+        if (server.status === 'stopping') return { status: 'stopping', exitCode: null };
+        if (state.Health && state.Health.Status === 'healthy') return { status: 'running', exitCode: null };
         if (server.status === 'starting' || server.status === 'restarting') {
           const ready = await this.isReady(container, server);
           return { status: ready ? 'running' : server.status, exitCode: null };
         }
-        if (server.status === 'stopping') return { status: 'stopping', exitCode: null };
         return { status: 'running', exitCode: null };
       }
       if (state.Status === 'created' || state.Status === 'paused') return { status: 'stopped', exitCode: null };
@@ -532,15 +541,87 @@ export class DockerService {
     }
   }
 
-  async start(server: ServerRecord): Promise<string> {
-    const container = await this.getContainer(server);
-    try {
-      await container.start();
-      return container.id;
-    } catch (err) {
-      logger.error({ err }, 'Failed to start container');
-      throw err;
+  private startQueue: Promise<unknown> = Promise.resolve();
+
+  /** Audit the actual Docker parent, including legacy containers after upgrade. */
+  async verifyMemoryPoolContainers(): Promise<void> {
+    if (!config.memoryPoolEnabled) return;
+    if (config.dockerHost && !config.dockerHost.startsWith('unix://')) {
+      throw new UserFacingError({ error: 'Shared RAM protection requires a local Docker socket', code: 'MEMORY_POOL_PLATFORM', status: 409 });
     }
+    const platform = await this.docker.info();
+    if (platform.CgroupDriver !== 'systemd' || platform.CgroupVersion !== '2' || platform.SecurityOptions?.some(option => option.includes('rootless'))) {
+      throw new UserFacingError({ error: 'Shared RAM protection needs systemd and cgroup v2', code: 'MEMORY_POOL_PLATFORM', status: 409 });
+    }
+    // Do not classify every "mc-dash-*" name as a Minecraft server: that
+    // includes the backend/frontend Compose containers which must stay outside.
+    const servers = serverStore.list();
+    const managedIds = new Set(servers.map(server => server.containerId).filter(Boolean));
+    const managedNames = new Set(servers.map(server => this.containerName(server.id)));
+    const containers = await this.docker.listContainers();
+    for (const summary of containers) {
+      const names = (summary.Names ?? []).map(name => name.replace(/^\//, ''));
+      const isMinecraft = summary.Labels?.['io.mc-dash.role'] === 'minecraft'
+        || managedIds.has(summary.Id) || names.some(name => managedNames.has(name));
+      const composeService = summary.Labels?.['com.docker.compose.service'];
+      const composeProject = summary.Labels?.['com.docker.compose.project'];
+      const isPanel = ['backend', 'frontend'].includes(summary.Labels?.['io.mc-dash.role'] ?? '')
+        || summary.Image === 'mc-dash-backend' || summary.Image === 'mc-dash-frontend'
+        || (composeProject === 'mc-dash' && ['backend', 'frontend'].includes(composeService ?? ''));
+      if (!isMinecraft && !isPanel) continue;
+      const info = await this.docker.getContainer(summary.Id).inspect();
+      const parent = info.HostConfig?.CgroupParent;
+      if (isPanel && [POOL_SLICE, 'mcdash.slice'].includes(parent ?? '')) {
+        throw new UserFacingError({error: 'The MC Dash panel must be outside the Minecraft memory pool', code: 'MEMORY_POOL_CONTROL_PLANE', status: 409});
+      }
+      if (isMinecraft) this.requirePoolParent(parent);
+    }
+  }
+
+  private requirePoolParent(parent?: string) {
+    if (config.memoryPoolEnabled && parent !== POOL_SLICE) throw new UserFacingError({
+      error: 'Server is outside the shared RAM pool', code: 'MEMORY_POOL_MIGRATION_REQUIRED', status: 409,
+      reason: 'Stop and rebuild existing Minecraft containers to apply the shared RAM limit.',
+    });
+  }
+
+  async start(server: ServerRecord): Promise<string> {
+    const start = async () => {
+      const container = await this.getContainer(server);
+      if (config.memoryPoolEnabled) {
+        const pool = await readMemoryPool();
+        requireMemoryPool(pool);
+        await this.verifyMemoryPoolContainers();
+        const info = await container.inspect();
+        this.requirePoolParent(info.HostConfig?.CgroupParent);
+        if (info.State?.Running) return container.id;
+        const { metricsCollector } = await import('./metricsCollector');
+        const usage = new Map([...metricsCollector.liveAll()].map(([id, value]) => [id, value.memoryBytes / MB]));
+        const request = containerMemoryPlan(server.resources)?.floorMb;
+        if (!request) throw new UserFacingError({error: 'Configure server memory first', code: 'MEMORY_LIMIT_REQUIRED', status: 409});
+        startupReservations.release(server.id);
+        requireStartRoom(pool, request, startupReservations.pending(usage));
+        // Keep the existing host-free-memory check for unrelated deployments.
+        const { readHostMemory } = await import('./hostCapacityService');
+        const host = await readHostMemory();
+        if (host.availableKnown && host.availableMb - request < config.hostFreeFloorMb) {
+          throw new UserFacingError({error: 'Host memory is low', code: 'HOST_MEMORY_LOW', status: 409,
+            reason: 'Other host services need the remaining memory. Wait or stop an unused server.'});
+        }
+        startupReservations.reserve(server.id, request);
+      }
+      try {
+        await container.start();
+        return container.id;
+      } catch (err) {
+        startupReservations.release(server.id);
+        logger.error({ err }, 'Failed to start container');
+        throw err;
+      }
+    };
+    const result = this.startQueue.then(start);
+    this.startQueue = result.catch(() => undefined);
+    return result;
   }
 
   async stop(server: ServerRecord, opts: { timeoutSec?: number } = {}): Promise<void> {
@@ -570,15 +651,19 @@ export class DockerService {
   // Returns true if it exited within the window (a missing container counts as
   // exited), false on timeout. Used by the graceful-stop path to wait for the
   // Minecraft JVM to save and quit on its own after an RCON `stop`.
-  async waitForExit(server: ServerRecord, timeoutMs: number): Promise<boolean> {
+  // Automatic sleep requires a confirmed zero exit code without an OOM kill;
+  // a missing container is not proof of a clean shutdown in that mode.
+  async waitForExit(server: ServerRecord, timeoutMs: number, opts: { requireClean?: boolean } = {}): Promise<boolean> {
     const container = await this.getContainer(server);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
         const inspect = await container.inspect();
-        if (!inspect.State?.Running) return true;
+        if (!inspect.State?.Running) return !opts.requireClean || (
+          inspect.State?.Status === 'exited' && inspect.State.ExitCode === 0 && !inspect.State.OOMKilled
+        );
       } catch (err) {
-        if ((err as { statusCode?: number })?.statusCode === 404) return true;
+        if ((err as { statusCode?: number })?.statusCode === 404) return !opts.requireClean;
         throw err;
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -587,13 +672,8 @@ export class DockerService {
   }
 
   async restart(server: ServerRecord): Promise<void> {
-    const container = await this.getContainer(server);
-    try {
-      await container.restart();
-    } catch (err) {
-      logger.error({ err }, 'Failed to restart container');
-      throw err;
-    }
+    await this.stop(server);
+    await this.start(server);
   }
 
   // Resolve the RCON endpoint for a running server: its container bridge IP plus

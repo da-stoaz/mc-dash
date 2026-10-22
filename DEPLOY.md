@@ -42,6 +42,17 @@ sudo chown "$(id -u)":"$(id -g)" /opt/mc-dash/data   # optional; backend runs as
 
 ## 5. Launch
 
+Review the [Minecraft pool deployment notes](docs/memory-pool.md) before enabling
+the pending Linux memory feature. Its checked-in systemd unit caps only Minecraft
+containers. The panel/backend stay in their normal service/container groups;
+never assign them to `minecraft.slice`. The Ubuntu runtime and occupied-server
+overload behavior still need validation before treating this as production-ready.
+
+The explicit host configuration is a reviewed copy of
+[deploy/systemd/minecraft.slice](deploy/systemd/minecraft.slice); there is no
+installer that rewrites application services. For local development without a
+configured host pool, set `MC_DASH_MEMORY_POOL=false` (monitoring only).
+
 ```bash
 docker compose up -d --build
 ```

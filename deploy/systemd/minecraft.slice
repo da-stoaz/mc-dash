@@ -1,0 +1,11 @@
+[Unit]
+Description=Minecraft server memory pool (MC Dash stays outside)
+
+[Slice]
+MemoryAccounting=yes
+# The only shared RAM ceiling. MC Dash reads the installed memory.max directly.
+MemoryMax=12G
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target
