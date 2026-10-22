@@ -5,11 +5,12 @@ import { Button, Card, CardBody, CardHeader, Chip } from '@heroui/react';
 import { CornerDownLeft, Trash2 } from 'lucide-react';
 import { API_BASE, apiFetch } from '../../lib/api';
 import { getApiErrorMessage } from '../../lib/apiErrors';
-import { CatalogCommand, ConsoleEntry, ServerStatus, statusColor, statusLabel } from '../../lib/serverTypes';
+import { CatalogCommand, ConsoleEntry, ServerStatus, statusColor, formatServerStatus } from '../../lib/serverTypes';
 
 type ConsoleCardProps = {
   serverId: string;
   status: ServerStatus;
+  exitCode?: number | null;
   /** Who is online, offered where a command wants a player name. */
   playerNames?: string[];
 };
@@ -30,7 +31,7 @@ function formatTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString();
 }
 
-export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardProps) {
+export function ConsoleCard({ serverId, status, exitCode, playerNames = [] }: ConsoleCardProps) {
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const [catalog, setCatalog] = useState<CatalogCommand[]>([]);
   const [command, setCommand] = useState('');
@@ -273,7 +274,7 @@ export function ConsoleCard({ serverId, status, playerNames = [] }: ConsoleCardP
       <CardHeader className="flex items-center gap-2">
         <span className="text-lg font-semibold">Console</span>
         <Chip color={statusColor[status]} variant="flat" size="sm">
-          {statusLabel[status]}
+          {formatServerStatus(status, exitCode)}
         </Chip>
         {loadError && (
           <Chip size="sm" variant="flat" color="danger">

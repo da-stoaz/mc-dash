@@ -32,7 +32,6 @@ type Props = {
 // it as the only line that mattered.
 const ATTENTION_ORDER: ServerStatus[] = [
   'error',
-  'exited',
   'creating',
   'starting',
   'restarting',
@@ -125,10 +124,10 @@ export function StatusBar({
   // Only non-zero states get a chip. A row of "Starting: 0 · Stopping: 0" is
   // noise that hides the one state that is actually set — and as filters, a
   // chip that can only ever match nothing is worse than absent.
-  const chips: FilterChip[] = ATTENTION_ORDER.filter((status) => counts[status] > 0).map((status) => ({
+  const chips: FilterChip[] = ATTENTION_ORDER.filter((status) => (status === 'stopped' ? counts.stopped + counts.exited : counts[status]) > 0).map((status) => ({
     key: status,
     label: statusLabel[status],
-    count: counts[status],
+    count: status === 'stopped' ? counts.stopped + counts.exited : counts[status],
     color: statusColor[status],
     Icon: statusIcon[status],
     spin: TRANSIENT.includes(status),

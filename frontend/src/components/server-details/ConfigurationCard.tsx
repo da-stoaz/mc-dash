@@ -122,6 +122,7 @@ export function ConfigurationCard({
           <div className="text-base font-semibold">Game</div>
           <div className="muted">Mode: {server.game.gameMode ?? '-'}</div>
           <div className="muted">Difficulty: {server.game.difficulty ?? '-'}</div>
+          <div className="muted">Entity broadcast range: {server.game.entityBroadcastRangePercentage != null ? `${server.game.entityBroadcastRangePercentage}%` : 'Server default'}</div>
           <div className="muted">Render distance: {server.game.renderDistance ?? '-'} chunks</div>
           <div className="muted break-all">Seed: {server.game.seed || '-'}</div>
         </div>

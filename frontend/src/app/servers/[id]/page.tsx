@@ -25,7 +25,6 @@ import { FirewallCard } from '../../../components/server-details/FirewallCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
-import { QuickSettingsCard } from '../../../components/server-details/QuickSettingsCard';
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { FailureBanner } from '../../../components/server-details/FailureBanner';
@@ -41,7 +40,7 @@ export default function ServerDetailsPage() {
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
   const [players, setPlayers] = useState<PlayerInfo | null>(null);
-  const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [] });
+  const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [], cpuCores: [], memoryBytes: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
@@ -141,6 +140,8 @@ export default function ServerDetailsPage() {
     const cpu = clampPercent(metrics.cpuPercent);
     const memory = clampPercent(metrics.memoryPercent);
     setHistory((prev) => ({
+      cpuCores: [...prev.cpuCores, metrics.cpuCores].slice(-HISTORY_LIMIT),
+      memoryBytes: [...prev.memoryBytes, metrics.memoryBytes].slice(-HISTORY_LIMIT),
       cpu: [...prev.cpu, cpu].slice(-HISTORY_LIMIT),
       memory: [...prev.memory, memory].slice(-HISTORY_LIMIT),
       timestamps: [...prev.timestamps, timestamp].slice(-HISTORY_LIMIT),
@@ -162,6 +163,8 @@ export default function ServerDetailsPage() {
         setHistory((prev) => {
           const seed = tail.filter((p) => p.t < (prev.timestamps[0] ?? Infinity));
           return {
+            cpuCores: [...seed.map(p => p.cpuCoresAvg ?? null), ...prev.cpuCores].slice(-HISTORY_LIMIT),
+            memoryBytes: [...seed.map(p => p.memoryBytesAvg ?? null), ...prev.memoryBytes].slice(-HISTORY_LIMIT),
             cpu: [...seed.map((p) => clampPercent(p.cpuAvg)), ...prev.cpu].slice(-HISTORY_LIMIT),
             memory: [...seed.map((p) => clampPercent(p.memAvg)), ...prev.memory].slice(-HISTORY_LIMIT),
             timestamps: [...seed.map((p) => p.t), ...prev.timestamps].slice(-HISTORY_LIMIT),
@@ -193,6 +196,7 @@ export default function ServerDetailsPage() {
           },
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
+            entityBroadcastRangePercentage: changes.entityBroadcastRangePercentage,
             gameMode: changes.gameMode,
             difficulty: changes.difficulty,
             seed: changes.seed,
@@ -343,7 +347,7 @@ export default function ServerDetailsPage() {
     return (
       <div className="page space-y-4">
         <Button as={Link} href="/" variant="flat" startContent={<ArrowLeft size={16} />}>
-          Back
+          All servers
         </Button>
         <Card className="bg-white/5 border border-white/10">
           <CardBody>Server not found.</CardBody>
@@ -356,14 +360,13 @@ export default function ServerDetailsPage() {
     <div className="page space-y-4">
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <Button as={Link} href="/" variant="flat" startContent={<ArrowLeft size={16} />}>
-          Back
+          All servers
         </Button>
-        <span className="muted">Server details</span>
+        <span className="muted">Server overview</span>
       </div>
 
+      <div className="flex flex-wrap items-start justify-between gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
       <ServerTitle server={server} />
-
-      <FailureBanner message={server.lastError} />
 
       <LifecycleToolbar
         busy={busy}
@@ -379,6 +382,10 @@ export default function ServerDetailsPage() {
         onRestart={() => setConfirmState('restart')}
       />
 
+      </div>
+
+      <FailureBanner message={server.lastError} />
+
       <Tabs
         aria-label="Server sections"
         variant="underlined"
@@ -393,7 +400,7 @@ export default function ServerDetailsPage() {
         }}
       >
         <Tab key="overview" title="Overview">
-          <div className="grid gap-4 lg:grid-cols-[1.4fr_1.1fr]">
+          <div className="space-y-4">
             <MetricsCard
               serverId={serverId}
               metrics={metrics}
@@ -401,12 +408,11 @@ export default function ServerDetailsPage() {
               status={server.status}
               history={history}
             />
-            <QuickSettingsCard server={server} onEdit={() => setShowEdit(server)} />
           </div>
         </Tab>
 
         <Tab key="console" title="Console">
-          <ConsoleCard serverId={server.id} status={server.status} playerNames={players?.names ?? []} />
+          <ConsoleCard serverId={server.id} status={server.status} exitCode={server.exitCode} playerNames={players?.names ?? []} />
         </Tab>
 
         <Tab key="logs" title="Logs">

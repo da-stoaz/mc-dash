@@ -21,6 +21,8 @@ export type MetricsPayload = Awaited<ReturnType<typeof dockerService.metrics>>;
 type MetricsListener = (metrics: MetricsPayload | null) => void;
 
 type Sample = {
+  cpuCores: number;
+  memoryBytes: number;
   cpu: number;
   mem: number;
   netRx: number;
@@ -77,6 +79,10 @@ function toBucket(serverId: string, bucketStart: number, samples: Sample[]): Met
     diskRMax: max(samples.map((s) => s.diskR)),
     diskWAvg: avg(samples.map((s) => s.diskW)),
     diskWMax: max(samples.map((s) => s.diskW)),
+    cpuCoresAvg: avg(samples.map(s => s.cpuCores)),
+    cpuCoresMax: max(samples.map(s => s.cpuCores)),
+    memoryBytesAvg: avg(samples.map(s => s.memoryBytes)),
+    memoryBytesMax: max(samples.map(s => s.memoryBytes)),
     samples: samples.length,
   };
 }
@@ -219,6 +225,8 @@ class MetricsCollector {
 
         const dtSec = acc.prev ? (nowMs - acc.prev.tsMs) / 1000 : 0;
         acc.samples.push({
+          cpuCores: metrics.cpuCores,
+          memoryBytes: metrics.memoryBytes,
           cpu: Math.max(0, metrics.cpuPercent),
           mem: Math.max(0, metrics.memoryPercent),
           netRx: acc.prev ? rate(metrics.networkRxBytes, acc.prev.rx, dtSec) : 0,

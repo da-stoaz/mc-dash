@@ -19,6 +19,12 @@ type UsageChartProps = {
   startLabel?: string;
   endLabel?: string;
   emptyLabel?: string;
+  maxValue?: number;
+  formatValue?: (value: number) => string;
+  summary?: string;
+  absoluteValues?: (number | null | undefined)[];
+  absolutePeaks?: (number | null | undefined)[];
+  formatAbsolute?: (value: number) => string;
 };
 
 function percent(value: number) {
@@ -34,23 +40,29 @@ function sampleTime(timestamp: number) {
 export function UsageChart({
   label, values, timestamps, band, resolution, stroke, fill, avgLabel,
   startLabel, endLabel, emptyLabel = 'Collecting data…',
+  maxValue = 100, formatValue = percent, summary, absoluteValues, absolutePeaks, formatAbsolute,
 }: UsageChartProps) {
   // Store the horizontal position so a stationary pointer stays aligned as live
   // samples arrive and the buffer rolls forward.
   const [position, setPosition] = useState<number | null>(null);
-  const hasData = values.length > 1;
+  const hasData = values.length > 1 && values.some(Number.isFinite);
   const series = band ?? values;
-  const peak = hasData ? Math.max(...series) : null;
+  const peak = hasData ? Math.max(...series.filter(Number.isFinite)) : null;
   const index = Math.round((position ?? 1) * (values.length - 1));
   const timestamp = timestamps[index];
-  const selected = hasData && position !== null && Number.isFinite(timestamp);
+  const selected = hasData && position !== null && Number.isFinite(timestamp) && Number.isFinite(values[index]);
   const x = hasData ? index / (values.length - 1) * 100 : 0;
-  const y = 100 - values[index];
+  const y = 100 - values[index] / maxValue * 100;
   const time = Number.isFinite(timestamp) ? sampleTime(timestamp) : '';
   const bucketEnd = resolution ? new Date(timestamp + resolution * 1000).toLocaleTimeString(undefined, {
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   }) : null;
-  const description = !hasData ? 'No samples' : `${time}${bucketEnd ? ` – ${bucketEnd}` : ''}, ${band ? 'average ' : ''}${percent(values[index] ?? 0)}${band ? `, peak ${percent(band[index])}` : ''}`;
+  const absolute = (value: number | null | undefined) => value != null && Number.isFinite(value) && formatAbsolute ? ` · ${formatAbsolute(value)}` : '';
+  const absoluteSample = absolute(absoluteValues?.[index]).replace(/^ · /, '');
+  const absolutePeak = absolute(absolutePeaks?.[index]).replace(/^ · /, '');
+  const sampleLabel = Number.isFinite(values[index]) ? `${formatValue(values[index])}${absolute(absoluteValues?.[index])}` : 'Unavailable';
+  const peakLabel = band && Number.isFinite(band[index]) ? `${formatValue(band[index])}${absolute(absolutePeaks?.[index])}` : '';
+  const description = !hasData ? 'No samples' : `${time}${bucketEnd ? ` – ${bucketEnd}` : ''}, ${band ? 'average ' : ''}${(Number.isFinite(values[index]) ? sampleLabel : 'Unavailable')}${band ? `, peak ${peakLabel}` : ''}`;
 
   function inspect(event: PointerEvent<HTMLDivElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -74,14 +86,14 @@ export function UsageChart({
   }
 
   return (
-    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center justify-between text-xs">
-        <span className="flex items-center gap-1.5 font-medium">
+    <div className="min-w-0 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+        <span className="flex h-4 items-center gap-1.5 font-medium">
           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: stroke }} />
           {label}
         </span>
-        <span className="muted tabular-nums">
-          Avg {avgLabel}{peak != null && ` · Peak ${Math.round(peak)}%`}
+        <span className="muted whitespace-nowrap text-[11px] leading-4 tabular-nums">
+          {summary ?? <>{`Avg ${avgLabel}`}{peak != null && ` · Peak ${formatValue(peak)}`}</>}
         </span>
       </div>
       {hasData ? (
@@ -93,7 +105,7 @@ export function UsageChart({
           aria-valuemax={values.length - 1}
           aria-valuenow={index}
           aria-valuetext={description}
-          className="relative mt-2 h-24 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          className="relative mt-2 h-28 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           onPointerEnter={inspect}
           onPointerMove={inspect}
           onPointerDown={inspect}
@@ -104,9 +116,9 @@ export function UsageChart({
           onKeyDown={navigate}
         >
           <svg viewBox={`0 0 100 ${CHART_H}`} className="h-full w-full" preserveAspectRatio="none" aria-hidden="true">
-            <path d={buildSparklineArea(series, 100, CHART_H)} fill={fill} />
+            <path d={buildSparklineArea(series, 100, CHART_H, maxValue)} fill={fill} opacity="0.35" />
             <path
-              d={buildSparklinePath(values, 100, CHART_H)}
+              d={buildSparklinePath(values, 100, CHART_H, maxValue)}
               fill="none" stroke={stroke} strokeWidth="1.75"
               strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
             />
@@ -129,13 +141,25 @@ export function UsageChart({
                       {bucketEnd && <span className="block">to {bucketEnd}</span>}
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2">
-                      <span>{band ? 'Average' : label}</span>
-                      <span className="font-semibold" style={{ color: stroke }}>{percent(values[index])}</span>
+                      <span>{band ? 'Average %' : formatAbsolute ? label.replace('usage', '%') : label}</span>
+                      <span className="font-semibold" style={{ color: stroke }}>{formatValue(values[index])}</span>
                     </div>
+                    {absoluteSample && (
+                      <div className="mt-0.5 flex items-center justify-between gap-3">
+                        <span>{band ? 'Average usage' : label}</span>
+                        <span className="font-semibold" style={{ color: stroke }}>{absoluteSample}</span>
+                      </div>
+                    )}
                     {band && (
                       <div className="mt-0.5 flex items-center justify-between gap-2">
-                        <span className="text-white/60">Peak</span>
-                        <span>{percent(band[index])}</span>
+                        <span className="text-white/60">Peak %</span>
+                        <span>{formatValue(band[index])}</span>
+                      </div>
+                    )}
+                    {band && absolutePeak && (
+                      <div className="mt-0.5 flex items-center justify-between gap-3">
+                        <span className="text-white/60">Peak usage</span>
+                        <span>{absolutePeak}</span>
                       </div>
                     )}
                   </div>
@@ -151,7 +175,7 @@ export function UsageChart({
           )}
         </div>
       ) : (
-        <div className="mt-2 flex h-24 items-center justify-center text-xs muted">{emptyLabel}</div>
+        <div className="mt-2 flex h-16 items-center justify-center text-xs muted">{emptyLabel}</div>
       )}
       {hasData && (startLabel || endLabel) && (
         <div className="mt-1.5 flex items-center justify-between text-[10px] tabular-nums text-white/35">

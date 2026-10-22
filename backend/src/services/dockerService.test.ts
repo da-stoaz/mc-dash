@@ -102,3 +102,28 @@ test('downloader error names the real cause, not the modloader symptom', () => {
   // The whole point: say why the pack's own error would have lied.
   assert.match(err.message, /Fabric is not available/);
 });
+
+test('status details expose exit codes only for terminated containers', async () => {
+  const { DockerService } = require('./dockerService');
+  const service = new DockerService();
+  let state: Record<string, unknown> = {};
+  service.getContainer = async () => ({ inspect: async () => ({ State: state }) });
+  const server = { id: 'status-test', status: 'stopped' };
+
+  for (const code of [0, 1, 137, 143]) {
+    state = { Status: 'exited', Running: false, ExitCode: code };
+    assert.deepEqual(await service.statusDetails(server), {
+      status: code === 0 ? 'stopped' : 'exited',
+      exitCode: code,
+    });
+    assert.equal(await service.status(server), code === 0 ? 'stopped' : 'exited');
+  }
+
+  state = { Status: 'running', Running: true, ExitCode: 137 };
+  assert.deepEqual(await service.statusDetails(server), { status: 'running', exitCode: null });
+  state = { Status: 'created', Running: false, ExitCode: 0 };
+  assert.deepEqual(await service.statusDetails(server), { status: 'stopped', exitCode: null });
+
+  service.getContainer = async () => { throw { statusCode: 404 }; };
+  assert.deepEqual(await service.statusDetails(server), { status: 'stopped', exitCode: null });
+});

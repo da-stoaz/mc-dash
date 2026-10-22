@@ -62,6 +62,13 @@ db.prepare(
   )`
 ).run();
 
+// Older buckets retain NULL: percentages cannot reconstruct absolute usage
+// after CPU or memory limits have changed.
+const existingColumns = new Set((db.prepare('PRAGMA table_info(metric_rollups)').all() as { name: string }[]).map(column => column.name));
+for (const column of ['cpuCoresAvg', 'cpuCoresMax', 'memoryBytesAvg', 'memoryBytesMax']) {
+  if (!existingColumns.has(column)) db.exec(`ALTER TABLE metric_rollups ADD COLUMN ${column} REAL`);
+}
+
 export type MetricBucket = {
   serverId: string;
   bucketStart: number;
@@ -79,18 +86,22 @@ export type MetricBucket = {
   diskRMax: number;
   diskWAvg: number;
   diskWMax: number;
+  cpuCoresAvg?: number | null;
+  cpuCoresMax?: number | null;
+  memoryBytesAvg?: number | null;
+  memoryBytesMax?: number | null;
   samples: number;
 };
 
 export type MetricPoint = MetricBucket & { t: number };
 
 const COLUMNS =
-  'cpuMin, cpuAvg, cpuMax, memMin, memAvg, memMax, netRxAvg, netRxMax, netTxAvg, netTxMax, diskRAvg, diskRMax, diskWAvg, diskWMax, samples';
+  'cpuMin, cpuAvg, cpuMax, memMin, memAvg, memMax, netRxAvg, netRxMax, netTxAvg, netTxMax, diskRAvg, diskRMax, diskWAvg, diskWMax, cpuCoresAvg, cpuCoresMax, memoryBytesAvg, memoryBytesMax, samples';
 
 const insertBucketStmt = db.prepare(
   `INSERT INTO metric_rollups (serverId, resolution, bucketStart, ${COLUMNS})
    VALUES (@serverId, @resolution, @bucketStart, @cpuMin, @cpuAvg, @cpuMax, @memMin, @memAvg, @memMax,
-           @netRxAvg, @netRxMax, @netTxAvg, @netTxMax, @diskRAvg, @diskRMax, @diskWAvg, @diskWMax, @samples)
+           @netRxAvg, @netRxMax, @netTxAvg, @netTxMax, @diskRAvg, @diskRMax, @diskWAvg, @diskWMax, @cpuCoresAvg, @cpuCoresMax, @memoryBytesAvg, @memoryBytesMax, @samples)
    ON CONFLICT(serverId, resolution, bucketStart) DO UPDATE SET
      cpuMin = excluded.cpuMin, cpuAvg = excluded.cpuAvg, cpuMax = excluded.cpuMax,
      memMin = excluded.memMin, memAvg = excluded.memAvg, memMax = excluded.memMax,
@@ -98,6 +109,10 @@ const insertBucketStmt = db.prepare(
      netTxAvg = excluded.netTxAvg, netTxMax = excluded.netTxMax,
      diskRAvg = excluded.diskRAvg, diskRMax = excluded.diskRMax,
      diskWAvg = excluded.diskWAvg, diskWMax = excluded.diskWMax,
+     cpuCoresAvg = excluded.cpuCoresAvg,
+     cpuCoresMax = excluded.cpuCoresMax,
+     memoryBytesAvg = excluded.memoryBytesAvg,
+     memoryBytesMax = excluded.memoryBytesMax,
      samples = excluded.samples`
 );
 
@@ -112,6 +127,10 @@ const rollupStmt = db.prepare(
      SUM(netTxAvg * samples) / SUM(samples), MAX(netTxMax),
      SUM(diskRAvg * samples) / SUM(samples), MAX(diskRMax),
      SUM(diskWAvg * samples) / SUM(samples), MAX(diskWMax),
+     CASE WHEN COUNT(cpuCoresAvg) = COUNT(*) THEN SUM(cpuCoresAvg * samples) / SUM(samples) END,
+     CASE WHEN COUNT(cpuCoresMax) = COUNT(*) THEN MAX(cpuCoresMax) END,
+     CASE WHEN COUNT(memoryBytesAvg) = COUNT(*) THEN SUM(memoryBytesAvg * samples) / SUM(samples) END,
+     CASE WHEN COUNT(memoryBytesMax) = COUNT(*) THEN MAX(memoryBytesMax) END,
      SUM(samples)
    FROM metric_rollups
    WHERE serverId = @serverId AND resolution = @fine
@@ -124,6 +143,10 @@ const rollupStmt = db.prepare(
      netTxAvg = excluded.netTxAvg, netTxMax = excluded.netTxMax,
      diskRAvg = excluded.diskRAvg, diskRMax = excluded.diskRMax,
      diskWAvg = excluded.diskWAvg, diskWMax = excluded.diskWMax,
+     cpuCoresAvg = excluded.cpuCoresAvg,
+     cpuCoresMax = excluded.cpuCoresMax,
+     memoryBytesAvg = excluded.memoryBytesAvg,
+     memoryBytesMax = excluded.memoryBytesMax,
      samples = excluded.samples`
 );
 
@@ -150,7 +173,7 @@ class MetricsStore {
   // Persist a finest-tier (30s) bucket, then cascade the rollups upward.
   writeFineBucket(bucket: MetricBucket) {
     const write = db.transaction((b: MetricBucket) => {
-      insertBucketStmt.run({ ...b, resolution: FINE_RESOLUTION });
+      insertBucketStmt.run({ cpuCoresAvg: null, cpuCoresMax: null, memoryBytesAvg: null, memoryBytesMax: null, ...b, resolution: FINE_RESOLUTION });
       for (const { fine, coarse } of ROLLUP_CHAIN) {
         const bucketStart = Math.floor(b.bucketStart / coarse) * coarse;
         rollupStmt.run({ serverId: b.serverId, fine, coarse, bucketStart });

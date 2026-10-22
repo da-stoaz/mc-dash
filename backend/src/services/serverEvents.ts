@@ -48,15 +48,15 @@ async function refreshStatuses() {
       servers.map(async (server) => {
         if (preparing.has(server.id)) return server;
         try {
-          const status = await dockerService.status(server);
-          if (status === server.status) return server;
-          return serverStore.update(server.id, { status }) ?? server;
+          const { status, exitCode } = await dockerService.statusDetails(server);
+          const current = status === server.status ? server : serverStore.update(server.id, { status }) ?? server;
+          return { ...current, exitCode };
         } catch {
           return server;
         }
       })
     );
-    const view = toServerViews(refreshed);
+    const view = await toServerViews(refreshed);
     for (const res of statusClients) send(res, 'servers', view);
   } catch (err) {
     logger.warn({ err }, 'status stream tick failed');
@@ -100,11 +100,12 @@ async function refreshDetail(id: string) {
       return;
     }
 
-    let current = server;
+    let current: typeof server & { exitCode?: number | null } = server;
     if (!preparing.has(id)) {
       try {
-        const status = await dockerService.status(server);
+        const { status, exitCode } = await dockerService.statusDetails(server);
         if (status !== server.status) current = serverStore.update(id, { status }) ?? server;
+        current = { ...current, exitCode };
       } catch {
         // keep last known status
       }

@@ -171,6 +171,7 @@ export default function Page() {
       if (form.serverPort) payload.append('serverPort', form.serverPort);
       if (form.cpuLimit) payload.append('cpuLimit', form.cpuLimit);
       if (form.renderDistance) payload.append('renderDistance', String(form.renderDistance));
+      payload.append('entityBroadcastRangePercentage', String(form.entityBroadcastRangePercentage));
       if (form.seed) payload.append('seed', form.seed);
 
       setUploadProgress(100);
@@ -248,6 +249,7 @@ export default function Page() {
           },
           game: {
             renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
+            entityBroadcastRangePercentage: changes.entityBroadcastRangePercentage,
             gameMode: changes.gameMode,
             difficulty: changes.difficulty,
             seed: changes.seed,
@@ -337,11 +339,11 @@ export default function Page() {
   const filteredServers = useMemo(() => {
     const query = search.trim().toLowerCase();
     return servers.filter((server) => {
-      // Several selected statuses widen the result (Error *or* Exited); the
+      // Several selected statuses widen the result (Error *or* Stopped); the
       // search then narrows whatever that produced.
       if (statusFilter.length > 0) {
         const matchesStatus = statusFilter.some((key) =>
-          key === 'restart-required' ? Boolean(server.restartRequired) : server.status === key
+          key === 'restart-required' ? Boolean(server.restartRequired) : (key === 'stopped' && server.status === 'exited') || server.status === key
         );
         if (!matchesStatus) return false;
       }

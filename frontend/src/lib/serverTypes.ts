@@ -55,6 +55,7 @@ export type ServerRecord = {
   whitelistEnabled?: boolean;
   blacklistEnabled?: boolean;
   status: ServerStatus;
+  exitCode?: number | null;
   restartRequired?: boolean;
   packReady?: boolean;
   // Why the last operation failed; survives the toast and a page reload.
@@ -71,10 +72,12 @@ export type ServerRecord = {
   } | null;
   /** Players online at the last RCON read; null when unknown. */
   players?: number | null;
+  /** Active server limit, or the configured limit when a live reading is unavailable. */
+  maxPlayers?: number | null;
   /** How long it has been empty, driving the "sleeps in ..." hint. */
   idleMs?: number | null;
   resources: { minRamMb: number; maxRamMb: number; cpuLimit?: number };
-  game: { renderDistance?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
+  game: { renderDistance?: number; entityBroadcastRangePercentage?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
 
 export type SnapshotKind = 'manual' | 'auto-pre-restore';
@@ -156,6 +159,7 @@ export type FormState = {
   maxRamMb: number;
   cpuLimit: string;
   renderDistance: number;
+  entityBroadcastRangePercentage: number;
   gameMode: GameMode;
   difficulty: Difficulty;
   seed: string;
@@ -177,6 +181,7 @@ export const emptyForm: FormState = {
   maxRamMb: 6144,
   cpuLimit: '',
   renderDistance: 10,
+  entityBroadcastRangePercentage: 100,
   gameMode: 'survival',
   difficulty: 'normal',
   seed: '',
@@ -200,6 +205,13 @@ export const statusLabel: Record<ServerStatus, string> = {
   restarting: 'Restarting',
   stopping: 'Stopping',
   stopped: 'Stopped',
-  exited: 'Exited',
+  exited: 'Stopped',
   error: 'Error',
 };
+
+export function formatServerStatus(status: ServerStatus, exitCode?: number | null): string {
+  if ((status === 'stopped' || status === 'exited') && exitCode != null && exitCode !== 0) {
+    return `Stopped (${exitCode})`;
+  }
+  return statusLabel[status];
+}

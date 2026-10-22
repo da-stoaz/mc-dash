@@ -23,6 +23,7 @@ import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands
 import { assertCanStart, capacityReport, committedMbFor, floorMbFor } from '../services/hostCapacityService';
 import { hibernationService } from '../services/hibernationService';
 import { toServerViews } from '../services/serverView';
+import { tpsService } from '../services/tpsService';
 import {
   UploadError,
   appendChunk,
@@ -41,6 +42,7 @@ const resourceSchema = z.object({
 
 const gameSchema = z.object({
   renderDistance: z.number().int().min(2).max(32).optional(),
+  entityBroadcastRangePercentage: z.number().int().min(10).max(1000).optional(),
   gameMode: z.enum(['survival', 'creative', 'adventure', 'spectator']).optional(),
   difficulty: z.enum(['peaceful', 'easy', 'normal', 'hard']).optional(),
   seed: z.string().optional(),
@@ -85,6 +87,7 @@ const createServerSchema = z.object({
   maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
   renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
+  entityBroadcastRangePercentage: z.preprocess(parseNumber, z.number().int().min(10).max(1000)).optional(),
   gameMode: z.preprocess(emptyToUndefined, z.enum(['survival', 'creative', 'adventure', 'spectator']).optional()),
   difficulty: z.preprocess(emptyToUndefined, z.enum(['peaceful', 'easy', 'normal', 'hard']).optional()),
   seed: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -325,12 +328,12 @@ router.get('/', async (_req, res) => {
   const refreshed = await Promise.all(
     servers.map(async (server) => {
       if (preparing.has(server.id)) return server;
-      const status = await dockerService.status(server);
-      if (status === server.status) return server;
-      return serverStore.update(server.id, { status }) ?? server;
+      const { status, exitCode } = await dockerService.statusDetails(server);
+      const current = status === server.status ? server : serverStore.update(server.id, { status }) ?? server;
+      return { ...current, exitCode };
     })
   );
-  res.json(toServerViews(refreshed));
+  res.json(await toServerViews(refreshed));
 });
 
 // SSE: live server list. Registered before '/:id' so it isn't captured as an id.
@@ -338,10 +341,10 @@ router.get('/stream', (req, res) => {
   addStatusClient(res);
 });
 
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
-  res.json(server);
+  res.json(preparing.has(server.id) ? server : { ...server, ...await dockerService.statusDetails(server) });
 });
 
 // SSE: live record + metrics for a single server.
@@ -406,6 +409,7 @@ router.post('/', upload.single('file'), async (req, res, next) => {
       },
       game: {
         renderDistance: parsed.renderDistance,
+        entityBroadcastRangePercentage: parsed.entityBroadcastRangePercentage ?? 100,
         gameMode: parsed.gameMode,
         difficulty: parsed.difficulty,
         seed: parsed.seed,
@@ -698,6 +702,7 @@ router.patch('/:id', async (req, res, next) => {
     const difficultyChanged = !!game && game.difficulty !== existing.game.difficulty;
     const gameModeChanged = !!game && game.gameMode !== existing.game.gameMode;
     const renderDistanceChanged = !!game && game.renderDistance !== existing.game.renderDistance;
+    const entityBroadcastRangeChanged = !!game && game.entityBroadcastRangePercentage !== existing.game.entityBroadcastRangePercentage;
     const seedChanged = !!game && (game.seed ?? '') !== (existing.game.seed ?? '');
     const incomingResources = parsed.resources;
     const resourcesChanged =
@@ -709,6 +714,7 @@ router.patch('/:id', async (req, res, next) => {
       difficultyChanged &&
       !gameModeChanged &&
       !renderDistanceChanged &&
+      !entityBroadcastRangeChanged &&
       !seedChanged &&
       !resourcesChanged &&
       !portChanged &&
@@ -1026,6 +1032,14 @@ router.delete('/:id/console', (req, res) => {
   if (!server) return notFound(res);
   clearConsoleHistory(server.id);
   res.json({ entries: [] });
+});
+
+router.get('/:id/tps', async (req, res) => {
+  const server = serverStore.get(req.params.id);
+  if (!server) return notFound(res);
+  const status = await dockerService.status(server);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await tpsService.read({ ...server, status }));
 });
 
 router.get('/:id/metrics', async (req, res) => {

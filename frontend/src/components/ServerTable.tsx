@@ -1,15 +1,13 @@
 import Link from 'next/link';
 import { Card, CardBody, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
-import { ServerRecord, statusColor, statusLabel } from '../lib/serverTypes';
+import { ServerRecord, statusColor, formatServerStatus } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 import { CopyButton } from './CopyButton';
 import { UsageCell } from './UsageCell';
 import { SleepChip } from './SleepChip';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 
-// Hostnames and pack filenames are both longer than the column can show, so
-// each is truncated with the full value on hover — and the hostname, the bit
-// people actually need to hand out, gets a copy button next to it.
+// Long hostnames are truncated, with the full value on hover and a copy button.
 function ServerNameCell({ server, routerDomain }: { server: ServerRecord; routerDomain: string | undefined }) {
   const hostname = formatHostname(server.subdomain, routerDomain);
 
@@ -40,6 +38,23 @@ function ServerNameCell({ server, routerDomain }: { server: ServerRecord; router
   );
 }
 
+function PlayerCount({ server }: { server: ServerRecord }) {
+  const current = ['stopped', 'exited'].includes(server.status) ? 0
+    : server.status === 'running' ? server.players : null;
+  return <span className="tabular-nums whitespace-nowrap" title={current == null ? 'Player count unavailable' : undefined}>
+    {current ?? '—'}/{server.maxPlayers ?? '—'}
+  </span>;
+}
+
+function GameSummary({ server }: { server: ServerRecord }) {
+  const game = server.game;
+  return <div className="flex flex-col gap-1">
+    {game.gameMode && <span className="capitalize">{game.gameMode}</span>}
+    {game.renderDistance != null && <span className="muted text-xs">{game.renderDistance} chunks</span>}
+    {!game.gameMode && game.renderDistance == null && <span className="muted text-xs">Not available</span>}
+  </div>;
+}
+
 // Phone rendering of one server. The table needs ~900px before its seven
 // columns stop colliding, so below md each row becomes a card: identity and
 // status on top, the columns still worth showing as a label/value grid, then
@@ -56,7 +71,6 @@ function ServerCard({
   'actionLoading' | 'onAction' | 'onEdit' | 'onDeleteServer'
 >) {
   const hostname = formatHostname(server.subdomain, routerDomain);
-  const packLabel = server.serverPackName ?? (server.packReady ? 'Imported from snapshot' : 'No pack uploaded');
 
   return (
     <Card shadow="sm" className="bg-white/5 border border-white/10">
@@ -79,7 +93,7 @@ function ServerCard({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <Chip color={statusColor[server.status]} variant="flat" size="sm">
-              {statusLabel[server.status]}
+              {formatServerStatus(server.status, server.exitCode)}
             </Chip>
             {server.restartRequired && (
               <Chip color="warning" variant="flat" size="sm">
@@ -91,20 +105,16 @@ function ServerCard({
         </div>
 
         <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-          <span className="muted">Pack</span>
-          <span className="truncate text-right">{packLabel}</span>
+          <span className="muted">Players</span>
+          <span className="text-right"><PlayerCount server={server} /></span>
           <span className="muted">Port</span>
           <span className="text-right">{server.serverPort}</span>
           <span className="muted">Usage</span>
           <span className="text-right">
             <UsageCell server={server} compact />
           </span>
-          {server.game.gameMode && (
-            <>
-              <span className="muted">Mode</span>
-              <span className="text-right capitalize">{server.game.gameMode}</span>
-            </>
-          )}
+          <span className="muted">Game</span>
+          <div className="text-right"><GameSummary server={server} /></div>
         </div>
 
         <ActionButtons
@@ -167,11 +177,11 @@ export function ServerTable({
         <TableHeader>
           <TableColumn>Name</TableColumn>
           <TableColumn>Status</TableColumn>
-          <TableColumn>Server pack</TableColumn>
+          <TableColumn>Players</TableColumn>
           <TableColumn>Port</TableColumn>
           <TableColumn width={160}>Usage</TableColumn>
           <TableColumn>Game</TableColumn>
-          <TableColumn align="end">Actions</TableColumn>
+          <TableColumn align="end" width={168}>Actions</TableColumn>
         </TableHeader>
         <TableBody emptyContent={emptyContent} items={servers}>
           {(server) => (
@@ -182,7 +192,7 @@ export function ServerTable({
               <TableCell>
                 <div className="flex flex-wrap gap-2">
                   <Chip color={statusColor[server.status]} variant="flat" size="sm">
-                    {statusLabel[server.status]}
+                    {formatServerStatus(server.status, server.exitCode)}
                   </Chip>
                   <SleepChip server={server} />
                   {server.restartRequired && (
@@ -193,17 +203,7 @@ export function ServerTable({
                 </div>
               </TableCell>
               <TableCell>
-                <div className="flex flex-col gap-1 max-w-[220px]">
-                  {server.serverPackName ? (
-                    <Tooltip content={server.serverPackName} size="sm" delay={200} closeDelay={0}>
-                      <span className="muted text-xs truncate">{server.serverPackName}</span>
-                    </Tooltip>
-                  ) : server.packReady ? (
-                    <span className="muted text-xs">Imported from snapshot</span>
-                  ) : (
-                    <span className="muted text-xs">No pack uploaded</span>
-                  )}
-                </div>
+                <PlayerCount server={server} />
               </TableCell>
               <TableCell>
                 <span className="text-sm">{server.serverPort}</span>
@@ -212,11 +212,7 @@ export function ServerTable({
                 <UsageCell server={server} />
               </TableCell>
               <TableCell>
-                <div className="flex flex-col gap-1">
-                  {server.game.gameMode && <span>{server.game.gameMode}</span>}
-                  {server.game.renderDistance && <span className="muted text-xs">{server.game.renderDistance} chunks</span>}
-                  {server.game.seed && <span className="muted text-xs truncate">{server.game.seed}</span>}
-                </div>
+                <GameSummary server={server} />
               </TableCell>
               <TableCell>
                 <ActionButtons
