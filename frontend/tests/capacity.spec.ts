@@ -25,9 +25,19 @@ for (const state of ['enforced', 'unverified', 'pressure', 'disabled', 'countdow
       await expect(page.getByText('/ 12.0 GB limit', { exact: true })).toBeVisible();
     } else {
       await expect(meter).toHaveCount(0);
-      await expect(page.getByText(state === 'disabled' ? 'Monitoring only. The shared RAM limit is not enforced on this host.' : 'MC Dash must run outside the Minecraft memory pool.', { exact: true })).toBeVisible();
+      if (state === 'unverified') await expect(page.getByText('MC Dash must run outside the Minecraft memory pool.', { exact: true })).toBeVisible();
     }
-    if (state === 'disabled') await expect(page.getByText('5.9 GB used', { exact: true })).toBeVisible();
+    if (state === 'disabled') {
+      await expect(page.getByText('5.9 GB used', { exact: true })).toBeVisible();
+      await expect(page.getByText('Monitoring only. The shared RAM limit is not enforced on this host.', { exact: true })).toHaveCount(0);
+      const badge = page.getByRole('button', { name: 'Monitoring only' });
+      await badge.hover();
+      await expect(page.getByRole('tooltip')).toContainText('The shared RAM limit is not enforced on this host.');
+      await page.mouse.move(0, 0);
+      await expect(page.getByRole('tooltip')).toHaveCount(0);
+      await badge.focus();
+      await expect(page.getByRole('tooltip')).toBeVisible();
+    }
     if (state === 'countdown') await expect(page.getByText('Survival will save and sleep in 30s to release RAM.', { exact: true })).toBeVisible();
     if (state === 'save-failed') await expect(page.getByText(/Could not safely sleep Survival/)).toBeVisible();
     if (state === 'pressure') await expect(page.getByText(/RAM is high/)).toBeVisible();

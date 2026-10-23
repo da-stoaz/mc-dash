@@ -40,7 +40,7 @@ for (const mobile of [false, true]) {
     await expect(page.getByRole('menuitem', { name: 'Edit', exact: true })).toBeVisible();
     await page.getByRole('menuitem', { name: 'Restart', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Restart server' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Restart server' })).toBeVisible();
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'More actions for Offline world' }).click();
     await expect(page.getByRole('menuitem', { name: 'Rebuild', exact: true })).toBeVisible();
