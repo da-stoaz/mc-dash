@@ -112,6 +112,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 autoComplete="current-password"
                 required
                 label="Password"
+                // Server errors must not set customValidity: native validation
+                // would block retries before submit can clear the error.
+                validationBehavior="aria"
                 value={password}
                 onValueChange={setPassword}
                 autoFocus

@@ -6,7 +6,6 @@ import {
   Button,
   Card,
   CardBody,
-  CardHeader,
   Modal,
   ModalBody,
   ModalContent,
@@ -15,13 +14,11 @@ import {
   Tab,
   Tabs,
 } from '@heroui/react';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { EditModal, FirewallModal } from '../../../components/ServerModals';
-import { ConfigurationCard } from '../../../components/server-details/ConfigurationCard';
+import { SettingsPanel } from '../../../components/server-details/SettingsPanel';
 import { ConsoleCard } from '../../../components/server-details/ConsoleCard';
-import { FirewallCard } from '../../../components/server-details/FirewallCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
 import { LogsCard } from '../../../components/server-details/LogsCard';
 import { MetricsCard } from '../../../components/server-details/MetricsCard';
@@ -29,10 +26,9 @@ import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard'
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { FailureBanner } from '../../../components/server-details/FailureBanner';
 import { clampPercent, HISTORY_LIMIT, LiveMetricsHistory, MetricsHistory } from '../../../components/server-details/metricsUtils';
-import { FirewallState, FormState, hasLiveProcess, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
+import { PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch } from '../../../lib/api';
-import { uploadInChunks } from '../../../lib/chunkedUpload';
 
 export default function ServerDetailsPage() {
   const params = useParams<{ id: string }>();
@@ -42,12 +38,8 @@ export default function ServerDetailsPage() {
   const [players, setPlayers] = useState<PlayerInfo | null>(null);
   const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [], cpuCores: [], memoryBytes: [] });
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
-  const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
-  const [showFirewall, setShowFirewall] = useState<ServerRecord | null>(null);
   const [loading, setLoading] = useState(true);
-  const [packReplacing, setPackReplacing] = useState(false);
-  const [packProgress, setPackProgress] = useState<number | null>(null);
   const serverErrorRef = useRef(false);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
@@ -179,110 +171,6 @@ export default function ServerDetailsPage() {
     };
   }, [serverId]);
 
-  const handleUpdate = async (id: string, changes: Partial<FormState>) => {
-    try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: changes.name?.trim() ? changes.name.trim() : undefined,
-          javaImage: changes.javaImage ? changes.javaImage : null,
-          serverPort: changes.serverPort ? Number(changes.serverPort) : undefined,
-          subdomain: changes.subdomain ? changes.subdomain : undefined,
-          resources: {
-            minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
-            maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,
-            cpuLimit: changes.cpuLimit ? Number(changes.cpuLimit) : undefined,
-          },
-          game: {
-            renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
-            entityBroadcastRangePercentage: changes.entityBroadcastRangePercentage,
-            gameMode: changes.gameMode,
-            difficulty: changes.difficulty,
-            seed: changes.seed,
-          },
-        }),
-      });
-      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
-      const updated = await res.json().catch(() => null);
-      await fetchServer();
-      setShowEdit(null);
-      if (updated?.restartRequired) {
-        notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
-      } else if (!hasLiveProcess(updated?.status)) {
-        notify('Saved', 'Applied the next time this server starts.', 'success');
-      } else {
-        notify('Saved', 'Changes applied live — no restart needed.', 'success');
-      }
-    } catch (err: any) {
-      notify('Update failed', err?.message ?? 'Update failed', 'danger');
-    }
-  };
-
-  const handleReplacePack = async (file: File) => {
-    if (!server || packReplacing) return;
-    const id = server.id;
-    try {
-      setPackReplacing(true);
-      setPackProgress(0);
-
-      // Sliced so no single request meets the body limit of the proxy in front.
-      const uploadId = await uploadInChunks(file, {
-        onProgress: (fraction) => setPackProgress(Math.round(fraction * 100)),
-      });
-
-      const payload = new FormData();
-      payload.append('uploadId', uploadId);
-
-      setPackProgress(100);
-      const res = await apiFetch(`${API_BASE}/servers/${id}/pack`, { method: 'POST', body: payload });
-      if (!res.ok) {
-        throw new Error(await getApiErrorMessage(res, 'Pack upload failed'));
-      }
-
-      await fetchServer();
-      notify('New pack uploaded', 'Now run Prepare to apply it — your world is preserved.', 'success');
-    } catch (err: any) {
-      notify('Pack upload failed', err?.message ?? 'Pack upload failed', 'danger');
-    } finally {
-      setPackReplacing(false);
-      setPackProgress(null);
-    }
-  };
-
-  const handleFirewallUpdate = async (id: string, changes: FirewallState) => {
-    try {
-      const toList = (value: string) =>
-        value
-          .split('\n')
-          .map((entry) => entry.trim())
-          .filter(Boolean);
-      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          whitelistEnabled: changes.whitelistEnabled,
-          blacklistEnabled: changes.blacklistEnabled,
-          whitelist: toList(changes.whitelist),
-          blacklist: toList(changes.blacklist),
-        }),
-      });
-      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
-      const updated = await res.json().catch(() => null);
-      await fetchServer();
-      setShowFirewall(null);
-      if (updated?.restartRequired) {
-        notify('Firewall saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
-      } else if (!hasLiveProcess(updated?.status)) {
-        notify('Firewall saved', 'Applied the next time this server starts.', 'success');
-      } else {
-        notify('Firewall saved', 'Bans applied live — no restart needed.', 'success');
-      }
-    } catch (err: any) {
-      notify('Firewall update failed', err?.message ?? 'Update failed', 'danger');
-    }
-  };
-
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
@@ -328,10 +216,6 @@ export default function ServerDetailsPage() {
   const canStop = server ? ['running', 'starting', 'restarting'].includes(server.status) : false;
   const canRestart = server ? server.status === 'running' : false;
   const controlsDisabled = !server || !!busy;
-  const whitelistCount = server?.whitelist?.length ?? 0;
-  const blacklistCount = server?.blacklist?.length ?? 0;
-  const whitelistEnabled = server?.whitelistEnabled ?? whitelistCount > 0;
-  const blacklistEnabled = server?.blacklistEnabled ?? blacklistCount > 0;
 
   if (loading && !server) {
     return (
@@ -424,52 +308,16 @@ export default function ServerDetailsPage() {
         </Tab>
 
         <Tab key="settings" title="Settings">
-          <div className="space-y-4">
-
-            <FirewallCard
-              whitelistEnabled={whitelistEnabled}
-              whitelistCount={whitelistCount}
-              blacklistEnabled={blacklistEnabled}
-              blacklistCount={blacklistCount}
-              onManage={() => setShowFirewall(server)}
-            />
-
-            
-            <ConfigurationCard
-              server={server}
-              onEdit={() => setShowEdit(server)}
-              onReplacePack={handleReplacePack}
-              canReplace={['stopped', 'exited', 'error'].includes(server.status) && !busy}
-              replacing={packReplacing}
-              replaceProgress={packProgress}
-            />
-
-            
-
-            <Card className="bg-rose-500/5 border border-rose-500/30">
-              <CardHeader className="flex flex-col items-start gap-0.5">
-                <div className="text-lg font-semibold text-rose-100">Danger zone</div>
-                <div className="text-xs muted">Permanently delete this server and all its files, including worlds and snapshots. This cannot be undone.</div>
-              </CardHeader>
-              <CardBody className="flex flex-col gap-2 sm:flex-row">
-                <Button
-                  size="sm"
-                  color="danger"
-                  variant="flat"
-                  startContent={<Trash2 size={14} />}
-                  onPress={() => setConfirmState('deleteServer')}
-                  isDisabled={controlsDisabled || busy === 'deleteServer'}
-                >
-                  Delete server and files
-                </Button>
-              </CardBody>
-            </Card>
-          </div>
+          <SettingsPanel
+            key={server.id}
+            server={server}
+            busy={Boolean(busy)}
+            onUpdated={fetchServer}
+            onPrepare={() => invokeAction(server.id, 'prepare')}
+            onDelete={() => setConfirmState('deleteServer')}
+          />
         </Tab>
       </Tabs>
-
-      <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
-      <FirewallModal server={showFirewall} onClose={() => setShowFirewall(null)} onSave={handleFirewallUpdate} />
 
       <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
         <ModalContent>
