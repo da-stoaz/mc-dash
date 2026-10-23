@@ -20,6 +20,10 @@ maximums are ceilings, not reservations against the whole pool.
 
 ## Status of this implementation
 
+See the [2026-10-23 implementation audit](memory-management-audit.md) for confirmed
+logic gaps, incomplete functionality, and the implementation priorities. The
+behavior described below is not yet a production-readiness claim.
+
 Local tests validate the controller reader, Docker request construction/auditing,
 start admission, pressure decisions, and UI with fixtures. **The Linux runtime
 behavior has not been exercised on the Ubuntu deployment.** Player warnings, cancellation on recovery, and graceful occupied-server sleep
@@ -88,7 +92,8 @@ terminate the applications still in it.
 ## Current pressure behavior and its limits
 
 - Starts are serialized and use current pool usage plus temporary boot
-  allowances, not the sum of configured maximums. Starts are refused when that
+  allowances, not the sum of configured maximums. Boot allowances are rebuilt
+  from Docker readiness checks and do not expire solely because time passed. Starts are refused when that
   would consume the 15% operating margin. Host free memory is checked separately.
   Wake-on-connect and restart use the same gate; `force` cannot bypass it.
 - At 85% usage, MC Dash checks for empty servers every ten seconds. After a

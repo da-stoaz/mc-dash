@@ -559,6 +559,7 @@ export class DockerService {
     const managedIds = new Set(servers.map(server => server.containerId).filter(Boolean));
     const managedNames = new Set(servers.map(server => this.containerName(server.id)));
     const containers = await this.docker.listContainers();
+    const active = new Set<string>();
     for (const summary of containers) {
       const names = (summary.Names ?? []).map(name => name.replace(/^\//, ''));
       const isMinecraft = summary.Labels?.['io.mc-dash.role'] === 'minecraft'
@@ -574,8 +575,17 @@ export class DockerService {
       if (isPanel && [POOL_SLICE, 'mcdash.slice'].includes(parent ?? '')) {
         throw new UserFacingError({error: 'The MC Dash panel must be outside the Minecraft memory pool', code: 'MEMORY_POOL_CONTROL_PLANE', status: 409});
       }
-      if (isMinecraft) this.requirePoolParent(parent);
+      if (isMinecraft) {
+        this.requirePoolParent(parent);
+        const server = servers.find(s => s.containerId === summary.Id || names.includes(this.containerName(s.id)));
+        if (server) active.add(server.id);
+        if (server && !await this.isReady(this.docker.getContainer(summary.Id), server)) {
+          const floor = containerMemoryPlan(server.resources)?.floorMb;
+          if (floor) { startupReservations.reserve(server.id, floor); }
+        } else if (server) startupReservations.release(server.id);
+      }
     }
+    for (const server of servers) if (!active.has(server.id)) startupReservations.release(server.id);
   }
 
   private requirePoolParent(parent?: string) {
@@ -588,6 +598,7 @@ export class DockerService {
   async start(server: ServerRecord): Promise<string> {
     const start = async () => {
       const container = await this.getContainer(server);
+      await this.updateResources(server);
       if (config.memoryPoolEnabled) {
         const pool = await readMemoryPool();
         requireMemoryPool(pool);
@@ -600,7 +611,6 @@ export class DockerService {
         const request = containerMemoryPlan(server.resources)?.floorMb;
         if (!request) throw new UserFacingError({error: 'Configure server memory first', code: 'MEMORY_LIMIT_REQUIRED', status: 409});
         startupReservations.release(server.id);
-        requireStartRoom(pool, request, startupReservations.pending(usage));
         // Keep the existing host-free-memory check for unrelated deployments.
         const { readHostMemory } = await import('./hostCapacityService');
         const host = await readHostMemory();
@@ -608,6 +618,7 @@ export class DockerService {
           throw new UserFacingError({error: 'Host memory is low', code: 'HOST_MEMORY_LOW', status: 409,
             reason: 'Other host services need the remaining memory. Wait or stop an unused server.'});
         }
+        requireStartRoom(await readMemoryPool(), request, startupReservations.pending(usage));
         startupReservations.reserve(server.id, request);
       }
       try {
@@ -724,11 +735,15 @@ export class DockerService {
     // whose new Memory exceeds the swap limit still on the cgroup, so raising a
     // server's RAM would fail if we sent Memory alone.
     const limits = memoryHostConfig(server.resources);
+    const current = await container.inspect();
+    // A running JVM retains its old Xmx. Apply reductions only after it exits.
+    const deferMemory = current.State?.Running &&
+      (!current.HostConfig?.Memory || (limits.Memory ?? 0) < current.HostConfig.Memory);
     try {
       await container.update({
-        Memory: limits.Memory ?? 0,
-        MemoryReservation: limits.MemoryReservation ?? 0,
-        ...(limits.MemorySwap !== undefined ? { MemorySwap: limits.MemorySwap } : {}),
+        ...(!deferMemory ? { Memory: limits.Memory ?? 0,
+          MemoryReservation: limits.MemoryReservation ?? 0,
+          ...(limits.MemorySwap !== undefined ? { MemorySwap: limits.MemorySwap } : {}) } : {}),
         NanoCPUs: nanoCpus,
       } as Parameters<Container['update']>[0]);
     } catch (err) {

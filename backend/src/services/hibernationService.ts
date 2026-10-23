@@ -145,7 +145,7 @@ export class HibernationService {
    * Save and stop, then take over the port so a join can bring it back.
    * Occupied servers require a completed warning from the pressure controller.
    */
-  async hibernate(server: ServerRecord, opts: { allowOccupied?: boolean } = {}): Promise<boolean> {
+  async hibernate(server: ServerRecord, opts: { allowOccupied?: boolean; beforeStop?: () => Promise<boolean> } = {}): Promise<boolean> {
     if (this.busy.has(server.id)) return false;
     this.busy.add(server.id);
     try {
@@ -157,6 +157,7 @@ export class HibernationService {
         if (!opts.allowOccupied && (await getPlayerCount(fresh).catch(() => null))?.online !== 0) return false;
         const current = serverStore.get(server.id);
         if (!current || current.status !== 'running' || current.containerId !== fresh.containerId || preparing.has(server.id)) return false;
+        if (opts.beforeStop && !await opts.beforeStop()) return false;
         serverStore.update(server.id, { status: 'stopping', lastError: null });
         return true;
       });

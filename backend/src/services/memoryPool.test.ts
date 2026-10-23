@@ -49,7 +49,9 @@ test('admission uses usage and temporary boot allowances without reserving full 
   assert.equal(pending.pending(new Map(),1000),1500);
   assert.equal(pending.pending(new Map([['one',1000]]),1000),500);
   assert.equal(pending.pending(new Map([['one',2000]]),1000),0);
-  assert.equal(pending.pending(new Map(),120001),0);
+  assert.equal(pending.pending(new Map(),120001),1500);
+  pending.retain(new Set());
+  assert.equal(pending.pending(new Map()),0);
 });
 test('pressure sleeps only repeatedly confirmed empty servers, largest first, with cooldown', async () => {
   let now=0, pressure=true;
@@ -78,7 +80,7 @@ test('Docker start serializes admissions and refuses legacy container parents', 
   const originalPool=poolModule.readMemoryPool, originalHost=capacityModule.readHostMemory, originalLive=metricsCollector.liveAll;
   poolModule.readMemoryPool=async()=>({...good,usedMb:9000}); capacityModule.readHostMemory=async()=>({availableKnown:false}); metricsCollector.liveAll=()=>new Map();
   const starts:string[]=[]; let parent='minecraft.slice';
-  service.docker={info:async()=>({CgroupDriver:'systemd',CgroupVersion:'2'}),listContainers:async()=>[],getContainer:(id:string)=>({id,inspect:async()=>({HostConfig:{CgroupParent:parent},State:{Running:false}}),start:async()=>{starts.push(id);}})};
+  service.docker={info:async()=>({CgroupDriver:'systemd',CgroupVersion:'2'}),listContainers:async()=>[],getContainer:(id:string)=>({id,update:async()=>{},inspect:async()=>({HostConfig:{CgroupParent:parent},State:{Running:false}}),start:async()=>{starts.push(id);}})};
   try {
     const results=await Promise.allSettled(['one','two'].map(id=>service.start({id,containerId:id,resources:{minRamMb:700,maxRamMb:2048}})));
     assert.equal(results.filter(r=>r.status==='fulfilled').length,1); assert.equal(starts.length,1);
@@ -316,4 +318,64 @@ test('hibernation keeps failed saves running and only marks a confirmed clean ex
     serverStore.get=originals.get;serverStore.update=originals.update;dockerService.stop=originals.stop;
     dockerService.waitForExit=originals.wait;rcon.runServerRcon=originals.rcon;players.getPlayerCount=originals.players;
   }
+});
+
+
+test('pressure recovery during refresh cancels an expiring countdown', async () => {
+  let now=0, pressure=true, sleeps=0;
+  const service=new MemoryPressureService({
+    pool:async()=>({...good,usedMb:11300,pressure}), servers:()=>[{id:'one',status:'running'}],
+    now:()=>now, players:async()=>1, usage:()=>1000, warn:async()=>true,
+    refresh:async()=>{if(now===60000) pressure=false;}, sleep:async()=>{sleeps++;},
+  });
+  await service.tick(); now=60000; await service.tick(); assert.equal(sleeps,0);
+});
+
+test('pressure recovery during saving vetoes the stop', async () => {
+  let now=0, pressure=true, stopped=false;
+  const service=new MemoryPressureService({
+    pool:async()=>({...good,usedMb:11300,pressure}), servers:()=>[{id:'one',status:'running'}],
+    now:()=>now, players:async()=>1, usage:()=>1000, warn:async()=>true,
+    sleep:async(_s:any, options:any)=>{pressure=false; stopped=await options.beforeStop();return false;},
+  });
+  await service.tick(); now=60000; await service.tick(); assert.equal(stopped,false);
+});
+
+test('RAM reductions preserve the running cap and apply after exit', async () => {
+  const service=new DockerService(); let running=true; const updates:any[]=[];
+  service.docker={getContainer:()=>({inspect:async()=>({State:{Running:running},HostConfig:{Memory:8192*1024**2}}),update:async(value:any)=>updates.push(value)})};
+  const server={id:'one',containerId:'one',resources:{minRamMb:512,maxRamMb:2048,cpuLimit:2}};
+  await service.updateResources(server);
+  assert.equal(updates[0].Memory,undefined); assert.equal(updates[0].NanoCPUs,2000000000);
+  running=false; await service.updateResources(server);
+  assert.ok(updates[1].Memory>2048*1024**2); assert.ok(updates[1].Memory<8192*1024**2);
+});
+
+test('start rejects growth during the asynchronous Docker audit', async () => {
+  const service=new DockerService(); let usedMb=5000, started=false;
+  const originalPool=poolModule.readMemoryPool, originalHost=capacityModule.readHostMemory;
+  poolModule.readMemoryPool=async()=>({...good,usedMb});
+  capacityModule.readHostMemory=async()=>({availableKnown:false});
+  service.verifyMemoryPoolContainers=async()=>{usedMb=12000;};
+  service.docker={getContainer:()=>({id:'fresh',update:async()=>{},inspect:async()=>({State:{Running:false},HostConfig:{CgroupParent:'minecraft.slice'}}),start:async()=>{started=true;}})};
+  try {
+    await assert.rejects(()=>service.start({id:'fresh',containerId:'fresh',resources:{minRamMb:700,maxRamMb:2048}}),/Not enough shared RAM/);
+    assert.equal(started,false);
+  } finally {poolModule.readMemoryPool=originalPool;capacityModule.readHostMemory=originalHost;}
+});
+
+test('Docker audit reconstructs boot allowance and releases it on readiness', async () => {
+  const {serverStore}=require('../serverStore');
+  const originalList=serverStore.list; let ready=false;
+  const service=new DockerService();
+  serverStore.list=()=>[{id:'boot',containerId:'boot',resources:{minRamMb:700,maxRamMb:2048}}];
+  service.isReady=async()=>ready;
+  service.docker={info:async()=>({CgroupDriver:'systemd',CgroupVersion:'2'}),listContainers:async()=>[{Id:'boot'}],getContainer:()=>({inspect:async()=>({HostConfig:{CgroupParent:'minecraft.slice'}})})};
+  poolModule.startupReservations.retain(new Set());
+  try {
+    await service.verifyMemoryPoolContainers();
+    assert.ok(poolModule.startupReservations.pending(new Map())>=700);
+    ready=true; await service.verifyMemoryPoolContainers();
+    assert.equal(poolModule.startupReservations.pending(new Map()),0);
+  } finally {serverStore.list=originalList;poolModule.startupReservations.retain(new Set());}
 });

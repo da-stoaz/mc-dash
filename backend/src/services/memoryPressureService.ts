@@ -18,7 +18,7 @@ type Dependencies = {
   servers: () => ServerRecord[];
   players: (server: ServerRecord) => Promise<number | null>;
   usage: (id: string) => number;
-  sleep: (server: ServerRecord, options: { allowOccupied: boolean }) => Promise<boolean | void>;
+  sleep: (server: ServerRecord, options: { allowOccupied: boolean; beforeStop: () => Promise<boolean> }) => Promise<boolean | void>;
   warn: (server: ServerRecord, message: string) => Promise<boolean>;
   now: () => number;
   refresh?: () => Promise<void>;
@@ -61,7 +61,10 @@ export class MemoryPressureService {
     this.pending = null;
     this.retryAfter.set(server.id, this.deps.now() + RETRY_MS);
     setMemoryPoolAction(`Saving and sleeping ${server.name} to release RAM.`);
-    const result = await this.deps.sleep(server, { allowOccupied }).catch(error => {
+    const result = await this.deps.sleep(server, { allowOccupied, beforeStop: async () => {
+      const latest = await this.deps.pool();
+      return latest.enforced && latest.pressure;
+    } }).catch(error => {
       logger.warn({ error, serverId: server.id }, 'RAM pressure sleep failed');
       return false;
     });
@@ -90,6 +93,11 @@ export class MemoryPressureService {
       }
       const now = this.deps.now();
       await this.deps.refresh?.();
+      const refreshed = await this.deps.pool();
+      if (!refreshed.enforced || !refreshed.pressure) {
+        await this.cancel("RAM recovered or protection is unverified. The automatic shutdown is cancelled.");
+        return;
+      }
       if (this.pending) {
         const pending = this.pending;
         const fresh = this.current(pending.server);

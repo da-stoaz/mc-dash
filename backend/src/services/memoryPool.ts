@@ -79,15 +79,16 @@ export function requireMemoryPool(report: MemoryPoolReport): void {
 }
 
 // Starts are serialized through Docker.start. Hold boot headroom until the JVM
-// is ready or for two minutes; actual usage is subtracted to avoid double booking.
+// is ready; actual usage is subtracted to avoid double booking. Docker auditing
+// reconstructs these allowances after a backend restart.
 export class StartupReservations {
-  private entries = new Map<string, { mb: number; expires: number }>();
-  reserve(id: string, mb: number, now = Date.now()) { this.entries.set(id, { mb, expires: now + 120_000 }); }
+  private entries = new Map<string, { mb: number }>();
+  reserve(id: string, mb: number, _now = Date.now()) { this.entries.set(id, { mb }); }
   release(id: string) { this.entries.delete(id); }
+  retain(ids: Set<string>) { for (const id of this.entries.keys()) if (!ids.has(id)) this.release(id); }
   pending(usage: Map<string, number>, now = Date.now()): number {
     let pending = 0;
     for (const [id, entry] of this.entries) {
-      if (entry.expires <= now) { this.entries.delete(id); continue; }
       pending += Math.max(0, entry.mb - (usage.get(id) ?? 0));
     }
     return pending;
