@@ -118,7 +118,7 @@ A server slept for pressure cannot restart for five minutes. After that, admissi
 accounts for its observed pre-sleep usage, rather than just its configured minimum.
 This state survives backend restarts and applies to manual and player-triggered
 starts. Reducing the configured server maximum bounds that historical demand.
-Effective JVM heap settings are not yet inspected.
+Effective JVM heap settings can be inspected on demand through the runtime diagnostic below.
 
 
 - Starts are serialized and use current pool usage plus temporary boot
@@ -193,3 +193,70 @@ backend restart. These are outstanding runtime checks, not claims based on mocks
 
 References: [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html),
 [Docker cgroup parent](https://docs.docker.com/reference/cli/dockerd/#default-cgroup-parent).
+
+## Inspect the running JVM heap
+
+`GET /api/servers/:id/memory-runtime` performs an on-demand diagnostic inside the
+existing container, as its configured user. It selects exactly one Java process
+and invokes its JDK's `jcmd PID VM.flags`. It does not change flags, request GC,
+create a heap dump, install tools, or restart the server.
+
+The response contains `status` (`verified`, `mismatch`, or `unverified`),
+`initialHeapMb`, `maximumHeapMb`, `containerLimitMb`, `checkedAt`, and `reason`.
+Values are MiB. Verification compares observed heap sizes with saved settings,
+allowing JVM alignment tolerance. A pending restart is distinguished from a pack
+argument override. A maximum heap consuming the entire container limit is a
+mismatch because it leaves no room for native allocations.
+
+JRE-only images, multiple Java processes, unavailable `timeout`/`readlink`, denied
+attach permissions, unsupported flag output, and container restarts during the
+check produce an unverified result. The diagnostic process has a five-second
+limit and output collection is capped. A verified result describes heap sizes
+only; it does not prove leak resistance, sufficient native headroom, or successful
+world saves. The server resource view exposes this through the collapsed “Check running
+memory settings” section. Inspection does not automatically approve or block admission. Validate it against deployed JDKs and
+modpacks before relying on its results.
+
+Reference: [Oracle jcmd documentation](https://docs.oracle.com/en/java/javase/21/docs/specs/man/jcmd.html).
+
+## Release verification status (2026-10-23)
+
+The local Java 17 integration test runs a real non-root JVM in a disposable,
+network-isolated, 512 MiB Docker container. It verifies observed heap sizes,
+detects an intentional settings mismatch, and checks that inspection leaves the
+JVM running. Run it explicitly after pulling `eclipse-temurin:17-jdk`:
+
+```sh
+cd backend
+npm run test:jvm-integration
+```
+
+`DOCKER_SOCKET` can select the test daemon socket. The test removes only its own
+container and temporary files. This test passed on Docker Desktop with cgroup v2
+and the cgroupfs driver. It is **not** evidence for Ubuntu systemd enforcement.
+JRE-only production images will still report unverified heap diagnostics unless
+a compatible JDK with attach support is selected and the server rebuilt.
+
+Production enablement remains blocked until a disposable Linux/systemd deployment
+completes all of these checks and records its versions/results:
+
+1. Install a small test slice and verify actual process membership. Confirm both
+   panel services and other deployments are outside it, including ancestor groups.
+2. Boot two representative Minecraft packs concurrently. Compare observed usage,
+   pending allowances and admission decisions; restart the backend mid-boot.
+3. Exercise sustained and rapid growth, an individual-container limit, and low
+   host headroom. Confirm warnings and graceful intervention occur as intended,
+   and the panel stays available throughout. Exercise an abrupt allocation burst
+   separately: an emergency OOM must never be misreported as successful sleep.
+4. On disposable worlds, force RCON failure, failed save acknowledgement and slow
+   shutdown. Confirm no automatic forced-stop fallback. Reopen each cleanly saved
+   world and verify player/world changes survive.
+5. Restart the backend during a countdown and during shutdown. Verify fresh
+   warnings, recovery of clean late exits, and refusal to treat failed/OOM exits
+   as hibernation. Exercise manual actions concurrently with automatic ones.
+6. Verify the five-minute pressure cooldown, historical restart demand, ordinary
+   boot-peak learning, and migration of stopped legacy containers.
+
+No disposable Ubuntu host is currently available. None of the above Linux/world
+checks have been claimed as passed. Keep shared enforcement disabled until they
+are completed; the 12 GiB example also needs a host-specific budget review.

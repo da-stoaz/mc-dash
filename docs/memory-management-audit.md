@@ -84,6 +84,33 @@ Existing explicitly enabled deployments retain their setting.
 84 focused tests and TypeScript checks pass. Effective JVM heap verification and
 Ubuntu workload validation remain outstanding. No deployment was performed.
 
+## Follow-up: runtime JVM inspection
+
+An on-demand `GET /api/servers/:id/memory-runtime` diagnostic now reads the running
+JVM's initial and maximum heap using its own JDK `jcmd`, compares them with saved
+settings and the effective Docker limit, and returns verified/mismatch/unverified
+with a reason. Missing tools, ambiguous processes, failed attach, malformed output,
+and container changes fail closed. No flags are changed and no server is stopped.
+
+89 focused tests and TypeScript checks pass. Docker diagnostic behavior is mocked
+in tests; real JDK/modpack compatibility remains unverified. This is an API
+inspection capability, not a dashboard control or automatic admission requirement.
+Ubuntu enforcement and world-save/load exercises are still outstanding.
+
+## Integration follow-up and release blocker
+
+The real non-root Java 17 Docker inspection test now passes, with a 512 MiB cap,
+no network, a read-only root filesystem and automatic cleanup. This proves the
+inspection adapter against that JDK, not the systemd pressure policy. The UI now
+provides an explicit runtime-check control under a collapsed resource section.
+Concurrent diagnostic requests for a container share one operation.
+
+The full backend suite passes 273/273 after correcting UID/GID test isolation.
+All 24 browser tests and both TypeScript projects pass. A disposable Ubuntu host was requested and is not
+available. Systemd membership/enforcement, real modpack/world integrity, overload
+handling, and host-level panel availability remain release blockers. The detailed
+execution checklist is in memory-pool.md; production readiness is not established.
+
 ## Intended behavior
 
 - One configurable ceiling for all managed Minecraft workloads together.

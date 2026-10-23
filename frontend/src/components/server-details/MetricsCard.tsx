@@ -14,6 +14,7 @@ import {
   LiveMetricsHistory,
 } from './metricsUtils';
 
+import { RuntimeMemoryCheck } from './RuntimeMemoryCheck';
 import { UsageChart } from './UsageChart';
 import { useTpsHistory } from './useTpsHistory';
 
@@ -249,6 +250,8 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
           <p className="mt-2 text-xs muted">{currentMetrics ? 'Since the last start' : unavailable}</p>
         </div>
       </section>
+
+      <RuntimeMemoryCheck key={`${serverId}:${status}`} serverId={serverId} running={status === 'running'} />
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <Card className="border border-white/10 bg-white/[0.03] shadow-none">

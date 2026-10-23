@@ -981,6 +981,13 @@ router.post('/:id/restart', lifecycle(async (req, res) => {
   }
 }));
 
+// On-demand only: do not attach diagnostic processes on every metrics poll.
+router.get('/:id/memory-runtime', async (req, res) => {
+  const server=serverStore.get(req.params.id);
+  if(!server) return notFound(res);
+  res.json(await dockerService.inspectJvmMemory(server));
+});
+
 router.get('/:id/logs', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);

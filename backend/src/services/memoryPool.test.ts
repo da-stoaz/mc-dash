@@ -504,3 +504,21 @@ test('start admission rejects a learned boot peak that would not fit',async()=>{
   try {await assert.rejects(()=>service.start(server),/Not enough shared RAM/);assert.equal(started,false);}
   finally {poolModule.readMemoryPool=originals.pool;capacityModule.readHostMemory=originals.host;db.prepare('DELETE FROM boot_memory WHERE serverId=?').run(server.id);}
 });
+
+test('runtime heap inspection handles Docker framing, missing tools and restarts',async()=>{
+  const {PassThrough}=require('stream');
+  const service=new DockerService();let exitCode=0, inspections=0, restart=false, commands:any[]=[];
+  const flags='1:\n-XX:InitialHeapSize=536870912 -XX:MaxHeapSize=2147483648\n';
+  service.docker={getContainer:()=>({
+    inspect:async()=>({State:{Running:true,StartedAt:restart&&++inspections>2?'new':'original'},HostConfig:{Memory:2560*MB}}),
+    exec:async(options:any)=>{commands.push(options);return {
+      start:async()=>{const stream=new PassThrough();setImmediate(()=>{
+        const bytes=Buffer.from(flags),header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(bytes.length,4);stream.end(Buffer.concat([header,bytes]));
+      });return stream;},inspect:async()=>({ExitCode:exitCode,Running:false})};},
+  })};
+  const server:any={id:'inspect',containerId:'inspect',resources:{minRamMb:512,maxRamMb:2048}};
+  assert.equal((await service.inspectJvmMemory(server)).status,'verified');
+  assert.deepEqual(commands[0].Cmd.slice(0,2),['sh','-c']);assert.equal(commands[0].Privileged,undefined);
+  exitCode=42;assert.equal((await service.inspectJvmMemory(server)).status,'unverified');
+  exitCode=0;restart=true;assert.equal((await service.inspectJvmMemory(server)).status,'unverified');
+});

@@ -13,6 +13,7 @@ import { UserFacingError } from '../apiErrors';
 import { serverStore } from '../serverStore';
 import { bootMemoryDemand } from './bootMemory';
 import { pressureRestartDemand, observedPressureDemand } from './memoryRecovery';
+import { interpretJvmMemory, JVM_FLAGS_COMMAND, JvmMemoryInspection } from './jvmMemoryInspection';
 import { javaToolOptions } from './jvmTuning';
 
 // Fixed in-container RCON port. We never publish it to the host: the backend
@@ -769,6 +770,51 @@ export class DockerService {
       }
       logger.error({ err }, 'Failed to remove container');
       throw err;
+    }
+  }
+
+  /** Explicit, read-only runtime diagnostic; never changes JVM flags. */
+  private readonly heapInspections = new Map<string, Promise<JvmMemoryInspection>>();
+
+  inspectJvmMemory(server: ServerRecord): Promise<JvmMemoryInspection> {
+    const key = server.containerId ?? server.id;
+    const pending = this.heapInspections.get(key);
+    if (pending) return pending;
+    const work = this.performJvmMemoryInspection(server).finally(() => this.heapInspections.delete(key));
+    this.heapInspections.set(key, work);
+    return work;
+  }
+
+  private async performJvmMemoryInspection(server: ServerRecord): Promise<JvmMemoryInspection> {
+    const checkedAt=Date.now();
+    const unknown=(reason:string):JvmMemoryInspection=>({status:'unverified',initialHeapMb:null,maximumHeapMb:null,containerLimitMb:null,checkedAt,reason});
+    try {
+      const container=await this.getContainer(server);
+      const before=await container.inspect();
+      if(!before.State.Running) return unknown('Start the server before inspecting its JVM heap.');
+      const exec=await container.exec({Cmd:['sh','-c',JVM_FLAGS_COMMAND],AttachStdout:true,AttachStderr:true,Tty:false});
+      const stream=await exec.start({hijack:true,stdin:false});
+      const output=await new Promise<Buffer>((resolve,reject)=>{
+        const chunks:Buffer[]=[];let length=0;
+        const timer=setTimeout(()=>{stream.destroy();reject(new Error('Diagnostic timed out'));},8000);
+        const finish=()=>clearTimeout(timer);
+        stream.on('data',(chunk:Buffer)=>{
+          length+=chunk.length;
+          if(length>65536) {finish();stream.destroy();reject(new Error('Diagnostic output limit exceeded'));}
+          else chunks.push(chunk);
+        });
+        stream.on('end',()=>{finish();resolve(Buffer.concat(chunks));});
+        stream.on('error',error=>{finish();reject(error);});
+        stream.on('close',()=>{finish();reject(new Error('Diagnostic connection closed'));});
+      });
+      const result=await exec.inspect();
+      if(result.ExitCode!==0 || result.Running) return unknown('JVM inspection requires exactly one Java process, its JDK jcmd tool, timeout, and attach permission for the container user.');
+      const after=await container.inspect();
+      if(!after.State.Running || before.State.StartedAt!==after.State.StartedAt)
+        return unknown('The container changed during JVM inspection. Retry after it has started.');
+      return interpretJvmMemory(demuxDockerLogBuffer(output),server,after.HostConfig.Memory,checkedAt);
+    } catch {
+      return unknown('JVM inspection could not complete. Check Docker connectivity and JDK diagnostic support.');
     }
   }
 
