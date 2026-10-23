@@ -83,7 +83,7 @@ export function requireMemoryPool(report: MemoryPoolReport): void {
 // reconstructs these allowances after a backend restart.
 export class StartupReservations {
   private entries = new Map<string, { mb: number }>();
-  reserve(id: string, mb: number, _now = Date.now()) { this.entries.set(id, { mb }); }
+  reserve(id: string, mb: number, _now = Date.now()) { this.entries.set(id, { mb: Math.max(mb, this.entries.get(id)?.mb ?? 0) }); }
   release(id: string) { this.entries.delete(id); }
   retain(ids: Set<string>) { for (const id of this.entries.keys()) if (!ids.has(id)) this.release(id); }
   pending(usage: Map<string, number>, now = Date.now()): number {

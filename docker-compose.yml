@@ -29,7 +29,7 @@ services:
     network_mode: host
     environment:
       PORT: "4000"
-      MC_DASH_MEMORY_POOL: ${MC_DASH_MEMORY_POOL:-true}
+      MC_DASH_MEMORY_POOL: ${MC_DASH_MEMORY_POOL:-false}
       # MUST be an absolute path, mounted to the identical path below.
       DATA_ROOT: ${MC_DASH_DATA_DIR:-/opt/mc-dash/data}
       # User the spawned Minecraft containers run as. Empty => same user as this

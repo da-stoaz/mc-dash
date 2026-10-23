@@ -57,7 +57,11 @@ The backend needs the host cgroup namespace and read-only cgroup mount to verify
 membership; the supplied Compose file provides these without putting it in the
 Minecraft pool. A systemd-hosted backend already sees host membership.
 
-Build/restart the updated app through your normal deployment process. Rebuild
+Shared enforcement defaults to disabled on every platform. After stopping the
+Minecraft servers and installing/verifying the host slice, explicitly set
+`MC_DASH_MEMORY_POOL=true` in the backend deployment environment (the root Compose
+environment for Compose deployments). Restart the app through your normal
+deployment process. Rebuild
 each stopped Minecraft server in MC Dash so its Docker container is recreated
 with the correct parent. Worlds are preserved by the existing rebuild workflow.
 Legacy containers are refused on start, not silently accepted outside the pool.
@@ -88,6 +92,18 @@ Stop and rebuild old Minecraft containers into `minecraft.slice`. After checking
 that `mcdash.slice` is empty, its old unit, generated drop-in settings, and unused
 environment file can be retired. Do not stop a populated old slice: that could
 terminate the applications still in it.
+
+## Startup demand learning
+
+The metrics collector persists observed RAM peaks while a server is starting or
+restarting, and during the first two minutes even if it became ready sooner.
+Subsequent starts budget the greater of the configured minimum plus overhead and
+that peak plus 10%, bounded by the container ceiling. Measurements are keyed by
+server, RAM settings, pack URL, and Java image. These are sampled estimates, not
+a guarantee that the next boot cannot exceed the forecast. New configurations
+still begin with their configured floor until observations are available.
+Docker auditing preserves larger outstanding boot allowances and reconstructs
+learned and pressure-restart demand after a backend restart.
 
 ## Current pressure behavior and its limits
 

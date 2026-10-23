@@ -471,3 +471,36 @@ test('runtime signals use host availability and observed container limits',async
     risk=await assessRuntimeRisks(good);assert.equal(risk.targets.size,0);
   } finally {capacityModule.readHostMemory=originals.host;serverStore.list=originals.list;metricsCollector.liveFor=originals.live;}
 });
+
+test('startup reservations cannot be reduced by an audit before readiness',()=>{
+  const reservations=new StartupReservations();
+  reservations.reserve('boot',4000);reservations.reserve('boot',1000);
+  assert.equal(reservations.pending(new Map([['boot',500]])),3500);
+  reservations.release('boot');assert.equal(reservations.pending(new Map()),0);
+});
+test('boot peak learning includes slow starts and early-ready processes, scoped to configuration',()=>{
+  const {observeBootMemory,bootMemoryDemand}=require('./bootMemory');
+  const server:any={id:'learn',status:'starting',resources:{minRamMb:512,maxRamMb:4096},javaImage:'java:21'};
+  const baseline=bootMemoryDemand(server);
+  try {
+    observeBootMemory(server,2000*MB,300);
+    assert.equal(bootMemoryDemand(server),2200);
+    observeBootMemory(server,1000*MB,310);assert.equal(bootMemoryDemand(server),2200);
+    server.status='running';observeBootMemory(server,3000*MB,100);
+    assert.ok(Math.abs(bootMemoryDemand(server)-3300)<=1);
+    observeBootMemory(server,4000*MB,500);assert.ok(bootMemoryDemand(server)<4000);
+    assert.equal(bootMemoryDemand({...server,javaImage:'java:25'}),baseline);
+    observeBootMemory(server,NaN,1);assert.ok(bootMemoryDemand(server)<4000);
+  } finally {db.prepare('DELETE FROM boot_memory WHERE serverId=?').run('learn');}
+});
+test('start admission rejects a learned boot peak that would not fit',async()=>{
+  const {observeBootMemory}=require('./bootMemory');
+  const service=new DockerService();const server:any={id:'learn-start',containerId:'learn-start',status:'starting',resources:{minRamMb:512,maxRamMb:4096}};
+  const originals={pool:poolModule.readMemoryPool,host:capacityModule.readHostMemory};let started=false;
+  observeBootMemory(server,3000*MB,100);
+  poolModule.readMemoryPool=async()=>({...good,usedMb:8000});capacityModule.readHostMemory=async()=>({availableKnown:false});
+  service.verifyMemoryPoolContainers=async()=>{};
+  service.docker={getContainer:()=>({update:async()=>{},inspect:async()=>({State:{Running:false},HostConfig:{CgroupParent:'minecraft.slice'}}),start:async()=>{started=true;}})};
+  try {await assert.rejects(()=>service.start(server),/Not enough shared RAM/);assert.equal(started,false);}
+  finally {poolModule.readMemoryPool=originals.pool;capacityModule.readHostMemory=originals.host;db.prepare('DELETE FROM boot_memory WHERE serverId=?').run(server.id);}
+});

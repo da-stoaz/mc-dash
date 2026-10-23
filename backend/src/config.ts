@@ -250,7 +250,7 @@ export const config = {
   hibernationWakeOnConnect,
   hibernationMotd,
   hibernationWakeMessage,
-  memoryPoolEnabled: envBool(process.env.MC_DASH_MEMORY_POOL, process.platform === 'linux'),
+  memoryPoolEnabled: envBool(process.env.MC_DASH_MEMORY_POOL, false),
   memoryPoolRoot: process.env.MC_DASH_CGROUP_ROOT || '/sys/fs/cgroup',
   memoryReserveMb,
   memoryBurstRatio,

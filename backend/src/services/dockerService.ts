@@ -11,7 +11,8 @@ import { containerMemoryPlan } from './memoryPlan';
 import { POOL_SLICE, readMemoryPool, requireMemoryPool, requireStartRoom, startupReservations } from './memoryPool';
 import { UserFacingError } from '../apiErrors';
 import { serverStore } from '../serverStore';
-import { pressureRestartDemand } from './memoryRecovery';
+import { bootMemoryDemand } from './bootMemory';
+import { pressureRestartDemand, observedPressureDemand } from './memoryRecovery';
 import { javaToolOptions } from './jvmTuning';
 
 // Fixed in-container RCON port. We never publish it to the host: the backend
@@ -580,8 +581,11 @@ export class DockerService {
         this.requirePoolParent(parent);
         const server = servers.find(s => s.containerId === summary.Id || names.includes(this.containerName(s.id)));
         if (server) active.add(server.id);
-        if (server && !await this.isReady(this.docker.getContainer(summary.Id), server)) {
-          const floor = containerMemoryPlan(server.resources)?.floorMb;
+        const startedMs = Date.parse(info.State?.StartedAt ?? '');
+        const earlyBoot = Number.isFinite(startedMs) && Date.now() - startedMs < 120_000;
+        if (server && (earlyBoot || !await this.isReady(this.docker.getContainer(summary.Id), server))) {
+          const plan = containerMemoryPlan(server.resources);
+          const floor = plan ? Math.max(bootMemoryDemand(server), observedPressureDemand(server.id, plan.capMb)) : 0;
           if (floor) { startupReservations.reserve(server.id, floor); }
         } else if (server) startupReservations.release(server.id);
       }
@@ -611,7 +615,7 @@ export class DockerService {
         if (info.State?.Running) return container.id;
         const { metricsCollector } = await import('./metricsCollector');
         const usage = new Map([...metricsCollector.liveAll()].map(([id, value]) => [id, value.memoryBytes / MB]));
-        const request = memoryPlan ? Math.max(memoryPlan.floorMb, recoveryDemand) : undefined;
+        const request = memoryPlan ? Math.max(bootMemoryDemand(server), recoveryDemand) : undefined;
         if (!request) throw new UserFacingError({error: 'Configure server memory first', code: 'MEMORY_LIMIT_REQUIRED', status: 409});
         startupReservations.release(server.id);
         // Keep the existing host-free-memory check for unrelated deployments.

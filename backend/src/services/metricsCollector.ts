@@ -2,6 +2,7 @@ import { dockerService } from './dockerService';
 import { serverStore } from '../serverStore';
 import { metricsStore, FINE_RESOLUTION, MetricBucket } from '../metricsStore';
 import { preparing } from '../state';
+import { observeBootMemory } from './bootMemory';
 import { logger } from '../logger';
 
 // The collector is the single metrics poller. It runs a 1s base loop and
@@ -222,6 +223,8 @@ class MetricsCollector {
           this.notify(server.id, null);
           continue;
         }
+
+        observeBootMemory(server, metrics.memoryBytes, metrics.uptimeSeconds);
 
         const dtSec = acc.prev ? (nowMs - acc.prev.tsMs) / 1000 : 0;
         acc.samples.push({

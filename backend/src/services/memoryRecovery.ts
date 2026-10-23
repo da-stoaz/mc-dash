@@ -22,3 +22,9 @@ export function shutdownHorizonMs():number {
   // Warning + at least 95 seconds for save/stop + polling margin.
   return 60_000+Math.max(95_000,row.duration ?? 0)+30_000;
 }
+
+/** Restore demand during a boot without applying the pre-start cooldown again. */
+export function observedPressureDemand(id:string,capMb:number):number {
+  const row=db.prepare('SELECT demandMb FROM memory_recovery WHERE serverId=?').get(id) as {demandMb:number}|undefined;
+  return Math.min(capMb,row?.demandMb ?? 0);
+}

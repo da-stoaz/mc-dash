@@ -67,6 +67,23 @@ validated prediction of arbitrary leaks or bursts. Effective JVM heap inspection
 learning ordinary boot peaks (beyond pressure-restart demand), representative
 modpack validation, and Ubuntu pressure exercises remain outstanding.
 
+## Follow-up: boot demand and explicit activation
+
+Ordinary boot peaks are now persisted by server/configuration and used with a 10%
+margin in admission. Slow starts continue being sampled beyond two minutes;
+early-ready processes are sampled for their first two minutes. Auditing no longer
+reduces an outstanding allowance, and reconstructs learned demand after restart.
+An unobserved configuration still starts with its configured floor, so first-boot
+peaks remain uncertain.
+
+Shared enforcement now defaults off in backend configuration, Compose, and the
+root environment example. Deployment instructions require explicit activation
+with stopped Minecraft containers, verified host setup, and rebuild migration.
+Existing explicitly enabled deployments retain their setting.
+
+84 focused tests and TypeScript checks pass. Effective JVM heap verification and
+Ubuntu workload validation remain outstanding. No deployment was performed.
+
 ## Intended behavior
 
 - One configurable ceiling for all managed Minecraft workloads together.
