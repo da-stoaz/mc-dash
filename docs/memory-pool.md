@@ -116,13 +116,17 @@ terminate the applications still in it.
   cancel shutdown. Slow/failed exits remain visible as errors, never reported
   as a successful sleep. Modded save acknowledgements other than "Saved the
   game/world" currently fail closed.
+- Pressure sampling continues during saving and shutdown; another intervention
+  is not scheduled while one is in flight. Manual lifecycle operations and
+  automatic sleep/wake share per-server ownership.
 - Successful sleeps have a one-minute cooldown before another intervention.
   Failed attempts are retried no sooner than one minute for that server.
   Sleeping servers wake only through the normal capacity gate. Pressure polling
   refreshes Docker status independently of browser connections.
 - Countdown state is in memory: restarting the backend starts a fresh warning
   period if pressure persists. A shutdown that finishes after the exit timeout
-  is not automatically marked hibernated; inspect its state and start manually.
+  is reconciled into hibernation only after the same container has a confirmed
+  clean exit. Shutdown intent survives backend restarts.
 - Elastic JVM heaps can release unused objects. They cannot repair a leak that
   retains live references. Sleeping a server clears its process memory.
 - The kernel ceiling is still the emergency boundary. Sudden growth, unresponsive

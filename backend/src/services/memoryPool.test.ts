@@ -211,6 +211,7 @@ test('failed saves are reported and retried without claiming a successful sleep'
     servers:()=>[server],now:()=>now,players:async()=>1,usage:()=>9000,
     warn:async()=>true,sleep:async()=>{sleeps++;return false;}});
   await service.tick(); now=60000; await service.tick();
+  await new Promise(resolve=>setImmediate(resolve));
   fixtures(); const report=await readMemoryPool(root,membership);
   assert.match(report.lastAction,/Could not safely sleep/);
   now=70000; await service.tick(); assert.equal(sleeps,1);
@@ -378,4 +379,50 @@ test('Docker audit reconstructs boot allowance and releases it on readiness', as
     ready=true; await service.verifyMemoryPoolContainers();
     assert.equal(poolModule.startupReservations.pending(new Map()),0);
   } finally {serverStore.list=originalList;poolModule.startupReservations.retain(new Set());}
+});
+
+
+test('pressure sampling continues during a slow save without duplicate interventions', async () => {
+  let now=0, reads=0, sleeps=0, finish!:()=>void;
+  const hold=new Promise<void>(resolve=>{finish=resolve;});
+  const service=new MemoryPressureService({
+    pool:async()=>{reads++;return {...good,usedMb:11300,pressure:true};},
+    servers:()=>[{id:'slow',status:'running'}],now:()=>now,players:async()=>1,usage:()=>5000,warn:async()=>true,
+    sleep:async()=>{sleeps++;await hold;return true;},
+  });
+  await service.tick();now=60000;await service.tick();
+  const before=reads;now=70000;await service.tick();
+  assert.ok(reads>before);assert.equal(sleeps,1);
+  finish();await new Promise(resolve=>setImmediate(resolve));
+});
+
+test('automatic lifecycle actions respect manual ownership', async () => {
+  const {lifecycleBusy}=require('../state');
+  const {HibernationService}=require('./hibernationService');
+  lifecycleBusy.add('locked');
+  try { assert.equal(await new HibernationService().hibernate({id:'locked'}),false); }
+  finally {lifecycleBusy.delete('locked');}
+});
+
+test('a fresh service recovers a late clean exit and leaves failed exits awake', async () => {
+  const {db}=require('../db'), {serverStore}=require('../serverStore');
+  const {dockerService}=require('./dockerService'), {HibernationService}=require('./hibernationService');
+  const originals={get:serverStore.get,update:serverStore.update,status:dockerService.statusDetails,wait:dockerService.waitForExit};
+  let server:any={id:'late',containerId:'late-container',status:'stopping'}, armed=0, clean=true;
+  serverStore.get=()=>server;serverStore.update=(_id:string,patch:any)=>server={...server,...patch};
+  dockerService.statusDetails=async()=>({status:'stopped',exitCode:0});
+  dockerService.waitForExit=async()=>clean;
+  try {
+    for (const success of [true,false]) {
+      clean=success;server={id:'late',containerId:'late-container',status:'stopping'};
+      db.prepare('INSERT OR REPLACE INTO sleep_intents VALUES (?, ?)').run('late','late-container');
+      const restarted=new HibernationService();restarted.armListener=async()=>{armed++;};
+      await restarted.reconcile();
+      assert.equal(!!server.hibernated,success);
+    }
+    assert.equal(armed,1);
+  } finally {
+    db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run('late');
+    serverStore.get=originals.get;serverStore.update=originals.update;dockerService.statusDetails=originals.status;dockerService.waitForExit=originals.wait;
+  }
 });

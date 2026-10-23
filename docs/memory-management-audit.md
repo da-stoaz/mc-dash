@@ -22,6 +22,26 @@ Backend TypeScript compilation also passes. Continuous monitoring during an
 intervention and unified lifecycle coordination remain step 2; Linux runtime
 verification remains outstanding. Findings below describe the audit baseline.
 
+## Step 2 implementation update
+
+- The pressure controller samples while an asynchronous save/exit intervention
+  is in flight and does not schedule a second intervention concurrently.
+- Dashboard capacity and pressure decisions use the same Docker/cgroup
+  verification function, including a fresh reading after the Docker audit.
+- Manual start/stop/restart/rebuild/delete/restore and automatic sleep/wake share
+  per-server lifecycle ownership. Status reconciliation skips owned servers.
+- Shutdown intent is persisted before sending stop. Reconciliation after a
+  timeout or backend restart restores sleep/listening only for a confirmed clean
+  exit of the same container. OOM and failed exits are not treated as sleep.
+- Failed manual starts of sleeping servers restore the sleeping listener.
+- Retry delays start after the failed intervention finishes.
+
+74 focused service and lifecycle-route tests pass, as does backend TypeScript
+compilation. No Linux runtime verification was performed. Countdown warnings
+still restart conservatively after a backend restart; an unfinished shutdown is
+observed rather than blindly replayed. Host/per-server pressure prediction and
+wake-cycle prevention remain step 3.
+
 ## Intended behavior
 
 - One configurable ceiling for all managed Minecraft workloads together.

@@ -1,11 +1,12 @@
 import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';
-import { preparing } from '../state';
+import { preparing, lifecycleBusy } from '../state';
 import { ServerRecord } from '../types';
 import { dockerService } from './dockerService';
 import { getPlayerCount } from './playerService';
 import { gracefulSleep } from './gracefulSleep';
+import { db } from '../db';
 import { SleepListener } from './sleepGateway';
 
 // ---------------------------------------------------------------------------
@@ -47,13 +48,15 @@ type Tracker = {
   lastCount: number | null;
 };
 
+db.exec('CREATE TABLE IF NOT EXISTS sleep_intents (serverId TEXT PRIMARY KEY, containerId TEXT NOT NULL)');
+
 export class HibernationService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private readonly trackers = new Map<string, Tracker>();
   private readonly listeners = new Map<string, SleepListener>();
   /** Ids currently being slept or woken, so a slow Docker call can't double-fire. */
-  private readonly busy = new Set<string>();
+  private readonly busy = lifecycleBusy;
 
   start() {
     void this.restoreListeners();
@@ -74,6 +77,7 @@ export class HibernationService {
   }
 
   private async restoreListeners() {
+    await this.reconcile();
     for (const server of serverStore.list()) {
       if (server.hibernated) await this.armListener(server);
     }
@@ -94,6 +98,7 @@ export class HibernationService {
     if (this.running) return;
     this.running = true;
     try {
+      await this.reconcile();
       const servers = serverStore.list();
       const liveIds = new Set(servers.map((server) => server.id));
       for (const id of this.trackers.keys()) if (!liveIds.has(id)) this.trackers.delete(id);
@@ -158,12 +163,14 @@ export class HibernationService {
         const current = serverStore.get(server.id);
         if (!current || current.status !== 'running' || current.containerId !== fresh.containerId || preparing.has(server.id)) return false;
         if (opts.beforeStop && !await opts.beforeStop()) return false;
+        db.prepare('INSERT OR REPLACE INTO sleep_intents VALUES (?, ?)').run(server.id, fresh.containerId);
         serverStore.update(server.id, { status: 'stopping', lastError: null });
         return true;
       });
       const updated = serverStore.update(server.id, { status: 'stopped', hibernated: true, lastError: null }) ?? server;
       this.trackers.delete(server.id);
       await this.armListener(updated);
+      db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(server.id);
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Automatic sleep failed.';
@@ -211,7 +218,32 @@ export class HibernationService {
    * Hand the port back. Must complete before the container starts, or Docker
    * fails to bind with "port is already allocated".
    */
+  async reconcile() {
+    const intents = db.prepare('SELECT serverId, containerId FROM sleep_intents').all() as {serverId:string;containerId:string}[];
+    for (const intent of intents) {
+      if (lifecycleBusy.has(intent.serverId)) continue;
+      const server = serverStore.get(intent.serverId);
+      if (!server || server.containerId !== intent.containerId) {
+        db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(intent.serverId);
+        continue;
+      }
+      lifecycleBusy.add(server.id);
+      try {
+        const state = await dockerService.statusDetails(server);
+        if (!['stopped', 'exited'].includes(state.status)) continue;
+        if (await dockerService.waitForExit(server, 100, {requireClean:true})) await this.restoreSleep(server.id);
+        db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(server.id);
+      } finally { lifecycleBusy.delete(server.id); }
+    }
+  }
+
+  async restoreSleep(serverId: string) {
+    const sleeping = serverStore.update(serverId, {status:'stopped', hibernated:true});
+    if (sleeping) await this.armListener(sleeping);
+  }
+
   async releasePort(serverId: string): Promise<void> {
+    db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(serverId);
     const listener = this.listeners.get(serverId);
     if (!listener) return;
     this.listeners.delete(serverId);
@@ -220,6 +252,7 @@ export class HibernationService {
 
   /** Clear the flag and drop the listener, without starting anything. */
   async clear(serverId: string): Promise<void> {
+    db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(serverId);
     await this.releasePort(serverId);
     const server = serverStore.get(serverId);
     if (server?.hibernated) serverStore.update(serverId, { hibernated: false });

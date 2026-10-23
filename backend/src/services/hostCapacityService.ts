@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { readMemoryPool, MemoryPoolReport } from './memoryPool';
+import { readVerifiedMemoryPool, MemoryPoolReport } from './memoryPool';
 import os from 'os';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -310,11 +310,7 @@ export async function capacityReport(): Promise<CapacityReport> {
     };
   });
 
-  const pool = await readMemoryPool();
-  if (pool.enforced) {
-    try { await dockerService.verifyMemoryPoolContainers(); }
-    catch { pool.enforced = false; pool.reason = 'Some running containers are outside the shared RAM pool, or Docker could not be verified.'; }
-  }
+  const pool = await readVerifiedMemoryPool();
   const budgetMb = config.memoryPoolEnabled ? pool.limitMb : Math.max(0, memory.totalMb - config.memoryReserveMb);
   const burstAllowanceMb = Math.round(budgetMb * config.memoryBurstRatio);
   const liveServers = commitments.filter((entry) => entry.live);

@@ -105,3 +105,18 @@ export function requireStartRoom(report: MemoryPoolReport, requestMb: number, pe
       details: 'Stop an unused server or wait for memory to be released. Individual server maximums are not reserved in full.' });
   }
 }
+
+/** Common verification used by the dashboard and automatic pressure decisions. */
+export async function readVerifiedMemoryPool(): Promise<MemoryPoolReport> {
+  let pool = await readMemoryPool();
+  if (!pool.enforced) return pool;
+  try {
+    const { dockerService } = await import('./dockerService');
+    await dockerService.verifyMemoryPoolContainers();
+    pool = await readMemoryPool();
+  } catch {
+    pool.enforced = false;
+    pool.reason = 'Some running containers are outside the shared RAM pool, or Docker could not be verified.';
+  }
+  return pool;
+}
