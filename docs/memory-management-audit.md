@@ -42,6 +42,31 @@ still restart conservatively after a backend restart; an unfinished shutdown is
 observed rather than blindly replayed. Host/per-server pressure prediction and
 wake-cycle prevention remain step 3.
 
+## Step 3 implementation update (proactive pressure)
+
+Implemented host available-memory monitoring, individual pressure from fresh
+Docker usage/limit readings, and sustained-growth forecasting. Forecasts require
+three increasing samples over at least 20 seconds; GC drops, changed limits and
+stale gaps reset the trend. The lookahead includes a full 60-second warning,
+at least 95 seconds for saving/stopping, and 30 seconds of polling margin. Longer
+observed shutdown durations increase that allowance and survive backend restarts.
+
+Host intervention and admission preserve at least the greater of the configured
+host floor and 10% of host RAM. Individual pressure targets the affected server;
+the cap comes from Docker, not saved settings awaiting restart. Static 85%/90%
+thresholds remain fallback triggers. Unknown/stale metrics do not fabricate risk.
+
+Pressure sleep records a five-minute restart cooldown and observed memory demand
+in SQLite. Manual starts and wake-on-connect use the same gate. After cooldown,
+that observed demand must fit the shared budget, capped by a newly reduced server
+limit. An immediate repeated wake cannot bypass this with the old boot minimum.
+
+81 focused tests and backend TypeScript checks pass. These are local logic tests,
+not Ubuntu runtime verification. This is an initial forecast policy, not a
+validated prediction of arbitrary leaks or bursts. Effective JVM heap inspection,
+learning ordinary boot peaks (beyond pressure-restart demand), representative
+modpack validation, and Ubuntu pressure exercises remain outstanding.
+
 ## Intended behavior
 
 - One configurable ceiling for all managed Minecraft workloads together.

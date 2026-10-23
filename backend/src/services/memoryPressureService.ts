@@ -8,6 +8,8 @@ import { dockerService } from './dockerService';
 import { hibernationService } from './hibernationService';
 import { metricsCollector } from './metricsCollector';
 import { readVerifiedMemoryPool, MemoryPoolReport, setMemoryPoolAction } from './memoryPool';
+import { MemoryForecast } from './memoryForecast';
+import { recordPressureSleep, shutdownHorizonMs } from './memoryRecovery';
 import type { ServerRecord } from '../types';
 
 const WARNING_MS = 60_000;
@@ -22,6 +24,8 @@ type Dependencies = {
   warn: (server: ServerRecord, message: string) => Promise<boolean>;
   now: () => number;
   refresh?: () => Promise<void>;
+  risks?: (pool:MemoryPoolReport) => Promise<{global:boolean; critical:boolean; targets:Set<string>; reason:string}>;
+  recordSleep?: (id:string, demandMb:number, durationMs:number) => void;
 };
 
 type Pending = { server: ServerRecord; deadline: number; reminded: boolean };
@@ -36,6 +40,10 @@ export class MemoryPressureService {
   private retryAfter = new Map<string, number>();
   private pending: Pending | null = null;
   private lastSleep = -Infinity;
+  private globalRisk = true;
+  private targets = new Set<string>();
+  private critical = false;
+  private reason = "Shared RAM is nearly full";
   constructor(private deps: Dependencies) {}
 
   start() {
@@ -58,12 +66,29 @@ export class MemoryPressureService {
     setMemoryPoolAction(message);
   }
 
+  private async assess(): Promise<MemoryPoolReport> {
+    const pool=await this.deps.pool();
+    if (!this.deps.risks || !pool.enforced) return pool;
+    const risk=await this.deps.risks(pool);
+    this.globalRisk=pool.pressure || risk.global;
+    this.targets=risk.targets;
+    this.critical=risk.critical;
+    this.reason=risk.reason;
+    return {...pool, pressure:this.globalRisk || this.targets.size>0};
+  }
+
+  private relevant(id:string) { return this.globalRisk || this.targets.has(id); }
+
   private async sleep(server: ServerRecord, allowOccupied: boolean) {
+    const began=this.deps.now();
+    const demandMb=this.deps.usage(server.id)/1024**2;
     this.pending = null;
     setMemoryPoolAction(`Saving and sleeping ${server.name} to release RAM.`);
     const result = await this.deps.sleep(server, { allowOccupied, beforeStop: async () => {
-      const latest = await this.deps.pool();
-      return latest.enforced && latest.pressure;
+      const latest = await this.assess();
+      const proceed=latest.enforced && latest.pressure && this.relevant(server.id);
+      if(proceed) this.deps.recordSleep?.(server.id,demandMb,0);
+      return proceed;
     } }).catch(error => {
       logger.warn({ error, serverId: server.id }, 'RAM pressure sleep failed');
       return false;
@@ -73,6 +98,7 @@ export class MemoryPressureService {
     const slept = result === true || (result !== false && this.deps.servers().find(s => s.id === server.id)?.hibernated);
     if (slept) {
       this.lastSleep = this.deps.now();
+      this.deps.recordSleep?.(server.id,demandMb,this.deps.now()-began);
       setMemoryPoolAction(`${server.name} was put to sleep to release RAM. It can wake when there is enough room.`);
     } else {
       setMemoryPoolAction(`Could not safely sleep ${server.name}. No forced stop was sent. Check its console.`);
@@ -91,7 +117,7 @@ export class MemoryPressureService {
     this.busy = true;
     try {
       await this.deps.refresh?.();
-      const pool = await this.deps.pool();
+      const pool = await this.assess();
       if (!pool.enforced || !pool.pressure) {
         this.emptySince.clear();
         await this.cancel(pool.enforced
@@ -100,7 +126,7 @@ export class MemoryPressureService {
         return;
       }
       const now = this.deps.now();
-      const refreshed = await this.deps.pool();
+      const refreshed = await this.assess();
       if (!refreshed.enforced || !refreshed.pressure) {
         await this.cancel("RAM recovered or protection is unverified. The automatic shutdown is cancelled.");
         return;
@@ -109,7 +135,7 @@ export class MemoryPressureService {
       if (this.pending) {
         const pending = this.pending;
         const fresh = this.current(pending.server);
-        if (!fresh) { await this.cancel('Server changed. The automatic shutdown is cancelled.'); return; }
+        if (!fresh || !this.relevant(fresh.id)) { await this.cancel('Server changed. The automatic shutdown is cancelled.'); return; }
         const seconds = Math.max(0, Math.ceil((pending.deadline - now) / 1000));
         setMemoryPoolAction(`${fresh.name} will save and sleep in ${seconds}s to release RAM.`);
         if (seconds === 0) { this.beginSleep(fresh, true); return; }
@@ -131,30 +157,30 @@ export class MemoryPressureService {
         if (count !== 0) this.emptySince.delete(server.id);
         else if (!this.emptySince.has(server.id)) this.emptySince.set(server.id, now);
       }
-      if (now - this.lastSleep < 60_000) return;
-      const eligible = readings.filter(({server}) => now >= (this.retryAfter.get(server.id) ?? 0));
+      if (now - this.lastSleep < 60_000 && !this.critical) return;
+      const eligible = readings.filter(({server}) => this.relevant(server.id) && now >= (this.retryAfter.get(server.id) ?? 0));
       const empty = eligible.filter(({server, count}) => count === 0 && now - this.emptySince.get(server.id)! >= 60_000)
         .sort((a, b) => this.deps.usage(b.server.id) - this.deps.usage(a.server.id));
       for (const { server } of empty) {
         const fresh = this.current(server);
         if (!fresh) continue;
         if (await this.deps.players(fresh).catch(() => null) !== 0) { this.emptySince.delete(server.id); continue; }
-        const latest = await this.deps.pool();
-        if (!latest.enforced || !latest.pressure) return;
+        const latest = await this.assess();
+        if (!latest.enforced || !latest.pressure || !this.relevant(fresh.id)) return;
         this.beginSleep(fresh, false);
         return;
       }
       // 85% blocks starts and sleeps empty servers; 90% initiates player warnings.
       // Once warned, cancel only below 85% to avoid flapping around 90%.
-      const latest = await this.deps.pool();
-      if (!latest.enforced || latest.usedMb === null || latest.usedMb < latest.limitMb * 0.90) return;
+      const latest = await this.assess();
+      if (!latest.enforced || latest.usedMb === null || (latest.usedMb < latest.limitMb * 0.90 && !this.critical)) return;
       eligible.sort((a, b) => (a.count ?? Infinity) - (b.count ?? Infinity)
         || this.deps.usage(b.server.id) - this.deps.usage(a.server.id));
       for (const { server } of eligible) {
         const fresh = this.current(server);
         if (!fresh) continue;
         const warned = await this.deps.warn(fresh,
-          'Shared RAM is nearly full. This server will save and sleep in 60 seconds unless RAM recovers. Reconnect when capacity is available.').catch(() => false);
+          `${this.reason}. This server will save and sleep in 60 seconds unless RAM recovers. Reconnect when capacity is available.`).catch(() => false);
         if (!warned) { this.retryAfter.set(server.id, this.deps.now() + RETRY_MS); continue; }
         this.pending = { server: fresh, deadline: this.deps.now() + WARNING_MS, reminded: false };
         setMemoryPoolAction(`${fresh.name} will save and sleep in 60s to release RAM. Players have been warned.`);
@@ -167,6 +193,8 @@ export class MemoryPressureService {
 
 export const memoryPressureService = new MemoryPressureService({
   pool: readVerifiedMemoryPool,
+  risks: assessRuntimeRisks,
+  recordSleep: (id,demand,duration)=>recordPressureSleep(id,demand,Date.now(),duration),
   servers: () => serverStore.list(),
   players: async server => (await getPlayerCount(server))?.online ?? null,
   usage: id => metricsCollector.liveFor(id)?.memoryBytes ?? 0,
@@ -192,4 +220,32 @@ export async function refreshPressureServers() {
       serverStore.update(server.id, { status });
     }
   }));
+}
+
+
+const forecast=new MemoryForecast();
+export async function assessRuntimeRisks(pool:MemoryPoolReport) {
+  const now=Date.now(), horizon=shutdownHorizonMs(), targets=new Set<string>();
+  const keys=new Set(['pool','host']);
+  const predicted=pool.usedMb!==null && forecast.approaching('pool',pool.usedMb,pool.limitMb,now,horizon);
+  let global=predicted, critical=predicted || (pool.usedMb!==null && pool.usedMb>=pool.limitMb*0.90), reason='Shared RAM is nearly full';
+  if(predicted) reason='Shared RAM is growing too quickly';
+  const {readHostMemory}=await import('./hostCapacityService');
+  const host=await readHostMemory();
+  if(host.availableKnown) {
+    const floor=Math.max(config.hostFreeFloorMb,host.totalMb*0.10);
+    const hostRisk=host.availableMb<floor || forecast.approaching('host',host.totalMb-host.availableMb,host.totalMb-floor,now,horizon);
+    if(hostRisk) {global=true;critical=true;reason='The host is running low on RAM';}
+  }
+  for(const server of serverStore.list()) {
+    const live=metricsCollector.liveFor(server.id);
+    if(!live || server.status!=='running' || live.memoryLimitBytes<=0) continue;
+    const key=`server:${server.id}:${server.containerId}`;keys.add(key);
+    const prediction=forecast.approaching(key,live.memoryBytes,live.memoryLimitBytes,live.at,horizon);
+    if(live.memoryBytes>=live.memoryLimitBytes*0.85 || prediction) targets.add(server.id);
+    if(live.memoryBytes>=live.memoryLimitBytes*0.90 || prediction) critical=true;
+  }
+  forecast.retain(keys);
+  if(!global && !pool.pressure && targets.size) reason='This server is approaching its RAM limit';
+  return {global,critical,targets,reason};
 }

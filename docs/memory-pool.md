@@ -91,6 +91,20 @@ terminate the applications still in it.
 
 ## Current pressure behavior and its limits
 
+In addition to the static pool thresholds below, sustained growth can start the
+warning earlier. The controller also watches host available RAM and each server's
+actual Docker memory limit. Host headroom is the greater of the configured floor
+and 10% of host RAM. An individual-server warning targets that server. Trend
+samples must show sustained growth; the lookahead allows for the player warning,
+saving and shutdown. These heuristics still need Ubuntu workload validation.
+
+A server slept for pressure cannot restart for five minutes. After that, admission
+accounts for its observed pre-sleep usage, rather than just its configured minimum.
+This state survives backend restarts and applies to manual and player-triggered
+starts. Reducing the configured server maximum bounds that historical demand.
+Effective JVM heap settings are not yet inspected.
+
+
 - Starts are serialized and use current pool usage plus temporary boot
   allowances, not the sum of configured maximums. Boot allowances are rebuilt
   from Docker readiness checks and do not expire solely because time passed. Starts are refused when that
@@ -120,7 +134,8 @@ terminate the applications still in it.
   is not scheduled while one is in flight. Manual lifecycle operations and
   automatic sleep/wake share per-server ownership.
 - Successful sleeps have a one-minute cooldown before another intervention.
-  Failed attempts are retried no sooner than one minute for that server.
+  Critical pressure can bypass the successful-sleep cooldown. Failed attempts
+  are retried no sooner than one minute after the attempt finishes for that server.
   Sleeping servers wake only through the normal capacity gate. Pressure polling
   refreshes Docker status independently of browser connections.
 - Countdown state is in memory: restarting the backend starts a fresh warning

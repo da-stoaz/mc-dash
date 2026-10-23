@@ -11,6 +11,7 @@ import { containerMemoryPlan } from './memoryPlan';
 import { POOL_SLICE, readMemoryPool, requireMemoryPool, requireStartRoom, startupReservations } from './memoryPool';
 import { UserFacingError } from '../apiErrors';
 import { serverStore } from '../serverStore';
+import { pressureRestartDemand } from './memoryRecovery';
 import { javaToolOptions } from './jvmTuning';
 
 // Fixed in-container RCON port. We never publish it to the host: the backend
@@ -598,6 +599,8 @@ export class DockerService {
   async start(server: ServerRecord): Promise<string> {
     const start = async () => {
       const container = await this.getContainer(server);
+      const memoryPlan = containerMemoryPlan(server.resources);
+      const recoveryDemand = pressureRestartDemand(server.id, memoryPlan?.capMb ?? Infinity);
       await this.updateResources(server);
       if (config.memoryPoolEnabled) {
         const pool = await readMemoryPool();
@@ -608,13 +611,13 @@ export class DockerService {
         if (info.State?.Running) return container.id;
         const { metricsCollector } = await import('./metricsCollector');
         const usage = new Map([...metricsCollector.liveAll()].map(([id, value]) => [id, value.memoryBytes / MB]));
-        const request = containerMemoryPlan(server.resources)?.floorMb;
+        const request = memoryPlan ? Math.max(memoryPlan.floorMb, recoveryDemand) : undefined;
         if (!request) throw new UserFacingError({error: 'Configure server memory first', code: 'MEMORY_LIMIT_REQUIRED', status: 409});
         startupReservations.release(server.id);
         // Keep the existing host-free-memory check for unrelated deployments.
         const { readHostMemory } = await import('./hostCapacityService');
         const host = await readHostMemory();
-        if (host.availableKnown && host.availableMb - request < config.hostFreeFloorMb) {
+        if (host.availableKnown && host.availableMb - request < Math.max(config.hostFreeFloorMb, host.totalMb * 0.10)) {
           throw new UserFacingError({error: 'Host memory is low', code: 'HOST_MEMORY_LOW', status: 409,
             reason: 'Other host services need the remaining memory. Wait or stop an unused server.'});
         }

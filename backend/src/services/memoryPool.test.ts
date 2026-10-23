@@ -426,3 +426,48 @@ test('a fresh service recovers a late clean exit and leaves failed exits awake',
     serverStore.get=originals.get;serverStore.update=originals.update;dockerService.statusDetails=originals.status;dockerService.waitForExit=originals.wait;
   }
 });
+
+test('individual pressure warns only the affected container when the pool has room',async()=>{
+  const warnings:string[]=[];
+  const service=new MemoryPressureService({pool:async()=>({...good}),
+    risks:async()=>({global:false,critical:true,targets:new Set(['full']),reason:'This server is approaching its RAM limit'}),
+    servers:()=>[{id:'empty',status:'running'},{id:'full',status:'running'}],
+    players:async(s:any)=>s.id==='empty'?0:2,usage:()=>1000,now:()=>0,
+    warn:async(s:any)=>{warnings.push(s.id);return true;},sleep:async()=>true});
+  await service.tick();assert.deepEqual(warnings,['full']);
+});
+test('host pressure warns even when the shared pool is below its threshold',async()=>{
+  let warnings=0;
+  const service=new MemoryPressureService({pool:async()=>({...good}),
+    risks:async()=>({global:true,critical:true,targets:new Set(),reason:'The host is running low on RAM'}),
+    servers:()=>[{id:'one',status:'running'}],players:async()=>2,usage:()=>1000,now:()=>0,
+    warn:async(_s:any,message:string)=>{assert.match(message,/host/);warnings++;return true;},sleep:async()=>true});
+  await service.tick();assert.equal(warnings,1);
+});
+test('pressure cooldown and observed demand survive service recreation',()=>{
+  const {recordPressureSleep,pressureRestartDemand,shutdownHorizonMs}=require('./memoryRecovery');
+  try {
+    recordPressureSleep('cool',4000,1000,120000);
+    assert.throws(()=>pressureRestartDemand('cool',8000,2000),/cooling down/);
+    assert.equal(pressureRestartDemand('cool',8000,301001),4000);
+    assert.equal(pressureRestartDemand('cool',2000,301001),2000);
+    assert.equal(shutdownHorizonMs(),210000);
+  } finally {db.prepare('DELETE FROM memory_recovery WHERE serverId=?').run('cool');}
+});
+
+test('runtime signals use host availability and observed container limits',async()=>{
+  const {assessRuntimeRisks}=require('./memoryPressureService'),{serverStore}=require('../serverStore');
+  const originals={host:capacityModule.readHostMemory,list:serverStore.list,live:metricsCollector.liveFor};
+  let availableMb=4000;
+  capacityModule.readHostMemory=async()=>({totalMb:14000,availableKnown:true,availableMb});
+  serverStore.list=()=>[{id:'runtime',containerId:'container',status:'running',resources:{maxRamMb:99999}}];
+  metricsCollector.liveFor=()=>({memoryBytes:950*MB,memoryLimitBytes:1000*MB,at:Date.now()});
+  try {
+    let risk=await assessRuntimeRisks(good);
+    assert.equal(risk.global,false);assert.equal(risk.critical,true);assert.ok(risk.targets.has('runtime'));
+    availableMb=500;risk=await assessRuntimeRisks(good);
+    assert.equal(risk.global,true);assert.match(risk.reason,/host/);
+    metricsCollector.liveFor=()=>null;availableMb=4000;
+    risk=await assessRuntimeRisks(good);assert.equal(risk.targets.size,0);
+  } finally {capacityModule.readHostMemory=originals.host;serverStore.list=originals.list;metricsCollector.liveFor=originals.live;}
+});
