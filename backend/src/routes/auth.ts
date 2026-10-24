@@ -34,7 +34,7 @@ router.post('/login', loginRateLimit, (req, res) => {
     return res.status(401).json({ error: 'Incorrect password' });
   }
   clearLoginFailures(req);
-  setSessionCookie(res);
+  setSessionCookie(req, res);
   res.json({ ok: true });
 });
 

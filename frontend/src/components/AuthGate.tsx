@@ -115,6 +115,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 value={password}
                 onValueChange={setPassword}
                 autoFocus
+                // A server error must not set customValidity and block retries.
+                validationBehavior="aria"
                 isInvalid={Boolean(error)}
                 errorMessage={error ?? undefined}
               />
