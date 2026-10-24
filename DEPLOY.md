@@ -1,5 +1,24 @@
 # Deploying MC Dash to a Linux host (Docker Compose)
 
+## Existing systemd installation: frontend API proxy
+
+The frontend includes the existing systemd deployment's rewrite from `/api/*`
+to `http://127.0.0.1:3301/*`. For this setup, the backend must listen on port
+3301 (`PORT=3301` in `backend/.env`), and `frontend/.env.local` must contain
+`NEXT_PUBLIC_API_BASE_URL=/api`. Rebuild the frontend after changing that value.
+Keep the existing systemd units and environment files when updating.
+
+This target is specific to the systemd installation. The Compose setup below
+uses backend port 4000 and a direct browser-facing API URL; it does not use this
+rewrite. An external HTTPS proxy can instead route `/api/*` directly to the
+backend's configured port, stripping the `/api` prefix.
+
+The rewrite itself does not provide HTTPS. Direct HTTPS access on the LAN also
+requires a TLS reverse proxy and local DNS pointing the dashboard hostname at
+the server's LAN address.
+
+## Docker Compose installation
+
 This bundles the backend and frontend into two containers. The backend talks to
 the host's Docker to run the actual Minecraft servers as sibling containers.
 
