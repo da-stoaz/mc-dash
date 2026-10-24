@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { readVerifiedMemoryPool, MemoryPoolReport } from './memoryPool';
 import os from 'os';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -12,42 +13,8 @@ import { containerMemoryPlan, jvmOverheadMb } from './memoryPlan';
 import { readProcMemory } from './procMeminfo';
 import { ResourceConfig, ServerRecord, ServerStatus } from '../types';
 
-// ---------------------------------------------------------------------------
-// Host capacity ledger and start admission
-//
-// Docker's `Memory` is a ceiling, not a booking. Nothing in Docker, and nothing
-// in MC Dash before this, stopped the sum of every server's ceiling from
-// exceeding physical RAM — so three servers capped at 8 GB start happily on a
-// 12 GB box and only collide once they all actually fill their heaps. By then
-// the kernel is swapping and the box is unusable, including the SSH session you
-// would need to fix it.
-//
-// The fix is an admission check with a ledger, the same shape as a cluster
-// scheduler's — and, like a scheduler's, it has to be two-tier to be useful.
-//
-//   Guaranteed tier — every running server's idle floor (min RAM + JVM
-//     overhead). Never overcommitted. This is the actual promise: whatever
-//     happens, each running server can always have this much. For a server
-//     whose ceiling is 6 GB it costs about 1.5 GB.
-//
-//   Burst tier — the sum of ceilings, allowed to exceed physical RAM by
-//     config.memoryBurstRatio. Booking every ceiling in full is what makes a
-//     ledger *strict but stupid*: a 12 GB host would admit exactly one 6 GB
-//     server, even though three of them idle at 3 GB together and never peak
-//     at the same instant.
-//
-// The burst tier is an explicit bet that servers don't all peak together. What
-// makes it a reasonable bet rather than a reckless one is what happens when it
-// is lost: with container swap off (the default), the kernel kills the one
-// container that overran its own cap. That is a bad minute for one server, not
-// a frozen host — and a frozen host is the thing this whole feature exists to
-// prevent. Set memoryBurstRatio to 1.0 for strict worst-case admission.
-//
-// The ceiling itself is also an estimate, and usually a bad one — people set
-// max RAM by superstition. Where there is a week of metrics to draw on, we use
-// the server's *observed* peak plus a margin instead, and fall back to the
-// configured ceiling when the history is too thin to be evidence.
-// ---------------------------------------------------------------------------
+// Legacy admission estimates are retained only for development without a
+// shared cgroup. Production enforcement and start admission use memoryPool.ts.
 
 const MB = 1024 * 1024;
 
@@ -106,6 +73,7 @@ export type ServerCommitment = {
 };
 
 export type CapacityReport = {
+  pool?: MemoryPoolReport;
   memory: HostMemory;
   reserveMb: number;
   /** totalMb minus the OS reserve: everything servers may share. */
@@ -342,7 +310,8 @@ export async function capacityReport(): Promise<CapacityReport> {
     };
   });
 
-  const budgetMb = Math.max(0, memory.totalMb - config.memoryReserveMb);
+  const pool = await readVerifiedMemoryPool();
+  const budgetMb = config.memoryPoolEnabled ? pool.limitMb : Math.max(0, memory.totalMb - config.memoryReserveMb);
   const burstAllowanceMb = Math.round(budgetMb * config.memoryBurstRatio);
   const liveServers = commitments.filter((entry) => entry.live);
   const sum = (pick: (entry: ServerCommitment) => number) => liveServers.reduce((total, e) => total + pick(e), 0);
@@ -355,6 +324,7 @@ export async function capacityReport(): Promise<CapacityReport> {
   const hostCpuCores = liveServers[0]?.actualCpuCores !== undefined ? (await dockerService.hostInfo())?.ncpu ?? os.cpus().length : os.cpus().length;
 
   return {
+    pool,
     memory,
     reserveMb: config.memoryReserveMb,
     budgetMb,
@@ -495,6 +465,8 @@ export async function evaluateStart(server: ServerRecord): Promise<AdmissionDeci
  * next freeze has a trail.
  */
 export async function assertCanStart(server: ServerRecord, opts: { force?: boolean } = {}): Promise<void> {
+  // Central Docker.start gate also covers wake-on-connect and cannot be forced.
+  if (config.memoryPoolEnabled) return;
   if (!config.memoryAdmissionEnabled) return;
 
   const decision = await evaluateStart(server);

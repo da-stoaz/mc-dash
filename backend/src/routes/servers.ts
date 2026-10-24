@@ -16,7 +16,7 @@ import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, impo
 import { getSnapshotJob } from '../services/snapshotJobStore';
 import { config } from '../config';
 import { toApiError } from '../apiErrors';
-import { preparing } from '../state';
+import { preparing, lifecycleBusy } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
 import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands, runConsoleCommand } from '../services/consoleService';
@@ -832,8 +832,7 @@ router.get('/:id/status', async (req, res) => {
 
 // Dependency repair mutates mods/. Serialize lifecycle requests so a second
 // request cannot start a container while the first is resolving dependencies.
-const lifecycleBusy = new Set<string>();
-function lifecycle(action: RequestHandler<{ id: string }>): RequestHandler<{ id: string }> {
+function lifecycle<P extends { id: string } = { id: string }>(action: RequestHandler<P>): RequestHandler<P> {
   return async (req, res, next) => {
     const id = String(req.params.id);
     if (lifecycleBusy.has(id)) { res.status(409).json({ error: 'A server lifecycle operation is already in progress' }); return; }
@@ -895,6 +894,7 @@ router.post('/:id/start', lifecycle(async (req, res) => {
     logger.error({ err }, 'Start failed');
     const apiErr = toApiError(err, { error: 'Failed to start container', status: 500 });
     serverStore.update(server.id, { status: 'error', lastError: failureReason(apiErr.body) });
+    if (server.hibernated) await hibernationService.restoreSleep(server.id);
     res.status(apiErr.status).json(apiErr.body);
   }
 }));
@@ -980,6 +980,13 @@ router.post('/:id/restart', lifecycle(async (req, res) => {
     res.status(apiErr.status).json(apiErr.body);
   }
 }));
+
+// On-demand only: do not attach diagnostic processes on every metrics poll.
+router.get('/:id/memory-runtime', async (req, res) => {
+  const server=serverStore.get(req.params.id);
+  if(!server) return notFound(res);
+  res.json(await dockerService.inspectJvmMemory(server));
+});
 
 router.get('/:id/logs', async (req, res) => {
   const server = serverStore.get(req.params.id);
@@ -1124,7 +1131,7 @@ router.post('/:id/prepare', lifecycle(async (req, res) => {
   }
 }));
 
-router.delete('/:id/container', async (req, res) => {
+router.delete('/:id/container', lifecycle(async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
@@ -1137,9 +1144,9 @@ router.delete('/:id/container', async (req, res) => {
     const apiErr = toApiError(err, { error: 'Failed to delete container', status: 500 });
     res.status(apiErr.status).json(apiErr.body);
   }
-});
+}));
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', lifecycle(async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
   try {
@@ -1163,7 +1170,7 @@ router.delete('/:id', async (req, res) => {
   if (!removed) return notFound(res);
   forgetServerConsole(server.id);
   res.json({ ok: true });
-});
+}));
 
 const snapshotCreateSchema = z.object({
   label: z.string().trim().max(200).optional(),
@@ -1219,7 +1226,7 @@ router.get('/:id/snapshots/:snapshotId/download', (req, res) => {
   res.download(filePath, `${safeName}.tar.gz`);
 });
 
-router.post('/:id/snapshots/:snapshotId/restore', async (req, res, next) => {
+router.post('/:id/snapshots/:snapshotId/restore', lifecycle<{id:string; snapshotId:string}>(async (req, res, next) => {
   try {
     const server = serverStore.get(req.params.id);
     if (!server) return notFound(res);
@@ -1237,7 +1244,7 @@ router.post('/:id/snapshots/:snapshotId/restore', async (req, res, next) => {
     logger.error({ err, serverId: req.params.id }, 'Snapshot restore failed');
     res.status(500).json({ error: err?.message ?? 'Restore failed' });
   }
-});
+}));
 
 router.delete('/:id/snapshots/:snapshotId', async (req, res, next) => {
   try {

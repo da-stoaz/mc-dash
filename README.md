@@ -7,7 +7,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - Endpoints for listing servers, creating entries, uploading packs, and issuing start/stop/restart/logs against Docker containers.
 - Basic dashboard to list servers, view statuses, and manage uploads.
 - Live per-server CPU and RAM on the server list, plus host totals — what servers are actually using, not just what they're allowed to use.
-- Memory management: idle servers hand heap back to the OS, containers can't touch swap, and a start is refused when the host has no budget left (see below).
+- Memory management: one configurable shared Linux RAM limit, elastic JVM heaps, and graceful sleep under RAM pressure (see below).
 - Server console: run Minecraft commands (`/give`, `/tp`, `/kill`, …) against a live server over RCON, with completion for what the server actually has and failures shown as failures (see below).
 
 ## Quick start
@@ -25,7 +25,7 @@ Live Usage History includes TPS alongside CPU and memory, sampled every 10 secon
 ## Backend endpoints (initial pass)
 - `GET /health`
 - `GET /config` — browser-facing settings from the backend env (`routerEnabled`, `routerDomain`, `routerPort`). The dashboard reads this to render full hostnames.
-- `GET /host/capacity` — the host memory ledger: total, reserve, budget, both admission tiers (guaranteed floors and expected peaks), and per-server figures including measured 7-day peaks. Drives the dashboard's memory bar.
+- `GET /host/capacity` — verified shared-pool usage and protection status, plus legacy diagnostic accounting. Drives the RAM bar.
 - `GET /servers` — list server records.
 - `POST /servers` — create a record with a server pack zip (multipart form, fields include `name`, `subdomain` (optional), `serverPort` (optional), `minRamMb`, `maxRamMb`, `cpuLimit`, `renderDistance`, `gameMode`, `seed`, `javaImage`, and file field `file`).
 - `PATCH /servers/:id` — update resources/game/status.
@@ -72,103 +72,27 @@ The dashboard reads `MC_ROUTER_DOMAIN` from the backend at runtime (`GET /config
 
 ## Memory management
 
-Docker's memory limit is a ceiling, not a booking. Three servers capped at 8 GB
-each start happily on a 12 GB host and idle at 3-4 GB between them — then all
-peak at once, the kernel starts swapping, and the box stops answering SSH. MC
-Dash handles this on three levels:
+The pending shared-pool implementation isolates **Minecraft containers only**.
+MC Dash's panel and backend remain outside the pool so a Minecraft-pool OOM does
+not kill the controller needed to inspect and stop servers. Other deployments
+also remain outside it; the host still needs enough memory for all of them.
 
-**1. Idle servers shrink.** Every pack's JVM flags are rewritten on prepare so
-the heap follows real demand: `-Xms` is set to the server's *min RAM* (a real
-floor, not a second `-Xmx`), `-XX:+AlwaysPreTouch` is forced off, and G1's
-periodic GC ([JEP 346](https://openjdk.org/jeps/346)) is enabled so a server with
-nobody on it hands committed heap back to the OS. Aikar's flags ship
-`-Xms == -Xmx` plus `AlwaysPreTouch` — which is exactly why an idle modpack
-server sits on its full 8 GB — so those two are replaced while every other flag
-the pack author chose is preserved. Needs Java 12+ for full effect; older JVMs
-ignore what they don't recognise.
+The declarative [minecraft.slice](deploy/systemd/minecraft.slice) has a single
+shared ceiling, `MemoryMax=12G`. MC Dash reads the installed Linux limit directly.
+Individual Minecraft maximums are not reserved in full; unused capacity is shared.
+There is no host-modifying setup script or service rewrite.
 
-The periodic GC runs as a **concurrent** cycle (`-XX:+G1PeriodicGCInvokesConcurrent`),
-which matters more than it sounds. The full-GC variant reclaims no more — both
-end at `-Xms` — but on a 1.5 GB live set it is a 365 ms stop-the-world pause, and
-it fires on a timer whenever ordinary GCs have been quiet. A lightly-played
-server goes minutes between young GCs while someone is very much standing in it,
-so that pause lands mid-session and drops seven ticks. The concurrent cycle costs
-37–66 ms instead. Do not "optimise" this flag back.
+See [configuration, separation checks, and outstanding validation](docs/memory-pool.md).
+Existing Minecraft containers need a stopped rebuild to join the new pool.
+Failed verification blocks new Minecraft starts, while the panel remains usable.
+Non-Linux development shows actual Minecraft memory usage in monitoring-only mode.
 
-**2. Containers can't drag the host into swap.** Each container gets a hard
-`Memory` cap (max RAM **plus JVM overhead** — metaspace, code cache, thread
-stacks and GC structures live outside `-Xmx` but inside the cgroup, so capping
-at exactly `-Xmx` gets the server OOM-killed as its heap fills), a soft
-`MemoryReservation` at its idle footprint so the kernel reclaims from the
-squatters first, and `MemorySwap == Memory` so it cannot page at all. A server
-that blows its limit is killed; the host stays responsive. Set
-`MC_DASH_CONTAINER_SWAP=limit` or `host` if you'd rather it paged.
-
-**3. Starts are refused before they hurt — but only when it's real.** Admission
-is two-tier, the way a cluster scheduler is:
-
-- The **guaranteed** tier is every running server's idle floor (min RAM + JVM
-  overhead) and is *never* overcommitted. Whatever happens, each running server
-  can always have that much. For a server whose max is 6 GB, that's ~1.9 GB.
-- The **burst** tier is peak demand, and it *is* allowed to exceed physical RAM —
-  by `MC_DASH_MEMORY_BURST_RATIO` (default 2.0). Booking every ceiling in full is
-  what makes a ledger strict but stupid: a 12 GB host would admit exactly one
-  6 GB server, even though three of them idle at 3 GB together and never peak at
-  the same instant.
-
-The burst tier is an explicit bet that servers don't all peak at once. What makes
-it reasonable rather than reckless is what happens when you lose it: with
-container swap off, the kernel kills the one container that overran *its own*
-cap. One bad minute for one server, not a frozen host. Set the ratio to 1.0 for
-strict worst-case admission.
-
-Peak demand is also *measured*, not assumed. Max RAM is a number people pick once
-from a forum post; MC Dash already keeps 7 days of per-server peak memory, so a
-server that has never crossed 2.1 GB in a week of play is budgeted at ~2.8 GB
-(observed + 30% margin) rather than its notional 6.9 GB. Guards keep that honest:
-a full day of history is required before a measurement counts as evidence, and
-the configured ceiling is always a hard clamp. Disable with
-`MC_DASH_MEMORY_USE_OBSERVED_PEAKS=false`.
-
-The dashboard shows both tiers — a solid bar for what's reserved, a fainter band
-for peak demand, and an oversubscription chip when ceilings exceed the host — so
-the limit and the risk are visible before you hit either. Override a single start
-with `{"force": true}`.
-
-All of it is tunable — see the "Memory management" block in `.env.example`. The
-defaults suit a small host and most people set none of them.
-
-### Hibernation (opt-in)
-
-Levels 1-3 make servers share a host politely. Hibernation removes them from it
-entirely: a server with nobody on it is stopped, releasing **all** of its memory
-and CPU, and started again when a player connects. On a host where four servers
-exist but one is being played on, this is the only thing that actually fixes the
-arithmetic. Enable with `MC_DASH_HIBERNATE=true`.
-
-- **Sleep is evidence-based.** Player counts come from RCON, never inferred from
-  CPU or traffic — guessing would eventually stop a server with someone standing
-  in it. A count MC Dash *cannot* read resets the idle clock rather than counting
-  as empty, so a server it can't ask is never one it puts to sleep.
-- **Shutdown is the graceful path**, the same `save-all` + RCON `stop` the stop
-  button uses. A hibernation that corrupted a world would be indefensible.
-- **Waking is handled.** While asleep, MC Dash holds the server's port itself. A
-  server-list ping gets a real status response saying it is sleeping (rather than
-  a red "can't connect" cross), and a join attempt starts the server and
-  disconnects the player with a message telling them to reconnect. The subdomain
-  router does the same for its own targets.
-
-The first join after a sleep always costs one bounced connection. That is
-deliberate: a modpack takes 30-90 seconds to boot and a Minecraft client gives up
-long before that, so holding the connection open would produce a timeout and a
-player who concludes the server is dead. Telling them plainly and letting them
-reconnect is the only honest option — it is what
-[lazymc](https://github.com/timvisee/lazymc) does too.
-
-> Levels 1 and 2 are applied when a server's pack is prepared and its container
-> built, so **existing servers need a Rebuild** to pick them up. Level 3 — the
-> start gate and the memory bar — works immediately, but until a server is
-> rebuilt it will still hold its full heap while idle.
+**Runtime enforcement has not been validated on the Ubuntu deployment.** Local
+tests cover empty-server sleep, player warning countdowns, recovery cancellation,
+and save failures. At sustained high usage, occupied servers receive a 60-second
+warning before saving and sleeping. Automatic sleep never falls back to a forced
+Docker stop. Elastic JVM heaps also help release unused memory. Sudden growth or
+failed saves can still cause Minecraft crashes at the kernel limit.
 
 ## Server console
 

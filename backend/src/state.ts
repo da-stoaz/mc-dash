@@ -4,3 +4,6 @@
 // While an id is in this set, status pollers must not overwrite its status with
 // a Docker inspect result, since the container may not exist yet.
 export const preparing = new Set<string>();
+
+// Shared ownership for manual lifecycle actions and automatic sleep/wake.
+export const lifecycleBusy = new Set<string>();

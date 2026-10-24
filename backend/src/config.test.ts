@@ -37,7 +37,9 @@ test('"root" opts back out to the container default root user', () => {
   assert.equal(resolveContainerUser('ROOT', uid, gid), '0:0');
 });
 
-test('undefined when the platform has no getuid (e.g. Windows) and no override', () => {
+test('undefined when the platform has no getuid (e.g. Windows) and no override', (t) => {
+  t.mock.property(process, 'getuid', undefined);
+  t.mock.property(process, 'getgid', undefined);
   assert.equal(resolveContainerUser(undefined, undefined, undefined), undefined);
 });
 
@@ -45,6 +47,7 @@ test('an override still wins on a platform without getuid', () => {
   assert.equal(resolveContainerUser('1000:1000', undefined, undefined), '1000:1000');
 });
 
-test('falls back to uid for gid when getgid is unavailable', () => {
+test('falls back to uid for gid when getgid is unavailable', (t) => {
+  t.mock.property(process, 'getgid', undefined);
   assert.equal(resolveContainerUser(undefined, uid, undefined), '1000:1000');
 });

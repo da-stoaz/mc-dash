@@ -1,11 +1,12 @@
 import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';
-import { preparing } from '../state';
+import { preparing, lifecycleBusy } from '../state';
 import { ServerRecord } from '../types';
 import { dockerService } from './dockerService';
 import { getPlayerCount } from './playerService';
-import { runServerRcon } from './rconService';
+import { gracefulSleep } from './gracefulSleep';
+import { db } from '../db';
 import { SleepListener } from './sleepGateway';
 
 // ---------------------------------------------------------------------------
@@ -47,15 +48,18 @@ type Tracker = {
   lastCount: number | null;
 };
 
+db.exec('CREATE TABLE IF NOT EXISTS sleep_intents (serverId TEXT PRIMARY KEY, containerId TEXT NOT NULL)');
+
 export class HibernationService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private readonly trackers = new Map<string, Tracker>();
   private readonly listeners = new Map<string, SleepListener>();
   /** Ids currently being slept or woken, so a slow Docker call can't double-fire. */
-  private readonly busy = new Set<string>();
+  private readonly busy = lifecycleBusy;
 
   start() {
+    void this.restoreListeners();
     if (!config.hibernationEnabled) {
       logger.info('Hibernation disabled (MC_DASH_HIBERNATE=false)');
       return;
@@ -65,10 +69,6 @@ export class HibernationService {
     logger.info(
       `Hibernation enabled: servers sleep after ${Math.round(config.hibernationIdleMs / 60000)} min with no players`
     );
-
-    // A restart of MC Dash leaves any already-hibernated server with nothing
-    // listening on its port. Re-arm those listeners before anyone tries to join.
-    void this.restoreListeners();
   }
 
   stop() {
@@ -77,6 +77,7 @@ export class HibernationService {
   }
 
   private async restoreListeners() {
+    await this.reconcile();
     for (const server of serverStore.list()) {
       if (server.hibernated) await this.armListener(server);
     }
@@ -97,6 +98,7 @@ export class HibernationService {
     if (this.running) return;
     this.running = true;
     try {
+      await this.reconcile();
       const servers = serverStore.list();
       const liveIds = new Set(servers.map((server) => server.id));
       for (const id of this.trackers.keys()) if (!liveIds.has(id)) this.trackers.delete(id);
@@ -145,36 +147,38 @@ export class HibernationService {
   }
 
   /**
-   * Put a server to sleep: warn anyone listening, save and stop, then take over
-   * its port so a join can bring it back.
+   * Save and stop, then take over the port so a join can bring it back.
+   * Occupied servers require a completed warning from the pressure controller.
    */
-  async hibernate(server: ServerRecord) {
-    if (this.busy.has(server.id)) return;
+  async hibernate(server: ServerRecord, opts: { allowOccupied?: boolean; beforeStop?: () => Promise<boolean> } = {}): Promise<boolean> {
+    if (this.busy.has(server.id)) return false;
     this.busy.add(server.id);
     try {
-      logger.info({ serverId: server.id, name: server.name }, 'Hibernating idle server');
-      serverStore.update(server.id, { status: 'stopping' });
-
-      // Same graceful path the stop route uses: an RCON `stop` lets the JVM
-      // shutdown hook flush every dimension before the process dies. A
-      // hibernation that corrupted a world would be indefensible.
-      const rconReachable = (await dockerService.rconAddress(server)) !== null;
-      let exitedCleanly = false;
-      if (rconReachable) {
-        await runServerRcon(server, ['save-all']);
-        await runServerRcon(server, ['stop']);
-        exitedCleanly = await dockerService.waitForExit(server, 20_000);
-      }
-      if (!exitedCleanly) {
-        await dockerService.stop(server, { timeoutSec: rconReachable ? 5 : 30 });
-      }
-
-      const updated = serverStore.update(server.id, { status: 'stopped', hibernated: true }) ?? server;
+      const fresh = serverStore.get(server.id);
+      if (!fresh || fresh.status !== 'running' || fresh.containerId !== server.containerId || preparing.has(server.id)) return false;
+      if (!opts.allowOccupied && (await getPlayerCount(fresh).catch(() => null))?.online !== 0) return false;
+      logger.info({ serverId: server.id, name: server.name }, 'Saving server for automatic sleep');
+      await gracefulSleep(fresh, async () => {
+        if (!opts.allowOccupied && (await getPlayerCount(fresh).catch(() => null))?.online !== 0) return false;
+        const current = serverStore.get(server.id);
+        if (!current || current.status !== 'running' || current.containerId !== fresh.containerId || preparing.has(server.id)) return false;
+        if (opts.beforeStop && !await opts.beforeStop()) return false;
+        db.prepare('INSERT OR REPLACE INTO sleep_intents VALUES (?, ?)').run(server.id, fresh.containerId);
+        serverStore.update(server.id, { status: 'stopping', lastError: null });
+        return true;
+      });
+      const updated = serverStore.update(server.id, { status: 'stopped', hibernated: true, lastError: null }) ?? server;
       this.trackers.delete(server.id);
       await this.armListener(updated);
+      db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(server.id);
+      return true;
     } catch (err) {
-      logger.error({ err, serverId: server.id }, 'Hibernation failed');
-      serverStore.update(server.id, { status: 'error' });
+      const message = err instanceof Error ? err.message : 'Automatic sleep failed.';
+      logger.error({ err, serverId: server.id }, 'Automatic sleep failed; no forced stop sent');
+      // Preserve observed state. A slow shutdown may still finish after our wait.
+      const current = serverStore.get(server.id);
+      if (current?.containerId === server.containerId) serverStore.update(server.id, { lastError: message });
+      return false;
     } finally {
       this.busy.delete(server.id);
     }
@@ -214,7 +218,32 @@ export class HibernationService {
    * Hand the port back. Must complete before the container starts, or Docker
    * fails to bind with "port is already allocated".
    */
+  async reconcile() {
+    const intents = db.prepare('SELECT serverId, containerId FROM sleep_intents').all() as {serverId:string;containerId:string}[];
+    for (const intent of intents) {
+      if (lifecycleBusy.has(intent.serverId)) continue;
+      const server = serverStore.get(intent.serverId);
+      if (!server || server.containerId !== intent.containerId) {
+        db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(intent.serverId);
+        continue;
+      }
+      lifecycleBusy.add(server.id);
+      try {
+        const state = await dockerService.statusDetails(server);
+        if (!['stopped', 'exited'].includes(state.status)) continue;
+        if (await dockerService.waitForExit(server, 100, {requireClean:true})) await this.restoreSleep(server.id);
+        db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(server.id);
+      } finally { lifecycleBusy.delete(server.id); }
+    }
+  }
+
+  async restoreSleep(serverId: string) {
+    const sleeping = serverStore.update(serverId, {status:'stopped', hibernated:true});
+    if (sleeping) await this.armListener(sleeping);
+  }
+
   async releasePort(serverId: string): Promise<void> {
+    db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(serverId);
     const listener = this.listeners.get(serverId);
     if (!listener) return;
     this.listeners.delete(serverId);
@@ -223,6 +252,7 @@ export class HibernationService {
 
   /** Clear the flag and drop the listener, without starting anything. */
   async clear(serverId: string): Promise<void> {
+    db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(serverId);
     await this.releasePort(serverId);
     const server = serverStore.get(serverId);
     if (server?.hibernated) serverStore.update(serverId, { hibernated: false });
@@ -250,7 +280,8 @@ export class HibernationService {
       serverStore.update(serverId, { status: 'starting', containerId });
     } catch (err) {
       logger.error({ err, serverId }, 'Wake failed');
-      serverStore.update(serverId, { status: 'error', hibernated: false });
+      const sleeping = serverStore.update(serverId, { status: 'stopped', hibernated: true });
+      if (sleeping) await this.armListener(sleeping);
     } finally {
       this.busy.delete(serverId);
     }

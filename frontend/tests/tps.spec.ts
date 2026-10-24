@@ -90,3 +90,22 @@ test('resource tooltips include recorded cores and gigabytes in live and histori
   await memory.focus();
   await expect(page.getByRole('tooltip')).toContainText('Peak usage1.50 GB');
 });
+
+for (const status of ['verified', 'mismatch', 'unverified'] as const) {
+  test(`runtime memory inspection is explicit and reports ${status}`, async ({ page }) => {
+    let checks = 0;
+    await setup(page, 'available', 'running', true);
+    await page.route('**/servers/tps-test/memory-runtime', route => {
+      checks++;
+      return route.fulfill({ json: {status, initialHeapMb:512, maximumHeapMb:2048,
+        containerLimitMb:2560, checkedAt:Date.now(), reason:'Runtime inspection result.'} });
+    });
+    expect(checks).toBe(0);
+    await page.getByText('Check running memory settings', {exact:true}).click();
+    expect(checks).toBe(0);
+    await page.getByRole('button', {name:'Check settings',exact:true}).click();
+    await expect(page.getByText(status === 'verified' ? 'Heap settings match' : status === 'mismatch' ? 'Settings differ' : 'Could not verify',{exact:true})).toBeVisible();
+    await expect(page.getByText('Runtime inspection result.',{exact:true})).toBeVisible();
+    expect(checks).toBe(1);
+  });
+}

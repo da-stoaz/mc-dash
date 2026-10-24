@@ -50,17 +50,14 @@ export default function Page() {
     });
   };
 
-  // The capacity ledger only moves when a server starts or stops, so it rides
-  // the server list rather than a poll of its own. A failure leaves the last
-  // reading on screen and stays quiet: the bar is context, and a toast every few
-  // seconds about a meter would be worse than a slightly stale meter.
+  // Poll the shared controller: it includes application and container memory.
   const fetchCapacity = async () => {
     try {
-      const res = await apiFetch(`${API_BASE}/host/capacity`);
-      if (!res.ok) return;
+      const res = await apiFetch(`${API_BASE}/host/capacity`, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) throw new Error('Capacity unavailable');
       setCapacity(await res.json());
     } catch {
-      // keep the previous reading
+      setCapacity(null);
     }
   };
 
@@ -72,6 +69,8 @@ export default function Page() {
 
   useEffect(() => {
     void fetchCapacity();
+    const timer = setInterval(() => { if (!document.hidden) void fetchCapacity(); }, 5000);
+    return () => clearInterval(timer);
   }, [capacitySignature]);
 
   const fetchServers = async () => {
@@ -381,7 +380,7 @@ export default function Page() {
           </div>
         </div>
 
-        <CapacityBar capacity={capacity} servers={servers} />
+        <CapacityBar capacity={capacity} />
 
         <StatusBar
           counts={statusCounts}
