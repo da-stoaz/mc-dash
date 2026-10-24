@@ -1,4 +1,4 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api';
 
 // Event other components (AuthGate) listen for to drop back to the login screen
 // when the session is missing or expired.

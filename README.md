@@ -2,6 +2,10 @@
 
 TypeScript/Express backend and Next.js frontend for managing Minecraft servers from uploaded server packs running in Docker.
 
+Production uses **Docker Compose with one root `.env`**. See [DEPLOY.md](DEPLOY.md)
+for setup and migration from host services. Per-app environment files below are
+for local development only.
+
 ## Features (current)
 - Persist server definitions (server pack file, RAM/CPU caps, render distance, game mode, seed) in SQLite.
 - Endpoints for listing servers, creating entries, uploading packs, and issuing start/stop/restart/logs against Docker containers.
@@ -10,7 +14,7 @@ TypeScript/Express backend and Next.js frontend for managing Minecraft servers f
 - Memory management: one configurable shared Linux RAM limit, elastic JVM heaps, and graceful sleep under RAM pressure (see below).
 - Server console: run Minecraft commands (`/give`, `/tp`, `/kill`, …) against a live server over RCON, with completion for what the server actually has and failures shown as failures (see below).
 
-## Quick start
+## Local development
 Live Usage History includes TPS alongside CPU and memory, sampled every 10 seconds while viewed. It uses `spark tps`, with `forge tps` as a fallback, and displays the last 60 seconds. The backend retains up to 10 minutes in memory. RCON and a supported TPS command are required. The TPS chart is hidden for stopped servers or confirmed unsupported commands. Missing readings appear as gaps; sampling does not start a profiler or generate health reports.
 
 1. Install dependencies from the repository root: `npm run install:all`.
@@ -18,7 +22,7 @@ Live Usage History includes TPS alongside CPU and memory, sampled every 10 secon
    - Backend: copy `backend/.env.example` to `backend/.env` and set Docker connection (socket or `DOCKER_HOST`).
      - Optionally set `MC_SERVER_PORT_MIN`/`MC_SERVER_PORT_MAX` for auto-assigning ports.
      - For wildcard subdomains, set `MC_ROUTER_ENABLED=true` and `MC_ROUTER_DOMAIN=mc.example.com` (see below).
-   - Frontend: copy `frontend/.env.local.example` to `frontend/.env.local` and point `NEXT_PUBLIC_API_BASE_URL` to the backend (default `http://localhost:4000`).
+   - Frontend: copy `frontend/.env.local.example` to `frontend/.env.local`. The browser uses `/api`; the tracked Next.js configuration proxies to `MC_DASH_BACKEND_URL` (default `http://127.0.0.1:4000`).
 3. Run `npm run dev` from the repository root to start both the backend and frontend. Logs are labelled by app; Ctrl+C stops both.
    - To run just one app: `npm run dev:backend` or `npm run dev:frontend`.
 

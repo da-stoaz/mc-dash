@@ -9,12 +9,11 @@ RUN npm ci
 
 COPY . .
 
-# NEXT_PUBLIC_* vars are inlined into the client bundle at build time, so the
-# browser-facing backend URL must be supplied here (not at runtime). Point this
-# at the address browsers will use to reach the backend, e.g.
-# http://<your-lan-ip>:4000
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+# The browser uses /api; Next proxies it to the backend. Both are build inputs.
+ARG NEXT_PUBLIC_API_BASE_URL=/api
+ARG MC_DASH_BACKEND_URL=http://127.0.0.1:4000
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ENV MC_DASH_BACKEND_URL=$MC_DASH_BACKEND_URL
 RUN npm run build
 
 # --- Runtime stage ---
@@ -27,5 +26,5 @@ ENV NODE_ENV=production
 COPY --from=build /app ./
 
 EXPOSE 3000
-# next start binds 0.0.0.0 so it is reachable across the LAN.
+# Compose supplies the production bind address and port.
 CMD ["npm", "run", "start"]

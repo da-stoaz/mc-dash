@@ -57,11 +57,11 @@ The backend needs the host cgroup namespace and read-only cgroup mount to verify
 membership; the supplied Compose file provides these without putting it in the
 Minecraft pool. A systemd-hosted backend already sees host membership.
 
-Shared enforcement defaults to disabled on every platform. After stopping the
-Minecraft servers and installing/verifying the host slice, explicitly set
-`MC_DASH_MEMORY_POOL=true` in the backend deployment environment (the root Compose
-environment for Compose deployments). Restart the app through your normal
-deployment process. Rebuild
+Production Compose enables shared enforcement by default; local npm development
+keeps it disabled by default. After stopping the Minecraft servers and
+installing/verifying the host slice, ensure `MC_DASH_MEMORY_POOL=true` in the
+root `.env`, then recreate the backend with
+`docker compose up -d --wait backend` (a plain restart does not reload `.env`). Rebuild
 each stopped Minecraft server in MC Dash so its Docker container is recreated
 with the correct parent. Worlds are preserved by the existing rebuild workflow.
 Legacy containers are refused on start, not silently accepted outside the pool.

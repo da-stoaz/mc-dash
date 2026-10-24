@@ -1,204 +1,162 @@
-# Deploying MC Dash to a Linux host (Docker Compose)
+# Deploy MC Dash with Docker Compose
 
-This bundles the backend and frontend into two containers. The backend talks to
-the host's Docker to run the actual Minecraft servers as sibling containers.
+Production uses **Docker Compose and one root `.env`**. The backend and Next.js
+frontend are containers. Minecraft containers are managed through the host Docker
+socket. No panel systemd units or production-only source patches are required.
 
-## 1. Get the code onto the server
+The root `package.json` is a development command runner. Backend and frontend have
+separate npm packages and lockfiles. Next.js's tracing and Turbopack roots are
+explicitly `frontend`; the parent lockfile does not select the app root.
 
-```bash
-git clone <your-repo-url> mc-dash      # or scp/rsync the folder over
-cd mc-dash
-```
+## Configuration and requirements
 
-## 2. Find the host's LAN IP
+- Linux host, Docker Engine, and Docker Compose v2 with `up --wait` support.
+- Rootful Docker using the systemd cgroup driver and cgroup v2, with
+  `minecraft.slice` installed for the shared Minecraft RAM ceiling.
+- Root `.env`: the sole production configuration; copy `.env.example` for a fresh install.
+- `backend/.env` and `frontend/.env.local`: local development only. Docker ignores
+  these files when building images. They do not configure the Compose deployment.
+- Existing data stays on the host and is mounted at its **same absolute path**.
+- Host networking allows the existing Minecraft router to reach published local
+  ports. Both panel containers remain outside `minecraft.slice`.
+- Frontend listens on loopback by default for a host reverse proxy or tunnel.
+  Set `MC_DASH_FRONTEND_BIND_HOST=0.0.0.0` for deliberate LAN access.
 
-```bash
-hostname -I        # e.g. 192.168.1.50
-```
+The browser calls `/api`. The tracked `frontend/next.config.ts` forwards these
+requests to the backend. `MC_DASH_BACKEND_PORT` determines both the backend port
+and frontend proxy target. Rebuild the frontend when changing it. Do not copy or
+cherry-pick a host-specific `next.config.ts` onto production.
 
-You'll open the dashboard from another machine, so the frontend and backend must
-be reachable at this IP — not `localhost`.
+Only explicitly listed frontend settings enter its container/build. Backend
+passwords and session secrets stay out of the frontend image. Dockerfiles use
+`npm ci` and the committed lockfiles; host `node_modules` are not used.
 
-## 3. Configure
+## Fresh installation
 
-```bash
+From the checkout:
+
+```sh
 cp .env.example .env
-nano .env
+chmod 600 .env
 ```
 
-Set at minimum:
-- `NEXT_PUBLIC_API_BASE_URL=http://<lan-ip>:4000`
-- `MC_DASH_FRONTEND_ORIGIN=http://<lan-ip>:3000`
-- `MC_DASH_PASSWORD=` something strong
-- `MC_DASH_SESSION_SECRET=` `openssl rand -hex 32`
-- `MC_DASH_DATA_DIR=/opt/mc-dash/data` (absolute path; keep as-is unless you have a reason)
+Edit `.env`: set credentials, browser origin, absolute `DATA_ROOT`, and the
+Minecraft process `MC_CONTAINER_USER` as `uid:gid`. Create the data directory and
+give that user appropriate access. The bind mount refuses to create a missing
+host directory, preventing a typo from silently starting with empty data.
+Use single quotes around values containing `$` or `#` to preserve them literally
+in Compose configuration. Do not publish `.env` or output containing its values.
 
-## 4. Create the data directory
+Install and verify [the Minecraft RAM slice](docs/memory-pool.md#explicit-ubuntu-configuration)
+before starting Minecraft. Keep `MC_DASH_MEMORY_POOL=true`. The panel remains
+usable if verification fails, but Minecraft starts are blocked.
 
-```bash
-sudo mkdir -p /opt/mc-dash/data
-sudo chown "$(id -u)":"$(id -g)" /opt/mc-dash/data   # optional; backend runs as root anyway
+```sh
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait --wait-timeout 120
 ```
 
-## 5. Launch
+## Migrate an existing host-process deployment
 
-Review the [Minecraft pool deployment notes](docs/memory-pool.md) before enabling
-the pending Linux memory feature. Its checked-in systemd unit caps only Minecraft
-containers. The panel/backend stay in their normal service/container groups;
-never assign them to `minecraft.slice`. The Ubuntu runtime and occupied-server
-overload behavior still need validation before treating this as production-ready.
+Keep the Minecraft servers stopped throughout the cutover. Do not move data or
+change its ownership as part of this migration.
 
-The explicit host configuration is a reviewed copy of
-[deploy/systemd/minecraft.slice](deploy/systemd/minecraft.slice); there is no
-installer that rewrites application services. Enforcement defaults to disabled
-on every platform. Set `MC_DASH_MEMORY_POOL=true` explicitly only as part of the
-stopped-container migration in those notes. Existing explicit environment values
-remain effective; changing this default does not disable an already configured pool.
+1. **Record the actual running configuration.** Inspect the old panel units
+   locally: service user, working directory, executable, ports, environment files,
+   inline overrides, and reverse-proxy/tunnel target. Resolve relative `DATA_ROOT`
+   and `SQLITE_PATH` against the backend's current working directory. Confirm the
+   database and server directories exist there. Do not infer them from examples.
+2. **Back up configuration and state.** Save the old units, environment files,
+   deployed commit, and proxy configuration outside the checkout. Stop the old
+   panel services before making a consistent backup of the database (including
+   any SQLite WAL/SHM files) and server data. Keep the old services disabled only
+   after a successful cutover; do not uninstall them yet.
+3. **Create root `.env` from the example and transfer existing settings.** Preserve
+   the password, session secret, router domain/port, Java selection, upload limits,
+   and other backend overrides. Preserve the Minecraft uid:gid. Set `DATA_ROOT`
+   to the existing absolute data directory and `SQLITE_PATH` to the existing
+   database, inside that directory. If the database is outside it, stop here and
+   explicitly add its required same-path bind mount before deploying.
+4. **Preserve the network contract.** Set `MC_DASH_BACKEND_PORT` to the old API port
+   (for example `3301`) and `MC_DASH_FRONTEND_PORT` to the old dashboard port. Keep
+   the public browser origin and proxy/tunnel target unchanged. Set
+   `MC_DASH_MEMORY_POOL=true`. Check the Docker cgroup driver and install/verify
+   `minecraft.slice` using the RAM instructions linked above, while all
+   Minecraft servers remain stopped. Preserve an existing slice's chosen limit.
+5. **Build and start from the merged repository source.** Run the fresh-install
+   Compose commands above. Do not run the host npm services at the same time:
+   they would compete for the same ports and database.
+6. **Check before starting Minecraft.** Both containers must be healthy. Through
+   the existing dashboard URL, verify login, server list, snapshots, and data
+   paths. The frontend healthcheck also exercises `/api/health` through the actual
+   proxy. Verify the RAM pool is enforced and the panel is outside it. Rebuild
+   stopped Minecraft containers into the pool using the RAM migration guide.
+   Start one server, verify its slice membership, files/ownership and router
+   connection, then check a clean save and stop before starting the others.
+7. **Finish the cutover.** Disable the old panel services so they cannot return on
+   reboot. Archive old per-app runtime environment files outside the checkout;
+   keep root `.env` as the sole production source. Retain backups for rollback.
 
-```bash
-docker compose up -d --build
+### Rollback
+
+Stop the Compose panel containers with `docker compose down` (never delete data
+or volumes). Restore the saved application version/configuration and matching
+backend database backup if necessary, then start the old panel services. Never
+run both backends against the same database. Do not restore old world backups
+over newer player progress without explicitly choosing that recovery point.
+
+## Updates after migration
+
+```sh
+git pull --ff-only
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait --wait-timeout 120
 ```
 
-- Dashboard: `http://<lan-ip>:3000`
-- API health check: `http://<lan-ip>:4000/health`
+Back up state before upgrades that change storage. Root `.env` and host data are
+not replaced by a Git update. A failed build leaves the existing containers alone.
+Changing runtime settings requires container recreation (`up -d`), not merely
+`restart`. The browser API path is always `/api`; no per-host source edits are needed.
 
-Update later with:
+## Shared Minecraft RAM limit
 
-```bash
-git pull && docker compose up -d --build
+The shared ceiling requires `minecraft.slice` and `MC_DASH_MEMORY_POOL=true`.
+Both are part of this production upgrade. Follow
+[the RAM migration instructions](docs/memory-pool.md) while Minecraft servers
+are stopped. The slice groups only Minecraft workloads; the dashboard containers
+remain outside it. Setting the flag to false explicitly disables enforcement and
+is not a completed RAM-management deployment. Ubuntu/systemd and real-world
+save/recovery validation remains outstanding; the local container tests do not
+provide that evidence.
+
+## Public access
+
+Keep the API bound to loopback (enforced by Compose). Put the dashboard behind
+an authenticated reverse proxy/tunnel. With a host proxy, keep the frontend on
+loopback too; a containerized proxy needs intentional host-network routing.
+Use the same public origin for the UI and API. Preserve existing `/api` routing
+if the host proxy already provides it, or forward all requests to the frontend's
+tracked proxy. Set `MC_DASH_FRONTEND_ORIGIN` to the browser's actual origin.
+
+For plain HTTP LAN use, set the origin to the LAN URL, frontend bind to `0.0.0.0`,
+and `MC_DASH_COOKIE_SECURE=false`. For HTTPS use `MC_DASH_COOKIE_SECURE=true`.
+
+## Verify deployment changes locally
+
+```sh
+npm run test:deployment
+npm --prefix frontend run test:config
+docker build -t mc-dash-backend:deployment-check backend
+docker build -t mc-dash-frontend:deployment-check --build-arg MC_DASH_BACKEND_URL=http://127.0.0.1:3301 frontend
+npm run test:deployment:runtime
 ```
 
-## Why it's wired this way
-
-- **Docker socket mount** (`/var/run/docker.sock`): the backend uses the host's
-  Docker engine to create the per-server containers — no docker-in-docker.
-- **Identical data path** (`/opt/mc-dash/data` on host *and* in the container):
-  the backend bind-mounts each server's folder into its Minecraft container.
-  Docker resolves bind-mount source paths on the **host**, so the path the
-  backend writes to must equal the host path. Mismatching this is the classic
-  "server pack uploaded but the container starts empty" bug.
-- **Host networking on the backend**: lets the optional handshake router reach
-  servers on `127.0.0.1:<port>` and publishes server ports directly on the host.
-
-## Exposing it to the internet
-
-Know what you are exposing: the backend talks to the host's Docker socket and
-runs uploaded server packs. Someone who gets past the login does not "restart a
-Minecraft server", they run code on the host. Gate it accordingly.
-
-**1. Put an identity proxy in front (Cloudflare Access, or equivalent).** The
-shared password is one guessable secret with no MFA and no per-person
-revocation. Cloudflare Access sits in front of the tunnel, authenticates against
-a real IdP (Google / GitHub / email OTP), and drops everything else before it
-ever reaches Express. Free for up to 50 users, and it is the whole "who is
-allowed in" problem solved without a users table.
-
-**2. Serve the UI and API from one hostname.** MC Dash is a browser app on :3000
-calling an API on :4000. Give each its own public hostname and Access will
-302 the API's XHRs to a login page that CORS then blocks — the app appears to
-hang at "Could not reach the server". Put a small reverse proxy (Caddy/nginx) on
-the host instead, route `/api/*` to :4000 with the prefix stripped and
-everything else to :3000, and point the tunnel at the proxy. Then set
-`NEXT_PUBLIC_API_BASE_URL=/api` and rebuild the frontend.
-
-**3. Mind the request body limit.** Cloudflare caps request bodies at 100 MB on
-Free and Pro (200 MB on Business); nginx defaults to 1 MB. Server packs pass
-100 MB routinely. The failure is often silent rather than loud: the proxy stops
-reading the socket while the connection stays open, so the browser's progress bar
-parks a few megabytes in and no error ever reaches the page.
-
-Note this is a limit on the *request* body only — responses are unrestricted,
-which is why a multi-gigabyte snapshot downloads fine from the same host that
-refuses a 200 MB upload.
-
-MC Dash handles this by never sending a big file as one request: the browser
-slices it and the backend reassembles the slices on disk. Slices start at 8 MB
-and grow with the file (aiming for ~200 requests whatever its size), never
-exceeding `MC_DASH_UPLOAD_CHUNK_MAX_MB` — 64 MB, comfortably under the 100 MB
-ceiling. Nothing to configure, but if you impose your own limit anywhere in the
-chain, keep it above that. If you front MC Dash with nginx, set
-`client_max_body_size` generously anyway so the single-request path still works
-for small files and for curl.
-
-**4. Close the back door.** The tunnel is pointless if :3000/:4000 are also
-reachable directly.
-
-```bash
-MC_DASH_BIND_HOST=127.0.0.1     # backend binds loopback only
-MC_DASH_TRUST_PROXY=loopback    # real client IP from X-Forwarded-For
-MC_DASH_COOKIE_SECURE=true      # you are on HTTPS now
-MC_DASH_FRONTEND_ORIGIN=https://<your-hostname>
-```
-
-Bind the frontend to loopback too (`next start -H 127.0.0.1`) and verify from
-another machine that `http://<host-ip>:3000` and `:4000` both refuse. Note the
-ordering: set `MC_DASH_TRUST_PROXY` **only** once the port is unreachable
-directly, otherwise anyone can forge `X-Forwarded-For` and walk past the login
-throttle.
-
-**5. Know the revocation story.** Sessions are stateless signed cookies with a
-7-day TTL. Changing `MC_DASH_PASSWORD` does **not** log anyone out — rotating
-`MC_DASH_SESSION_SECRET` (and restarting) is what kills every live session.
-
-## Troubleshooting
-
-- **Dashboard loads but every action says "can't reach backend"**: the baked-in
-  `NEXT_PUBLIC_API_BASE_URL` is wrong. It's set at *build* time — after changing
-  `.env` you must rebuild: `docker compose up -d --build`.
-- **Login seems to work then immediately logs out**: cookie was dropped. Ensure
-  `MC_DASH_COOKIE_SECURE=false` when serving over plain HTTP, and that
-  `MC_DASH_FRONTEND_ORIGIN` exactly matches the URL in your browser bar.
-- **Upload freezes at a low percentage and never errors**: something between the
-  browser and MC Dash is refusing the request body and has stopped reading the
-  socket, so the browser sits on a connection that is open but going nowhere. On
-  Cloudflare that is the 100 MB plan limit; on nginx it is `client_max_body_size`,
-  which defaults to a mere 1 MB. Check what the proxy saw:
-
-  ```bash
-  sudo tail -f /var/log/nginx/error.log     # nginx
-  journalctl -u cloudflared -f              # Cloudflare Tunnel
-  ```
-
-  Uploads are chunked at `MC_DASH_UPLOAD_CHUNK_MB` (8 MB) precisely so no request
-  is large enough to hit these limits — if you are still seeing this, something in
-  the chain is capping bodies below that, or you are on a build from before
-  chunking landed.
-- **Server pack uploads but the Minecraft container won't start / is empty**:
-  `MC_DASH_DATA_DIR` is not mounted to the same absolute path inside the
-  backend container. Keep the `volumes:` entry as `${DIR}:${DIR}`.
-- **Permission denied on the Docker socket**: the backend container runs as
-  root, which can read the socket. If you changed it to a non-root user, add the
-  host's `docker` group GID.
-- **Snapshot fails with `EACCES: permission denied, open '.../world/level.dat'`**:
-  the server's world files are owned by a different user than the one running
-  MC Dash. Minecraft containers now run as the same user as the backend
-  (`MC_CONTAINER_USER`, defaulting to the backend's own uid:gid), so *new*
-  servers avoid this. For a server created before this fix, chown its files once
-  while it's stopped, then start it again:
-
-  ```bash
-  sudo chown -R "$(id -u)":"$(id -g)" /opt/mc-dash/data   # or your MC_DASH_DATA_DIR
-  ```
-
-  Both steps matter: the chown fixes the files that already exist, and the next
-  **Start** rebuilds that server's container so it runs as the MC Dash user from
-  then on. Without the rebuild the still-root container would re-own the world on
-  its next save and the error would come back — so a plain restart now performs
-  that rebuild automatically when it detects the mismatch.
-
-- **Server exits immediately and the pack log says the modloader "is not
-  available" for your Minecraft version**: usually a lie. Server pack start
-  scripts fetch the modloader jar with `curl`/`wget`, bare JRE images ship with
-  neither, and a failed download looks identical to "not available". MC Dash
-  handles this by building a derived image (`mc-dash/java:<base>`) that adds
-  curl on top of the resolved Java image — at *build* time, since containers
-  run unprivileged and can no longer install packages at runtime. If that build
-  can't run, MC Dash now fails with the real reason instead of letting the pack
-  mislead you. Point the server's Java image at a base that already includes
-  curl, or give the Docker daemon access to your package mirrors.
-
-  Don't reach for `MC_CONTAINER_USER=root` to fix this — it would make the
-  runtime install work again at the cost of root-owned world files, i.e. the
-  snapshot breakage above. Reserve it for packs that genuinely need root *inside*
-  the container for their own reasons, and then run MC Dash as root too (e.g. the
-  compose stack) so it can still read the files back for snapshots.
+The runtime check requires Compose 2.24.4+ and starts disposable containers with
+temporary data and no Docker socket. It checks UI delivery, the real `/api` proxy,
+login with a special-character password, session cookies, database access, and
+an intact 64 MiB upload chunk. Next's proxy body limit accommodates the backend's
+maximum supported chunk size (90 MiB plus 1 MiB slack).
+It uses a shared container network namespace for Docker Desktop compatibility;
+it does not validate Linux host networking or the Minecraft memory slice.
