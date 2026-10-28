@@ -18,6 +18,21 @@ rewrite. The application reads the installed `memory.max` as the source of truth
 There is no `MC_DASH_MEMORY_LIMIT_MB` setting to keep in sync. Existing per-server
 maximums are ceilings, not reservations against the whole pool.
 
+The dashboard's **RAM limit (MiB)** is the total per-container Docker limit.
+Java heap and native overhead fit inside it: 10,000 MiB sets Docker's limit to
+10,000 MiB and, with default overhead settings, permits a maximum Java heap of
+8,696 MiB. The initial heap is clamped to this heap budget. This allowance is an
+estimate; native memory can still exhaust a container even when its heap fits.
+
+Existing records migrate once from the old heap-based maximum to their previous
+total container ceiling. For example, an old 8,192 MiB heap setting becomes a
+9,421 MiB RAM limit, retaining the same heap budget and learned startup demand.
+The migration does not change running Docker containers or their files. Changes
+to a server's RAM settings still require a restart to apply Java heap changes;
+Docker limit reductions are deferred until the container stops. Back up the
+database before upgrading; a rollback to the old code needs its matching database
+backup because the meaning of the stored maximum has changed.
+
 ## Status of this implementation
 
 See the [2026-10-23 implementation audit](memory-management-audit.md) for confirmed

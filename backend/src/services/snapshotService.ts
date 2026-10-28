@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs/promises';
+import { prepareServerFiles } from './serverFiles';
 import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -155,6 +156,7 @@ export async function restoreSnapshot(
   if (!(await pathExists(archivePath))) {
     throw new Error('Snapshot archive is missing on disk');
   }
+  await validateSnapshot(archivePath, serverRootDir(server.id));
 
   // Safety net first, so a restore can itself be undone.
   const safetySnapshot = await createSnapshot(server, {
@@ -164,13 +166,15 @@ export async function restoreSnapshot(
 
   const root = serverRootDir(server.id);
   const entries = await fs.readdir(root);
+  await prepareServerFiles(server.id, false);
   await Promise.all(
     entries
       .filter((entry) => entry !== SNAPSHOTS_DIRNAME)
       .map((entry) => fs.rm(path.join(root, entry), { recursive: true, force: true }))
   );
 
-  await tar.extract({ file: archivePath, cwd: root });
+  await extractSnapshot(archivePath, root);
+  await prepareServerFiles(server.id);
   logger.info({ serverId: server.id, snapshotId, safetySnapshotId: safetySnapshot.id }, 'Restored snapshot');
   return { restored: record, safetySnapshot };
 }
@@ -186,16 +190,36 @@ export async function restoreSnapshot(
  */
 export async function importSnapshotArchive(serverId: string, archivePath: string): Promise<void> {
   const root = serverRootDir(serverId);
+  await prepareServerFiles(serverId, false);
   await fs.mkdir(root, { recursive: true });
 
   // `tar` strips absolute paths and `..` segments on extract, so a malicious
   // archive can't escape the server root.
-  await tar.extract({ file: archivePath, cwd: root });
+  await extractSnapshot(archivePath, root);
 
   const packDir = path.join(root, 'pack');
   if (!(await pathExists(packDir))) {
     throw new Error('That archive is not a valid MC Dash server snapshot (no pack/ directory inside).');
   }
+  await prepareServerFiles(serverId);
+}
+
+async function validateSnapshot(file: string, root: string): Promise<void> {
+  let unsafe: string | undefined;
+  await tar.list({ file, onReadEntry: entry => {
+    const relative = path.relative(root, path.resolve(root, entry.path));
+    if (path.isAbsolute(entry.path) || relative === '..' || relative.startsWith('..' + path.sep) ||
+        relative.split(path.sep)[0] === SNAPSHOTS_DIRNAME ||
+        !['File', 'Directory', 'OldFile', 'ContiguousFile'].includes(entry.type)) {
+      unsafe = entry.path;
+    }
+  } });
+  if (unsafe !== undefined) throw new Error(`Unsafe snapshot entry: ${unsafe}`);
+}
+
+async function extractSnapshot(file: string, root: string): Promise<void> {
+  await validateSnapshot(file, root);
+  await tar.extract({ file, cwd: root, preserveOwner: false });
 }
 
 export async function deleteSnapshot(server: ServerRecord, snapshotId: string): Promise<boolean> {

@@ -36,7 +36,7 @@ import {
 
 const resourceSchema = z.object({
   minRamMb: z.number().int().positive(),
-  maxRamMb: z.number().int().positive(),
+  maxRamMb: z.number().int().min(512),
   cpuLimit: z.number().positive().optional(),
 });
 
@@ -84,7 +84,7 @@ const createServerSchema = z.object({
   javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
   serverPort: portSchema.optional(),
   minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
-  maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  maxRamMb: z.preprocess(parseNumber, z.number().int().min(512)),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
   renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
   entityBroadcastRangePercentage: z.preprocess(parseNumber, z.number().int().min(10).max(1000)).optional(),
@@ -106,7 +106,7 @@ const importServerSchema = z.object({
   javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
   serverPort: portSchema.optional(),
   minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
-  maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  maxRamMb: z.preprocess(parseNumber, z.number().int().min(512)),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
 });
 
@@ -868,17 +868,13 @@ router.post('/:id/start', lifecycle(async (req, res) => {
     // Migrate a legacy container that still runs as root (created before the
     // container-user fix) before starting it, so it stops writing root-owned
     // files the non-root backend can't read back for snapshots. Recreating from
-    // the prepared pack is the canonical rebuild and stamps the correct User; if
-    // it fails we fall back to starting the existing container unchanged.
+    // the prepared pack is the canonical rebuild and stamps the correct User.
+    // A failed migration must not start the old container with the wrong user.
     let toStart = server;
     if (await dockerService.needsUserMigration(server)) {
-      try {
-        const { containerId } = await recreateContainer(server);
-        toStart = serverStore.update(server.id, { containerId }) ?? server;
-        logger.info({ serverId: server.id }, 'Recreated container to run as the MC Dash user before start');
-      } catch (err) {
-        logger.warn({ err, serverId: server.id }, 'Could not recreate container as the MC Dash user; starting the existing one');
-      }
+      const { containerId } = await recreateContainer(server);
+      toStart = serverStore.update(server.id, { containerId }) ?? server;
+      logger.info({ serverId: server.id }, 'Recreated container to run as the MC Dash user before start');
     }
 
     // A hibernated server has MC Dash sitting on its port so it can wake on

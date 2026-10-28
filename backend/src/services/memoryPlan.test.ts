@@ -15,11 +15,21 @@ const { memoryHostConfig, isSwapLimitUnsupported } = require('./dockerService');
 
 const MB = 1024 * 1024;
 
-test('the cgroup cap sits above -Xmx, or the kernel kills the JVM as the heap fills', () => {
+test('10000 MiB is the actual limit, not 11500 MiB', () => {
+  const resources = { minRamMb: 1024, maxRamMb: 10000 };
+  const plan = containerMemoryPlan(resources);
+  assert.equal(memoryHostConfig(resources).Memory, 10000 * MB);
+  assert.equal(plan.heapMaxMb, 8696);
+  assert.equal(plan.capMb, 10000);
+  const { requireStartRoom } = require('./memoryPool');
+  assert.doesNotThrow(() => requireStartRoom({ enabled: true, enforced: true, limitMb: 12000, usedMb: 0 }, plan.floorMb, 0));
+});
+
+test('the user limit is the Docker cap, with Java overhead inside it', () => {
   const plan = containerMemoryPlan({ minRamMb: 1024, maxRamMb: 8192 });
-  assert.ok(plan.capMb > 8192, 'cap must leave room for metaspace, stacks and GC structures');
-  // 15% of 8 GB, the configured default.
-  assert.equal(plan.capMb, 8192 + 1229);
+  assert.equal(plan.capMb, 8192);
+  assert.equal(plan.heapMaxMb, 7123);
+  assert.ok(plan.heapMaxMb + jvmOverheadMb(plan.heapMaxMb) <= plan.capMb);
 });
 
 test('small heaps get a flat overhead floor, not a useless percentage', () => {
@@ -30,13 +40,14 @@ test('small heaps get a flat overhead floor, not a useless percentage', () => {
 
 test('the soft floor tracks minRamMb — the footprint an idle server should fall to', () => {
   const plan = containerMemoryPlan({ minRamMb: 1024, maxRamMb: 8192 });
-  assert.equal(plan.floorMb, 1024 + 1229);
+  assert.equal(plan.floorMb, 1024 + jvmOverheadMb(plan.heapMaxMb));
   assert.ok(plan.floorMb < plan.capMb);
 });
 
 test('no configured max means no plan; we leave the container unlimited', () => {
   assert.equal(containerMemoryPlan(undefined), null);
   assert.equal(containerMemoryPlan({ minRamMb: 1024, maxRamMb: 0 }), null);
+  assert.equal(containerMemoryPlan({ maxRamMb: 1e100 }), null);
 });
 
 test('swap off means MemorySwap equals Memory — the container cannot page at all', () => {
@@ -60,7 +71,7 @@ test('swap host leaves the daemon default alone', () => {
 test('the reservation is always a soft limit below the hard one', () => {
   const limits = memoryHostConfig({ minRamMb: 2048, maxRamMb: 4096 }, 'off');
   assert.ok(limits.MemoryReservation < limits.Memory);
-  assert.equal(limits.Memory, (4096 + 614) * MB);
+  assert.equal(limits.Memory, 4096 * MB);
 });
 
 test('a min equal to the max still leaves the reservation valid', () => {

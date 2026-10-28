@@ -61,3 +61,13 @@ test('a corrupt archive throws instead of silently extracting nothing', async ()
 
   await assert.rejects(() => ensureZipExtracted(bogus, path.join(TMP, 'bogus-out')));
 });
+
+test('zip symlinks are rejected before any files are extracted', async () => {
+  const zip = new AdmZip();
+  zip.addFile('config/link', Buffer.from('/etc/passwd'));
+  zip.getEntry('config/link').header.attr = (0o120777 << 16) >>> 0;
+  const archive = path.join(TMP, 'links.zip');
+  zip.writeZip(archive);
+  await assert.rejects(ensureZipExtracted(archive, path.join(TMP, 'unsafe')), /Unsafe archive entry/);
+  assert.equal(fs.existsSync(path.join(TMP, 'unsafe/config/link')), false);
+});

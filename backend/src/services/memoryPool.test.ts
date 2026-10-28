@@ -349,7 +349,7 @@ test('RAM reductions preserve the running cap and apply after exit', async () =>
   await service.updateResources(server);
   assert.equal(updates[0].Memory,undefined); assert.equal(updates[0].NanoCPUs,2000000000);
   running=false; await service.updateResources(server);
-  assert.ok(updates[1].Memory>2048*1024**2); assert.ok(updates[1].Memory<8192*1024**2);
+  assert.equal(updates[1].Memory,2048*1024**2);
 });
 
 test('start rejects growth during the asynchronous Docker audit', async () => {
@@ -510,13 +510,13 @@ test('runtime heap inspection handles Docker framing, missing tools and restarts
   const service=new DockerService();let exitCode=0, inspections=0, restart=false, commands:any[]=[];
   const flags='1:\n-XX:InitialHeapSize=536870912 -XX:MaxHeapSize=2147483648\n';
   service.docker={getContainer:()=>({
-    inspect:async()=>({State:{Running:true,StartedAt:restart&&++inspections>2?'new':'original'},HostConfig:{Memory:2560*MB}}),
+    inspect:async()=>({State:{Running:true,StartedAt:restart&&++inspections>2?'new':'original'},HostConfig:{Memory:2355*MB}}),
     exec:async(options:any)=>{commands.push(options);return {
       start:async()=>{const stream=new PassThrough();setImmediate(()=>{
         const bytes=Buffer.from(flags),header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(bytes.length,4);stream.end(Buffer.concat([header,bytes]));
       });return stream;},inspect:async()=>({ExitCode:exitCode,Running:false})};},
   })};
-  const server:any={id:'inspect',containerId:'inspect',resources:{minRamMb:512,maxRamMb:2048}};
+  const server:any={id:'inspect',containerId:'inspect',resources:{minRamMb:512,maxRamMb:2355}};
   assert.equal((await service.inspectJvmMemory(server)).status,'verified');
   assert.deepEqual(commands[0].Cmd.slice(0,2),['sh','-c']);assert.equal(commands[0].Privileged,undefined);
   exitCode=42;assert.equal((await service.inspectJvmMemory(server)).status,'unverified');

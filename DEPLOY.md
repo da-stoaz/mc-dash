@@ -108,6 +108,18 @@ over newer player progress without explicitly choosing that recovery point.
 
 ## Updates after migration
 
+The total-container-RAM update migrates stored limits while preserving existing
+ceilings. Back up SQLite before upgrading; rolling back to the previous heap-based
+version requires restoring the matching database backup. See
+[RAM settings and migration](docs/memory-pool.md).
+
+The backend now assigns managed working files to `MC_CONTAINER_USER` after pack
+preparation/restoration and before Minecraft starts. Keep numeric `uid:gid` in
+`.env`. Existing root-owned working files are repaired on the next stopped start;
+no rebuild or archive re-extraction is required solely to fix ownership. Linked
+or special files fail with an explicit error rather than being followed outside
+the server tree. Snapshot archives retain backend ownership.
+
 ```sh
 git pull --ff-only
 docker compose config --quiet

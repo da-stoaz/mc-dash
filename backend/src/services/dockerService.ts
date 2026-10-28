@@ -8,6 +8,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ResourceConfig, ServerRecord, ServerStatus } from '../types';
 import { containerMemoryPlan } from './memoryPlan';
+import { prepareServerFiles } from './serverFiles';
 import { POOL_SLICE, readMemoryPool, requireMemoryPool, requireStartRoom, startupReservations } from './memoryPool';
 import { UserFacingError } from '../apiErrors';
 import { serverStore } from '../serverStore';
@@ -35,10 +36,8 @@ export type MemoryHostConfig = {
  *
  * Three knobs, doing three different jobs:
  *
- *   Memory            hard ceiling. Sized at heap + JVM overhead, not at heap,
- *                     because everything a JVM allocates outside -Xmx still
- *                     counts against the cgroup. Capping at exactly -Xmx means
- *                     the kernel kills the server precisely when the heap fills.
+ *   Memory            the total RAM limit entered by the user. JVM heap and
+ *                     overhead both fit inside this ceiling.
  *
  *   MemoryReservation soft limit, set to the *idle* footprint. It reserves
  *                     nothing; it tells the kernel which containers to reclaim
@@ -630,6 +629,9 @@ export class DockerService {
         startupReservations.reserve(server.id, request);
       }
       try {
+        // Includes automatic router/hibernation wakes, not just the HTTP start
+        // route. Never start a JVM with inaccessible backend-created files.
+        await prepareServerFiles(server.id);
         await container.start();
         return container.id;
       } catch (err) {

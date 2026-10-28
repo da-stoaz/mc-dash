@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { config } from './config';
 import { db } from './db';
+import { migrateMemoryLimits } from './services/memoryLimitMigration';
 import { GameConfig, ResourceConfig, ServerCreateInput, ServerRecord, ServerStatus, ServerUpdateInput, SnapshotCreateInput, SnapshotRecord } from './types';
 
 db.prepare(
@@ -105,6 +106,8 @@ db.prepare(
     createdAt TEXT NOT NULL
   )`
 ).run();
+
+migrateMemoryLimits(db);
 
 type ServerRow = {
   id: string;

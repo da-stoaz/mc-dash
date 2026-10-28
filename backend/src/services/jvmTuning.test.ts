@@ -96,12 +96,13 @@ test('managed flags are matched on both polarities', () => {
 });
 
 test('-Xms above -Xmx is clamped rather than passed on — the JVM would refuse to boot', () => {
-  assert.deepEqual(heapPlan({ minRamMb: 8192, maxRamMb: 4096 }), { minMb: 4096, maxMb: 4096 });
+  assert.deepEqual(heapPlan({ minRamMb: 8192, maxRamMb: 4096 }), { minMb: 3562, maxMb: 3562 });
 });
 
 test('a missing min gets a small floor, so the heap has room to shrink into', () => {
-  assert.deepEqual(heapPlan({ maxRamMb: 8192 }), { minMb: 512, maxMb: 8192 });
-  assert.deepEqual(heapPlan({ maxRamMb: 256 }), { minMb: 256, maxMb: 256 });
+  assert.deepEqual(heapPlan({ maxRamMb: 8192 }), { minMb: 512, maxMb: 7123 });
+  assert.deepEqual(heapPlan({ maxRamMb: 512 }), { minMb: 256, maxMb: 256 });
+  assert.equal(heapPlan({ maxRamMb: 256 }), null);
 });
 
 test('no max means no plan — we do not invent a ceiling', () => {

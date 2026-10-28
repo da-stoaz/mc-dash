@@ -13,7 +13,7 @@ export function QuickSettingsCard({ server, onEdit }: QuickSettingsCardProps) {
     { label: 'Difficulty', value: server.game.difficulty ?? 'normal', capitalize: true },
     { label: 'Render distance', value: `${server.game.renderDistance ?? 10} chunks` },
     { label: 'Entity broadcast range', value: server.game.entityBroadcastRangePercentage != null ? `${server.game.entityBroadcastRangePercentage}%` : 'Server default' },
-    { label: 'Max RAM', value: `${server.resources.maxRamMb} MB` },
+    { label: 'RAM limit', value: `${server.resources.maxRamMb} MiB` },
     { label: 'CPU cap', value: server.resources.cpuLimit ? `${server.resources.cpuLimit} cores` : 'Unlimited' },
     { label: 'Port', value: String(server.serverPort) },
     { label: 'Seed', value: server.game.seed || 'Random' },
