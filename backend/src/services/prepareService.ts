@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs/promises';
-import AdmZip from 'adm-zip';
+import { Worker } from 'worker_threads';
 import { config } from '../config';
 import { logger } from '../logger';
 import { ServerRecord } from '../types';
@@ -10,9 +10,7 @@ import { formatDifficulty, usesNumericFormat } from './difficulty';
 import fsSync from 'fs';
 import crypto from 'crypto';
 import { ensureModDependencies } from './modDependencyService';
-import { prepareServerFiles, writeServerFile } from './serverFiles';
-
-const PRESERVE_DIRS = ['world', 'world_nether', 'world_the_end'];
+import { prepareServerFiles, writeServerFile, assertNoInterruptedRebuild } from './serverFiles';
 
 async function pathExists(p: string) {
   try {
@@ -25,27 +23,6 @@ async function pathExists(p: string) {
 
 async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
-}
-
-async function cleanPackDir(packDir: string) {
-  await ensureDir(packDir);
-  const entries = await fs.readdir(packDir, { withFileTypes: true });
-  const preserved: { name: string; tempPath: string }[] = [];
-
-  for (const entry of entries) {
-    const fullPath = path.join(packDir, entry.name);
-    if (entry.isDirectory() && PRESERVE_DIRS.includes(entry.name)) {
-      const tempPath = path.join(packDir, `__preserve_${entry.name}`);
-      await fs.rename(fullPath, tempPath);
-      preserved.push({ name: entry.name, tempPath });
-      continue;
-    }
-    await fs.rm(fullPath, { recursive: true, force: true });
-  }
-
-  for (const preservedEntry of preserved) {
-    await fs.rename(preservedEntry.tempPath, path.join(packDir, preservedEntry.name));
-  }
 }
 
 async function detectWorkingDir(packDir: string): Promise<string> {
@@ -220,19 +197,11 @@ export function buildStartCommand(scriptName: string): string {
   return `exec bash './${safeName}'`;
 }
 
-async function buildContainerFromPack(
+async function preparePackRuntime(
   server: ServerRecord,
-  serverRoot: string,
   workingDir: string,
   varsResult: { recommendedJavaVersion?: string }
-): Promise<{
-  containerId: string;
-  script: string;
-  image: string;
-  javaSource: 'override' | 'env' | 'pack' | 'default';
-  packRecommendedJava?: string;
-  packRecommendedJavaMajor?: number;
-}> {
+) {
   const scriptPath = await ensureStartScript(workingDir, server);
   if (!scriptPath) {
     throw new Error('Could not find a start script or server.jar inside the server pack');
@@ -241,7 +210,6 @@ async function buildContainerFromPack(
 
   const scriptDir = path.dirname(scriptPath);
   await ensureModDependencies(scriptDir);
-  const containerWorkdir = toPosix(path.join('/server', path.relative(serverRoot, scriptDir)));
   const cmd = ['bash', '-c', buildStartCommand(path.basename(scriptPath))];
 
   const nanoCpus = server.resources?.cpuLimit ? Math.round(server.resources.cpuLimit * 1_000_000_000) : undefined;
@@ -255,25 +223,87 @@ async function buildContainerFromPack(
   // is the Java runtime the user chose, and the downloader layer is plumbing.
   const runtimeImage = await dockerService.ensureRunnableImage(image);
 
-  await prepareServerFiles(server.id);
-
-  const containerId = await dockerService.createOrReplaceContainer(server, {
-    image: runtimeImage,
-    hostServerDir: serverRoot,
-    workdir: containerWorkdir,
-    cmd,
-    port: server.serverPort ?? config.serverPort,
-    nanoCpus,
-  });
-
   return {
-    containerId,
     script: scriptPath,
     image,
+    runtimeImage,
+    cmd,
+    nanoCpus,
     javaSource: javaResolution.source,
     packRecommendedJava,
     packRecommendedJavaMajor: javaResolution.recommendedMajor,
   };
+}
+
+async function createPreparedContainer(server: ServerRecord, serverRoot: string,
+  runtime: Awaited<ReturnType<typeof preparePackRuntime>>) {
+  await prepareServerFiles(server.id);
+  const containerId = await dockerService.createOrReplaceContainer(server, {
+    image: runtime.runtimeImage,
+    hostServerDir: serverRoot,
+    workdir: toPosix(path.join('/server', path.relative(serverRoot, path.dirname(runtime.script)))),
+    cmd: runtime.cmd,
+    port: server.serverPort ?? config.serverPort,
+    nanoCpus: runtime.nanoCpus,
+  });
+  const { runtimeImage, cmd, nanoCpus, ...result } = runtime;
+  return { ...result, containerId };
+}
+
+async function buildContainerFromPack(server: ServerRecord, serverRoot: string,
+  workingDir: string, varsResult: { recommendedJavaVersion?: string }) {
+  return createPreparedContainer(server, serverRoot,
+    await preparePackRuntime(server, workingDir, varsResult));
+}
+
+/** Copy saves into the replacement, leaving the complete old installation intact
+ * until preparation succeeds. Reflinks are used where supported; a full disk
+ * fails the rebuild without deleting the old world.
+ */
+async function preserveWorlds(oldPack: string, newPack: string, newWorkingDir: string) {
+  if (!(await pathExists(oldPack))) return;
+  const oldDetected = await detectWorkingDir(oldPack);
+  const oldScript = await findStartScript(oldDetected);
+  const oldWorkingDir = oldScript ? path.dirname(oldScript) : oldDetected;
+  const props = await readServerProperties(oldWorkingDir);
+  const levelName = props['level-name'] || 'world';
+  // Do not guess Java-properties escapes or allow a world outside the pack.
+  if (levelName.includes('\\') || path.isAbsolute(levelName) || levelName.split('/').some(p => p === '..' || !p)) {
+    throw new Error('Cannot safely preserve this level-name. Use a world path inside the server pack without property escapes.');
+  }
+  const worlds = new Set<string>();
+  for (const name of [levelName, `${levelName}_nether`, `${levelName}_the_end`]) {
+    const candidate = path.join(oldWorkingDir, name);
+    if (await pathExists(candidate)) worlds.add(candidate);
+  }
+  // Include plugin/multiworld saves and old worlds beyond the configured name.
+  async function scan(dir: string) {
+    if (worlds.has(dir) || await pathExists(path.join(dir, 'level.dat')) || await pathExists(path.join(dir, 'level.dat_old'))) {
+      worlds.add(dir); return;
+    }
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) await scan(path.join(dir, entry.name));
+    }
+  }
+  await scan(oldPack);
+  for (const source of worlds) {
+    const relative = path.relative(oldWorkingDir, source);
+    const target = relative.startsWith('..' + path.sep) || relative === '..'
+      ? path.join(newPack, path.relative(oldPack, source))
+      : path.join(newWorkingDir, relative);
+    if (source === oldPack || source === oldWorkingDir || target === newPack || target === newWorkingDir) {
+      throw new Error('World layout overlaps the pack working directory; rebuild cancelled to protect saved data.');
+    }
+    await fs.rm(target, { recursive: true, force: true });
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.cp(source, target, { recursive: true, mode: fsSync.constants.COPYFILE_FICLONE });
+  }
+  // Keep Minecraft pointed at the preserved custom world even if the new ZIP
+  // supplies a different level-name (or omits it).
+  const next = await readServerProperties(newWorkingDir);
+  next['level-name'] = levelName;
+  await writeServerFile(path.join(newWorkingDir, 'server.properties'),
+    Object.entries(next).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');
 }
 
 async function applyVariablesTxt(workingDir: string, server: ServerRecord): Promise<{ recommendedJavaVersion?: string }> {
@@ -637,15 +667,13 @@ async function applyAccessLists(workingDir: string, server: ServerRecord) {
 // instance whose dashboard has more than one user. Exported for tests: adm-zip
 // is the only dependency here whose API could shift under a major bump.
 export async function ensureZipExtracted(zipPath: string, packDir: string): Promise<string> {
-  const zip = new AdmZip(zipPath);
-  for (const entry of zip.getEntries()) {
-    const relative = path.relative(path.resolve(packDir), path.resolve(packDir, entry.entryName));
-    if (relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative) ||
-        ((entry.header.attr >>> 16) & 0o170000) === 0o120000) {
-      throw new Error(`Unsafe archive entry: ${entry.entryName}`);
-    }
-  }
-  zip.extractAllTo(packDir, true);
+  await new Promise<void>((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'zipExtractionWorker.cjs'), {
+      workerData: { zipPath, packDir }, execArgv: [],
+    });
+    worker.once('error', reject);
+    worker.once('exit', code => code === 0 ? resolve() : reject(new Error(`ZIP extraction worker exited with code ${code}`)));
+  });
   return packDir;
 }
 
@@ -754,20 +782,45 @@ export async function prepareServer(server: ServerRecord): Promise<{
   await prepareServerFiles(server.id, false);
   await ensureDir(serverRoot);
   await ensureDir(downloadsDir);
-  await ensureDir(packDir);
-
   const zipPath = await getServerPackArchive(server.serverPackUrl, downloadsDir);
-  await cleanPackDir(packDir);
-  await ensureZipExtracted(zipPath, packDir);
+  const staging = await fs.mkdtemp(path.join(serverRoot, '.rebuild-'));
+  const previous = path.join(serverRoot, '.pack-before-rebuild');
+  if (await pathExists(previous)) {
+    await fs.rm(staging, { recursive: true, force: true });
+    throw new Error(`An interrupted rebuild needs recovery. The previous pack is preserved at ${previous}.`);
+  }
+  let movedOld = false;
+  let published = false;
+  try {
+    await ensureZipExtracted(zipPath, staging);
+    const workingDir = await detectWorkingDir(staging);
+    await writeEula(workingDir);
+    await applyServerProperties(workingDir, server);
+    const varsResult = await applyVariablesTxt(workingDir, server);
+    await applyUserJvmArgs(workingDir, server);
+    await applyAccessLists(workingDir, server);
+    const runtime = await preparePackRuntime(server, workingDir, varsResult);
+    await preserveWorlds(packDir, staging, path.dirname(runtime.script));
+    await prepareServerFiles(server.id);
 
-  const workingDir = await detectWorkingDir(packDir);
-  await writeEula(workingDir);
-  await applyServerProperties(workingDir, server);
-  const varsResult = await applyVariablesTxt(workingDir, server);
-  await applyUserJvmArgs(workingDir, server);
-  await applyAccessLists(workingDir, server);
-
-  return buildContainerFromPack(server, serverRoot, workingDir, varsResult);
+    if (await pathExists(packDir)) { await fs.rename(packDir, previous); movedOld = true; }
+    await fs.rename(staging, packDir);
+    published = true;
+    runtime.script = path.join(packDir, path.relative(staging, runtime.script));
+    const result = await createPreparedContainer(server, serverRoot, runtime);
+    // Publication succeeded. Failure to remove the old copy must not trigger a
+    // rollback after Docker has already been recreated.
+    if (movedOld) await fs.rm(previous, { recursive: true, force: true }).catch(err => {
+      logger.warn({ err, serverId: server.id, previous }, 'Rebuild succeeded; previous pack retained for manual cleanup');
+    });
+    return result;
+  } catch (error) {
+    if (published) await fs.rm(packDir, { recursive: true, force: true });
+    if (movedOld) await fs.rename(previous, packDir);
+    throw error;
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
 }
 
 export async function recreateContainer(server: ServerRecord): Promise<{
@@ -778,6 +831,7 @@ export async function recreateContainer(server: ServerRecord): Promise<{
   packRecommendedJava?: string;
   packRecommendedJavaMajor?: number;
 }> {
+  await assertNoInterruptedRebuild(server.id);
   const serverRoot = path.join(config.dataRoot, 'servers', server.id);
   const packDir = path.join(serverRoot, 'pack');
 
@@ -799,6 +853,7 @@ export async function recreateContainer(server: ServerRecord): Promise<{
 // Check the directory the startup script actually runs in, including packs
 // which place it in a nested folder. Also repairs already-prepared servers.
 export async function ensurePreparedModDependencies(server: ServerRecord) {
+  await assertNoInterruptedRebuild(server.id);
   await prepareServerFiles(server.id, false);
   const packDir = path.join(config.dataRoot, 'servers', server.id, 'pack');
   const workingDir = await detectWorkingDir(packDir);

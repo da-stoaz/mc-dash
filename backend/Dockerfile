@@ -21,6 +21,11 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# Descriptor-relative filesystem operations use Python standard-library dir_fd APIs.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 \
+  && rm -rf /var/lib/apt/lists/*
+
 # Runs as root so it can read the mounted Docker socket (root:docker on the host).
 COPY package*.json ./
 COPY --from=build /app/node_modules ./node_modules

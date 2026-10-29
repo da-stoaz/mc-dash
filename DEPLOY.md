@@ -172,3 +172,30 @@ an intact 64 MiB upload chunk. Next's proxy body limit accommodates the backend'
 maximum supported chunk size (90 MiB plus 1 MiB slack).
 It uses a shared container network namespace for Docker Desktop compatibility;
 it does not validate Linux host networking or the Minecraft memory slice.
+
+## Rebuild safety and temporary storage
+
+Rebuild extracts and validates a replacement pack separately, then copies existing
+worlds into it before publishing. Existing saves take precedence over bundled
+worlds, including custom level names, nested packs and separate dimensions. Copying
+uses filesystem reflinks when supported; otherwise allow temporary disk space for
+the replacement pack **and** saved worlds. Disk exhaustion leaves the old pack intact.
+
+A process crash during publication can leave `servers/<id>/.pack-before-rebuild`.
+Starts and recreations then refuse to proceed. With that Minecraft container and
+the backend stopped, retain both directories, inspect the saved previous pack,
+and restore it as `pack` before retrying. Do not delete the retained copy blindly.
+An ordinary caught preparation failure restores the previous pack automatically;
+a Docker recreation failure may still require retrying the rebuild.
+
+The backend image includes Python 3 for secure descriptor-relative file operations.
+This is an internal filesystem helper, not a host setup script. Configuration
+writes replace complete files atomically and never follow Minecraft-controlled
+parent symlinks. Local npm development also requires `python3` on PATH.
+
+Long dashboard actions (including import, restore, rebuild and settings that
+recreate a container) use backend jobs and short status polls. Their results are
+retained for seven days; a backend restart marks unfinished jobs as interrupted
+instead of replaying them. API clients can request this with `Prefer: respond-async`
+and poll the returned `statusUrl`. Clients that omit that header retain synchronous
+responses and must configure their own proxy timeouts for long operations.

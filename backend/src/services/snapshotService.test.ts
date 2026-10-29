@@ -191,3 +191,53 @@ test('delete removes both the DB row and the archive file', async () => {
   assert.ok(!fs.existsSync(archive));
   assert.equal(serverStore.getSnapshot(snap.id), null);
 });
+
+test('partial flush failure always attempts save-on and does not record a successful backup', async t => {
+  const rcon = require('./rconService');
+  const id = 'partial-flush';
+  writeFile(id, 'pack/world/level.dat', 'current world');
+  const commands: string[][] = [];
+  t.mock.method(rcon, 'runServerRcon', async (_server: any, batch: string[]) => {
+    commands.push(batch);
+    return batch[0] === 'save-on' ? ['Saving enabled'] : null;
+  });
+  await assert.rejects(createSnapshot({ ...fakeServer(id), status: 'running' }), /Could not flush/);
+  assert.deepEqual(commands, [['save-off', 'save-all flush'], ['save-on']]);
+  assert.equal(serverStore.listSnapshots(id).length, 0);
+  assert.equal(getSnapshotJob(id).status, 'failed');
+});
+
+test('failure to restore autosaving is visible and never reported as a successful snapshot', async t => {
+  const rcon = require('./rconService');
+  const id = 'failed-save-on';
+  writeFile(id, 'pack/world/level.dat', 'current world');
+  t.mock.method(rcon, 'runServerRcon', async (_server: any, batch: string[]) =>
+    batch[0] === 'save-on' ? null : ['Saving disabled', 'Saved']);
+  await assert.rejects(createSnapshot({ ...fakeServer(id), status: 'running' }), /Run save-on/);
+  assert.equal(serverStore.listSnapshots(id).length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(serverRoot(id), 'snapshots')), []);
+});
+
+test('archive failure still re-enables autosaving', async t => {
+  const rcon = require('./rconService');
+  const id = 'failed-archive-save-on';
+  writeFile(id, 'pack/world/level.dat', 'current world');
+  const commands: string[][] = [];
+  t.mock.method(rcon, 'runServerRcon', async (_server: any, batch: string[]) => {
+    commands.push(batch);
+    if (batch[0] === 'save-off') fs.rmSync(path.join(serverRoot(id), 'snapshots'), { recursive: true });
+    return ['ok'];
+  });
+  await assert.rejects(createSnapshot({ ...fakeServer(id), status: 'running' }));
+  assert.deepEqual(commands, [['save-off', 'save-all flush'], ['save-on']]);
+});
+
+test('snapshot rejects hard-linked working files before sending save-off', async t => {
+  const rcon = require('./rconService');
+  const id = 'unsafe-working-files';
+  writeFile(id, 'pack/world/level.dat', 'current world');
+  fs.linkSync(path.join(serverRoot(id), 'pack/world/level.dat'), path.join(serverRoot(id), 'pack/world/linked'));
+  const send = t.mock.method(rcon, 'runServerRcon', async () => ['ok']);
+  await assert.rejects(createSnapshot({ ...fakeServer(id), status: 'running' }), /Unsafe server file/);
+  assert.equal(send.mock.calls.length, 0);
+});

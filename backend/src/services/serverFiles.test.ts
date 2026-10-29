@@ -125,7 +125,6 @@ test('a generated launch script follows changes to the total RAM limit', async t
 });
 
 test('snapshot imports reject symbolic and hard links before extracting files', async () => {
-  const tar = require('tar');
   for (const hard of [false, true]) {
     const source = fs.mkdtempSync(path.join(root, 'archive-'));
     fs.mkdirSync(path.join(source, 'pack'));
@@ -133,8 +132,14 @@ test('snapshot imports reject symbolic and hard links before extracting files', 
     if (hard) fs.linkSync(path.join(source, 'pack/target'), path.join(source, 'pack/link'));
     else fs.symlinkSync('/etc/passwd', path.join(source, 'pack/link'));
     const archive = path.join(root, `links-${hard}.tar`);
-    await tar.create({ cwd: source, file: archive }, ['pack']);
+    // Build hostile link fixtures independently of the snapshot producer.
+    // npm tar's async packer can fail internally on hard-link inputs.
+    execFileSync('tar', ['-cf', archive, '-C', source, 'pack']);
     await assert.rejects(importSnapshotArchive(`unsafe-${hard}`, archive), /Unsafe snapshot entry/);
     assert.equal(fs.existsSync(path.join(root, 'servers', `unsafe-${hard}`, 'pack/target')), false);
   }
+});
+
+test('descriptor-relative operations resist directory races and preserve files on write failure', () => {
+  execFileSync('python3', [path.join(__dirname, 'serverFileWorker.test.py')], { env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
 });

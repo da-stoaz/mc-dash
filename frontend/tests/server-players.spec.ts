@@ -65,3 +65,27 @@ test('RAM edit submits the total container limit without adding overhead', async
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(() => submitted?.resources.maxRamMb).toBe(10000);
 });
+
+for (const success of [true, false]) {
+  test(`server actions poll background jobs and show ${success ? 'completion' : 'failure'}`, async ({ page }) => {
+    await setup(page);
+    let submissions = 0;
+    let polls = 0;
+    await page.route('**/servers/offline/start', async route => {
+      submissions++;
+      expect(route.request().headers().prefer).toBe('respond-async');
+      await route.fulfill({ status: 202, json: { operationId: 'operation-1', statusUrl: '/servers/offline/operations/operation-1' } });
+    });
+    await page.route('**/servers/offline/operations/operation-1', async route => {
+      polls++;
+      await route.fulfill({ json: polls < 3 ? { status: 'running' } : {
+        status: success ? 'completed' : 'failed', httpStatus: success ? 200 : 422,
+        body: success ? { id: 'offline', status: 'starting' } : { error: 'World could not be prepared', reason: 'Fixture failure: original world preserved' },
+      } });
+    });
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect.poll(() => polls).toBeGreaterThanOrEqual(3);
+    await expect(page.getByText(success ? 'Command sent.' : 'Fixture failure: original world preserved', { exact: true })).toBeVisible();
+    expect(submissions).toBe(1);
+  });
+}

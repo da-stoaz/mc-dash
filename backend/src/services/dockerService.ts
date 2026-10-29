@@ -8,7 +8,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { ResourceConfig, ServerRecord, ServerStatus } from '../types';
 import { containerMemoryPlan } from './memoryPlan';
-import { prepareServerFiles } from './serverFiles';
+import { prepareServerFiles, assertNoInterruptedRebuild } from './serverFiles';
 import { POOL_SLICE, readMemoryPool, requireMemoryPool, requireStartRoom, startupReservations } from './memoryPool';
 import { UserFacingError } from '../apiErrors';
 import { serverStore } from '../serverStore';
@@ -602,6 +602,7 @@ export class DockerService {
 
   async start(server: ServerRecord): Promise<string> {
     const start = async () => {
+      await assertNoInterruptedRebuild(server.id);
       const container = await this.getContainer(server);
       const memoryPlan = containerMemoryPlan(server.resources);
       const recoveryDemand = pressureRestartDemand(server.id, memoryPlan?.capMb ?? Infinity);
