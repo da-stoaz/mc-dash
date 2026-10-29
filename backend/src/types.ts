@@ -13,7 +13,9 @@ export type GameMode = 'survival' | 'creative' | 'adventure' | 'spectator';
 export type Difficulty = 'peaceful' | 'easy' | 'normal' | 'hard';
 
 export interface ResourceConfig {
+  /** Initial Java heap, clamped to the heap budget inside the container limit. */
   minRamMb: number;
+  /** Total container RAM limit including JVM overhead, in MiB. */
   maxRamMb: number;
   cpuLimit?: number; // CPU limit in cores (e.g., 0.5 == 50% of one core)
 }

@@ -1,4 +1,5 @@
 import type { ServerRecord } from '../types';
+import { heapPlan } from './jvmTuning';
 
 export type JvmMemoryInspection = {
   status:'verified'|'mismatch'|'unverified';
@@ -20,13 +21,15 @@ export function interpretJvmMemory(flags:string, server:ServerRecord, containerB
   const base={initialHeapMb,maximumHeapMb,containerLimitMb,checkedAt};
   if(initialHeapMb===null || maximumHeapMb===null || initialHeapMb>maximumHeapMb)
     return {...base,status:'unverified',reason:'The JVM did not provide unambiguous initial and maximum heap sizes.'};
-  const desired=server.resources;
+  const desired=server.resources && heapPlan(server.resources);
   // HotSpot may align heap sizes; tolerate up to 2% or 8 MiB.
   const differs=(actual:number,expected:number)=>Math.abs(actual-expected)>Math.max(8,expected*0.02);
-  if(!desired || !Number.isFinite(desired.minRamMb) || !Number.isFinite(desired.maxRamMb) || desired.minRamMb<=0 || desired.maxRamMb<=0 || !containerLimitMb) return {...base,status:'unverified',reason:'Configured heap or effective container limit is unavailable.'};
+  if(!desired || !containerLimitMb) return {...base,status:'unverified',reason:'Configured heap or effective container limit is unavailable.'};
   if(maximumHeapMb>=containerLimitMb) return {...base,status:'mismatch',reason:'The JVM maximum leaves no memory outside its heap within the container limit.'};
-  if(differs(initialHeapMb,desired.minRamMb)||differs(maximumHeapMb,desired.maxRamMb))
+  if(differs(initialHeapMb,desired.minMb)||differs(maximumHeapMb,desired.maxMb))
     return {...base,status:'mismatch',reason:server.restartRequired?'Running heap settings differ from saved settings; a restart is pending.':'The running JVM heap differs from the configured heap. Check the pack launch arguments.'};
+  if (containerLimitMb !== server.resources.maxRamMb)
+    return {...base,status:'mismatch',reason:server.restartRequired?'Running container limit differs from saved settings; a restart is pending.':'The running container limit differs from the configured RAM limit.'};
   return {...base,status:'verified',reason:'Running JVM heap sizes match the configured settings. This does not verify world-save behavior or prevent leaks.'};
 }
 

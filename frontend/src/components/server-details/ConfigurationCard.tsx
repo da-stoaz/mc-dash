@@ -113,7 +113,7 @@ export function ConfigurationCard({
         <div className="space-y-2">
           <div className="text-base font-semibold">Resources</div>
           <div className="muted">
-            RAM: {server.resources.minRamMb}-{server.resources.maxRamMb} MB
+            RAM limit: {server.resources.maxRamMb} MiB
           </div>
           <div className="muted">CPU cap: {server.resources.cpuLimit ?? '-'} cores</div>
         </div>

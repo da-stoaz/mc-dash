@@ -61,3 +61,26 @@ test('a corrupt archive throws instead of silently extracting nothing', async ()
 
   await assert.rejects(() => ensureZipExtracted(bogus, path.join(TMP, 'bogus-out')));
 });
+
+test('zip symlinks are rejected before any files are extracted', async () => {
+  const zip = new AdmZip();
+  zip.addFile('config/link', Buffer.from('/etc/passwd'));
+  zip.getEntry('config/link').header.attr = (0o120777 << 16) >>> 0;
+  const archive = path.join(TMP, 'links.zip');
+  zip.writeZip(archive);
+  await assert.rejects(ensureZipExtracted(archive, path.join(TMP, 'unsafe')), /Unsafe archive entry/);
+  assert.equal(fs.existsSync(path.join(TMP, 'unsafe/config/link')), false);
+});
+
+test('pack extraction leaves the API event loop available for progress requests', async () => {
+  const archive = writeZip('responsive.zip', { 'large.txt': 'chunk data\n'.repeat(100000) });
+  let serviced = false;
+  const progressRequest = new Promise<void>(resolve => setImmediate(() => { serviced = true; resolve(); }));
+  let finished = false;
+  const extracting = ensureZipExtracted(archive, path.join(TMP, 'responsive')).then(() => { finished = true; });
+  await progressRequest;
+  assert.equal(serviced, true);
+  assert.equal(finished, false, 'progress requests must run while extraction is pending');
+  await extracting;
+  assert.equal(fs.statSync(path.join(TMP, 'responsive/large.txt')).size, 1100000);
+});

@@ -22,8 +22,10 @@ export function jvmOverheadMb(heapMb: number): number {
 }
 
 export type ContainerMemoryPlan = {
-  /** Hard cgroup ceiling: heap plus overhead. */
+  /** The user's total RAM limit, applied to Docker without adding anything. */
   capMb: number;
+  heapMaxMb: number;
+  heapMinMb: number;
   /**
    * Soft cgroup limit. Under host memory pressure the kernel reclaims from
    * containers sitting above their reservation before it touches ones below,
@@ -36,13 +38,25 @@ export type ContainerMemoryPlan = {
  * null when the server has no configured ceiling — old records from before
  * resources were required. Those get no limits rather than a guessed one.
  */
-export function containerMemoryPlan(resources: ResourceConfig | undefined): ContainerMemoryPlan | null {
+export function containerMemoryPlan(resources: Partial<ResourceConfig> | undefined): ContainerMemoryPlan | null {
   const maxRamMb = Number(resources?.maxRamMb);
   if (!Number.isFinite(maxRamMb) || maxRamMb <= 0) return null;
 
-  const overheadMb = jvmOverheadMb(maxRamMb);
+  const capMb = Math.floor(maxRamMb);
+  if (!Number.isSafeInteger(capMb)) return null;
+  // Invert heap + overhead <= container limit. Binary search also respects the
+  // flat overhead floor and rounding, including migrated legacy limits.
+  let low = 0, high = capMb;
+  while (low < high) {
+    const mid = low + Math.ceil((high - low) / 2);
+    if (mid + jvmOverheadMb(mid) <= capMb) low = mid;
+    else high = mid - 1;
+  }
+  const heapMaxMb = low;
+  if (heapMaxMb < 1) return null;
+  const overheadMb = jvmOverheadMb(heapMaxMb);
   const rawMin = Number(resources?.minRamMb);
-  const minRamMb = Number.isFinite(rawMin) && rawMin > 0 ? Math.min(rawMin, maxRamMb) : Math.min(512, maxRamMb);
+  const heapMinMb = Math.floor(Number.isFinite(rawMin) && rawMin > 0 ? Math.min(rawMin, heapMaxMb) : Math.min(512, heapMaxMb));
 
-  return { capMb: maxRamMb + overheadMb, floorMb: minRamMb + overheadMb };
+  return { capMb, floorMb: heapMinMb + overheadMb, heapMinMb, heapMaxMb };
 }

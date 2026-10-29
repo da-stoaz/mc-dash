@@ -50,7 +50,7 @@ export type ServerCommitment = {
   live: boolean;
   maxRamMb: number;
   minRamMb: number;
-  /** maxRamMb plus JVM overhead — the hard cgroup cap. */
+  /** maxRamMb — the total container cap, including JVM overhead. */
   ceilingMb: number;
   /** minRamMb plus JVM overhead — the guaranteed floor, booked outright. */
   floorMb: number;

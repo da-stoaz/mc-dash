@@ -1,10 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {interpretJvmMemory} from './jvmMemoryInspection';
-const server:any={resources:{minRamMb:512,maxRamMb:2048}};
+const server:any={resources:{minRamMb:512,maxRamMb:2355}};
 const flags='1:\n-XX:InitialHeapSize=536870912 -XX:MaxHeapSize=2147483648 -XX:+UseG1GC\n';
 test('reports effective heap sizes with their actual units',()=>{
-  const report=interpretJvmMemory(flags,server,2560*1024**2,123);
+  const report=interpretJvmMemory(flags,server,2355*1024**2,123);
   assert.equal(report.status,'verified');assert.equal(report.initialHeapMb,512);assert.equal(report.maximumHeapMb,2048);assert.equal(report.checkedAt,123);
 });
 test('overridden and pending heap settings are reported as mismatches',()=>{

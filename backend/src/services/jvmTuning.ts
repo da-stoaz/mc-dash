@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { containerMemoryPlan } from './memoryPlan';
 
 // ---------------------------------------------------------------------------
 // Elastic heap
@@ -190,11 +191,8 @@ export function mergeJvmArgs(
  * to learn that two numbers in a form disagree.
  */
 export function heapPlan(resources: { minRamMb?: number; maxRamMb?: number }): HeapPlan | null {
-  const maxMb = Number(resources.maxRamMb);
-  if (!Number.isFinite(maxMb) || maxMb <= 0) return null;
-  const rawMin = Number(resources.minRamMb);
-  const minMb = Number.isFinite(rawMin) && rawMin > 0 ? Math.min(rawMin, maxMb) : Math.min(512, maxMb);
-  return { minMb, maxMb };
+  const plan = containerMemoryPlan(resources);
+  return plan ? { minMb: plan.heapMinMb, maxMb: plan.heapMaxMb } : null;
 }
 
 /**

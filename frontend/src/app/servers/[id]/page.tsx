@@ -31,7 +31,7 @@ import { FailureBanner } from '../../../components/server-details/FailureBanner'
 import { clampPercent, HISTORY_LIMIT, LiveMetricsHistory, MetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, hasLiveProcess, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
-import { API_BASE, apiFetch } from '../../../lib/api';
+import { API_BASE, apiFetch, apiOperation } from '../../../lib/api';
 import { uploadInChunks } from '../../../lib/chunkedUpload';
 
 export default function ServerDetailsPage() {
@@ -181,7 +181,7 @@ export default function ServerDetailsPage() {
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiOperation(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -257,7 +257,7 @@ export default function ServerDetailsPage() {
           .split('\n')
           .map((entry) => entry.trim())
           .filter(Boolean);
-      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiOperation(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -286,7 +286,7 @@ export default function ServerDetailsPage() {
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
+      const res = await apiOperation(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
       await res.json().catch(() => null);
       await fetchServer();

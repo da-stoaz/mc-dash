@@ -14,8 +14,10 @@ import { syncBlacklistLive } from '../services/accessControlService';
 import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
 import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive } from '../services/snapshotService';
 import { getSnapshotJob } from '../services/snapshotJobStore';
+import { beginServerOperation, finishServerOperation, getServerOperation } from '../services/serverOperationStore';
 import { config } from '../config';
-import { toApiError } from '../apiErrors';
+import { toApiError, UserFacingError } from '../apiErrors';
+import { readVerifiedMemoryPool, requireMemoryPool } from '../services/memoryPool';
 import { preparing, lifecycleBusy } from '../state';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
@@ -36,7 +38,7 @@ import {
 
 const resourceSchema = z.object({
   minRamMb: z.number().int().positive(),
-  maxRamMb: z.number().int().positive(),
+  maxRamMb: z.number().int().min(512),
   cpuLimit: z.number().positive().optional(),
 });
 
@@ -84,7 +86,7 @@ const createServerSchema = z.object({
   javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
   serverPort: portSchema.optional(),
   minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
-  maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  maxRamMb: z.preprocess(parseNumber, z.number().int().min(512)),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
   renderDistance: z.preprocess(parseNumber, z.number().int().min(2).max(32)).optional(),
   entityBroadcastRangePercentage: z.preprocess(parseNumber, z.number().int().min(10).max(1000)).optional(),
@@ -106,7 +108,7 @@ const importServerSchema = z.object({
   javaImage: z.preprocess(emptyToUndefined, z.string().optional()),
   serverPort: portSchema.optional(),
   minRamMb: z.preprocess(parseNumber, z.number().int().positive()),
-  maxRamMb: z.preprocess(parseNumber, z.number().int().positive()),
+  maxRamMb: z.preprocess(parseNumber, z.number().int().min(512)),
   cpuLimit: z.preprocess(parseNumber, z.number().positive()).optional(),
 });
 
@@ -484,22 +486,46 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
     });
     createdId = server.id;
 
-    preparing.add(server.id);
-    serverStore.update(server.id, { status: 'creating' });
-    await importSnapshotArchive(server.id, archive.path);
-    const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } =
-      await recreateContainer(server);
-    const updated = serverStore.update(server.id, {
-      status: 'stopped',
-      containerId,
-      effectiveJavaImage: image,
-      effectiveJavaSource: javaSource,
-      packRecommendedJava: packRecommendedJava ?? null,
-      packRecommendedJavaMajor: packRecommendedJavaMajor ?? null,
-      restartRequired: false,
-      packReady: true,
-    });
-    res.status(201).json(updated);
+    const ownedArchive = archive;
+    archive = null;
+    // Transfer cleanup to the job before acknowledging it; the upload must stay
+    // available after the original HTTP request has returned.
+    const job: RequestHandler<{id: string}> = async (_req, reply) => {
+      try {
+        preparing.add(server.id);
+        serverStore.update(server.id, { status: 'creating' });
+        await importSnapshotArchive(server.id, ownedArchive.path);
+        const { containerId, image, javaSource, packRecommendedJava, packRecommendedJavaMajor } =
+          await recreateContainer(server);
+        const updated = serverStore.update(server.id, {
+          status: 'stopped',
+          containerId,
+          effectiveJavaImage: image,
+          effectiveJavaSource: javaSource,
+          packRecommendedJava: packRecommendedJava ?? null,
+          packRecommendedJavaMajor: packRecommendedJavaMajor ?? null,
+          restartRequired: false,
+          packReady: true,
+        });
+        reply.status(201).json(updated);
+      } catch (err) {
+        await purgeServerData(server).catch(() => {});
+        serverStore.delete(server.id);
+        const failure = toApiError(err, { error: 'Failed to import snapshot', status: 500 });
+        reply.status(failure.status).json(failure.body);
+      } finally {
+        preparing.delete(server.id);
+        await fs.promises.rm(ownedArchive.path, { force: true }).catch(() => {});
+      }
+    };
+    try {
+      await serverMutation(job, server.id)(req as Request<{id: string}>, res, err => { if (err) throw err; });
+      createdId = null; // The running/completed job owns the server now.
+    } catch (err) {
+      archive = ownedArchive; // Submission failed before the job could own it.
+      throw err;
+    }
+
   } catch (err: any) {
     // Roll back a partially-created server so a bad import leaves nothing behind.
     if (createdId) {
@@ -519,13 +545,14 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
 
 // Replace an existing server's pack with a newer .zip (a modpack upgrade). This
 // only swaps the source zip and marks the pack as needing a rebuild; the caller
-// then runs Prepare, which re-extracts the new pack while cleanPackDir preserves
+// then runs Prepare, which stages the new pack separately and preserves
 // the worlds -- so mods/config update without wiping the save.
 router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
   // Claimed up front so every exit path below can drop it in one place: the
   // guards reject often (wrong id, server still running) and each rejection
   // strands a 200 MB+ file otherwise.
   let pack: StagedFile | null = null;
+  let lockedServerId: string | undefined;
   try {
     try {
       pack = takeUploadedFile(req);
@@ -534,6 +561,9 @@ router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
       throw err;
     }
     const serverId = String(req.params.id);
+    if (lifecycleBusy.has(serverId)) return res.status(409).json({ error: 'A server operation is already in progress' });
+    lifecycleBusy.add(serverId);
+    lockedServerId = serverId;
     const server = serverStore.get(serverId);
     if (!server) {
       return notFound(res);
@@ -579,13 +609,14 @@ router.post('/:id/pack', upload.single('file'), async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
+    if (lockedServerId) lifecycleBusy.delete(lockedServerId);
     if (pack) {
       fs.promises.rm(pack.path, { force: true }).catch(() => {});
     }
   }
 });
 
-router.patch('/:id', async (req, res, next) => {
+router.patch('/:id', serverMutation(async (req, res, next) => {
   try {
     const parsed = updateServerSchema.parse(req.body);
     const existing = serverStore.get(req.params.id);
@@ -597,13 +628,28 @@ router.patch('/:id', async (req, res, next) => {
       return res.status(409).json({ error: 'Stop the server before changing its Java image.' });
     }
 
+    // Raising a container ceiling does not allocate that memory. Production
+    // uses the shared cgroup and start-time boot/host-pressure checks, not the
+    // legacy sum of configured peaks. Do not block reductions if pool health
+    // is degraded: reducing a setting is a recovery action.
+    if (config.memoryPoolEnabled && parsed.resources &&
+        parsed.resources.maxRamMb > existing.resources.maxRamMb) {
+      const pool = await readVerifiedMemoryPool();
+      requireMemoryPool(pool);
+      if (parsed.resources.maxRamMb > pool.limitMb) {
+        throw new UserFacingError({ error: 'Server RAM limit exceeds the shared pool',
+          code: 'MEMORY_POOL_LIMIT_EXCEEDED', status: 409,
+          reason: `Choose a server limit no greater than the shared ${pool.limitMb} MiB limit.` });
+      }
+    }
+
     // Raising a running server's RAM books host memory just as surely as
     // starting another server does, and it skips the start gate entirely. Only
     // the *increase* is checked, so lowering a setting is always allowed even on
     // a host that is already over budget — that is the fix, not the problem.
     // Min and max are checked against their own tiers: min is a guarantee that
     // can't be overcommitted, max is peak demand that can.
-    if (parsed.resources && ['running', 'starting', 'restarting'].includes(existing.status)) {
+    if (!config.memoryPoolEnabled && parsed.resources && ['running', 'starting', 'restarting'].includes(existing.status)) {
       const floorDeltaMb = floorMbFor(parsed.resources) - floorMbFor(existing.resources);
       const ceilingDeltaMb = committedMbFor(parsed.resources) - committedMbFor(existing.resources);
       const report = await capacityReport();
@@ -815,9 +861,13 @@ router.patch('/:id', async (req, res, next) => {
 
     res.json(updated);
   } catch (err) {
+    if (err instanceof UserFacingError) {
+      const failure = toApiError(err);
+      return res.status(failure.status).json(failure.body);
+    }
     next(err);
   }
-});
+}));
 
 router.get('/:id/status', async (req, res) => {
   const server = serverStore.get(req.params.id);
@@ -832,15 +882,56 @@ router.get('/:id/status', async (req, res) => {
 
 // Dependency repair mutates mods/. Serialize lifecycle requests so a second
 // request cannot start a container while the first is resolving dependencies.
-function lifecycle<P extends { id: string } = { id: string }>(action: RequestHandler<P>): RequestHandler<P> {
+function serverMutation<P extends { id: string } = { id: string }>(action: RequestHandler<P>, serverId?: string): RequestHandler<P> {
   return async (req, res, next) => {
-    const id = String(req.params.id);
-    if (lifecycleBusy.has(id)) { res.status(409).json({ error: 'A server lifecycle operation is already in progress' }); return; }
+    const id = serverId ?? String(req.params.id);
+    if (lifecycleBusy.has(id)) { res.status(409).json({ error: 'A server operation is already in progress' }); return; }
     lifecycleBusy.add(id);
+    if (req.headers?.prefer !== 'respond-async') {
+      try { await action(req, res, next); }
+      finally { lifecycleBusy.delete(id); }
+      return;
+    }
+    let operationId: string;
+    try { operationId = beginServerOperation(id); }
+    catch (err) { lifecycleBusy.delete(id); next(err); return; }
+    res.status(202).json({ operationId, statusUrl: `/servers/${encodeURIComponent(id)}/operations/${operationId}` });
+    // Retain the lock for the entire job, not just until the 202 response.
+    const run = async () => {
+      let code = 200;
+      let body: unknown;
+      const reply = { status(value: number) { code = value; return this; }, json(value: unknown) { body = value; return this; } };
+      try {
+        await action(req, reply as unknown as typeof res, err => { if (err) throw err; });
+      } catch (err) {
+        if (err instanceof z.ZodError) {
+          code = 400; body = { error: 'Invalid payload', issues: err.issues };
+        } else {
+          const failure = toApiError(err);
+          code = failure.status; body = failure.body;
+        }
+      }
+      try { finishServerOperation(operationId, code, body); }
+      finally { lifecycleBusy.delete(id); }
+    };
+    void run().catch(err => logger.error({ err, serverId: id, operationId }, 'Could not finish server operation'));
+  };
+}
+
+router.get('/:id/operations/:operationId', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const operation = getServerOperation(String(req.params.id), String(req.params.operationId));
+  if (!operation) return res.status(404).json({ error: 'Operation not found' });
+  res.json(operation);
+});
+
+function lifecycle<P extends { id: string } = { id: string }>(action: RequestHandler<P>): RequestHandler<P> {
+  return serverMutation(async (req, res, next) => {
+    const id = String(req.params.id);
     preparing.add(id);
     try { await action(req, res, next); }
-    finally { lifecycleBusy.delete(id); preparing.delete(id); }
-  };
+    finally { preparing.delete(id); }
+  });
 }
 
 router.post('/:id/start', lifecycle(async (req, res) => {
@@ -868,17 +959,13 @@ router.post('/:id/start', lifecycle(async (req, res) => {
     // Migrate a legacy container that still runs as root (created before the
     // container-user fix) before starting it, so it stops writing root-owned
     // files the non-root backend can't read back for snapshots. Recreating from
-    // the prepared pack is the canonical rebuild and stamps the correct User; if
-    // it fails we fall back to starting the existing container unchanged.
+    // the prepared pack is the canonical rebuild and stamps the correct User.
+    // A failed migration must not start the old container with the wrong user.
     let toStart = server;
     if (await dockerService.needsUserMigration(server)) {
-      try {
-        const { containerId } = await recreateContainer(server);
-        toStart = serverStore.update(server.id, { containerId }) ?? server;
-        logger.info({ serverId: server.id }, 'Recreated container to run as the MC Dash user before start');
-      } catch (err) {
-        logger.warn({ err, serverId: server.id }, 'Could not recreate container as the MC Dash user; starting the existing one');
-      }
+      const { containerId } = await recreateContainer(server);
+      toStart = serverStore.update(server.id, { containerId }) ?? server;
+      logger.info({ serverId: server.id }, 'Recreated container to run as the MC Dash user before start');
     }
 
     // A hibernated server has MC Dash sitting on its port so it can wake on
@@ -1194,10 +1281,12 @@ router.post('/:id/snapshots', async (req, res, next) => {
     const server = serverStore.get(req.params.id);
     if (!server) return notFound(res);
     const parsed = snapshotCreateSchema.parse(req.body ?? {});
-    if (getSnapshotJob(server.id)?.status === 'running') {
+    if (lifecycleBusy.has(server.id) || getSnapshotJob(server.id)?.status === 'running') {
       return res.status(409).json({ error: 'A snapshot is already being created for this server.' });
     }
-    const pending = createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' });
+    lifecycleBusy.add(server.id);
+    const pending = createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' })
+      .finally(() => lifecycleBusy.delete(server.id));
     if (parsed.background) {
       void pending.catch(err => logger.error({ err, serverId: server.id }, 'Snapshot creation failed'));
       return res.status(202).json(getSnapshotJob(server.id));

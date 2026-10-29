@@ -169,14 +169,16 @@ export function CreateModal({
               <div className="grid gap-3 md:grid-cols-3">
                 <Input
                   type="number"
-                  label="Min RAM (MB)"
+                  label="Initial Java heap (MiB)"
                   value={String(form.minRamMb)}
                   onChange={(e) => setForm({ ...form, minRamMb: Number(e.target.value) })}
                   isDisabled={isCreating}
                 />
                 <Input
                   type="number"
-                  label="Max RAM (MB)"
+                  label="RAM limit (MiB)"
+                  description="Total container memory, including Java overhead."
+                  min={512}
                   value={String(form.maxRamMb)}
                   onChange={(e) => setForm({ ...form, maxRamMb: Number(e.target.value) })}
                   isDisabled={isCreating}
@@ -385,14 +387,16 @@ export function ImportModal({ open, onClose, onImport, isImporting = false, uplo
               <div className="grid gap-3 md:grid-cols-3">
                 <Input
                   type="number"
-                  label="Min RAM (MB)"
+                  label="Initial Java heap (MiB)"
                   value={String(fields.minRamMb)}
                   onChange={(e) => setFields({ ...fields, minRamMb: Number(e.target.value) })}
                   isDisabled={isImporting}
                 />
                 <Input
                   type="number"
-                  label="Max RAM (MB)"
+                  label="RAM limit (MiB)"
+                  description="Total container memory, including Java overhead."
+                  min={512}
                   value={String(fields.maxRamMb)}
                   onChange={(e) => setFields({ ...fields, maxRamMb: Number(e.target.value) })}
                   isDisabled={isImporting}
@@ -557,14 +561,16 @@ export function EditModal({ server, onClose, onSave }: EditProps) {
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <Input
-                    type="number"
-                    label="Min RAM (MB)"
+                  type="number"
+                  label="Initial Java heap (MiB)"
                   value={String(local.minRamMb)}
                   onChange={(e) => setLocal({ ...local, minRamMb: Number(e.target.value) })}
                 />
                 <Input
                   type="number"
-                  label="Max RAM (MB)"
+                  label="RAM limit (MiB)"
+                  description="Total container memory, including Java overhead."
+                  min={512}
                   value={String(local.maxRamMb)}
                   onChange={(e) => setLocal({ ...local, maxRamMb: Number(e.target.value) })}
                 />

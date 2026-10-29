@@ -10,7 +10,7 @@ import { ServerTable } from '../components/ServerTable';
 import { CreateModal, EditModal, ImportModal, ImportFields } from '../components/ServerModals';
 import { useAuth } from '../components/AuthGate';
 import { getApiErrorMessage } from '../lib/apiErrors';
-import { API_BASE, apiFetch } from '../lib/api';
+import { API_BASE, apiFetch, apiOperation } from '../lib/api';
 import { uploadInChunks } from '../lib/chunkedUpload';
 import { Logo } from '../components/Logo';
 import { CapacityBar } from '../components/CapacityBar';
@@ -212,10 +212,9 @@ export default function Page() {
       if (fields.cpuLimit) payload.append('cpuLimit', fields.cpuLimit);
       if (fields.javaImage) payload.append('javaImage', fields.javaImage);
 
-      // Import extracts the archive and builds the container before it answers,
-      // so this call can sit for a while after the bytes are all up.
+      // Import runs as a job after upload, so proxies only see short requests.
       setImportProgress(100);
-      const res = await apiFetch(`${API_BASE}/servers/import`, { method: 'POST', body: payload });
+      const res = await apiOperation(`${API_BASE}/servers/import`, { method: 'POST', body: payload });
       if (!res.ok) {
         throw new Error(await getApiErrorMessage(res, 'Import failed'));
       }
@@ -233,7 +232,7 @@ export default function Page() {
 
   const handleUpdate = async (id: string, changes: Partial<FormState>) => {
     try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}`, {
+      const res = await apiOperation(`${API_BASE}/servers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -274,7 +273,7 @@ export default function Page() {
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
-      const res = await apiFetch(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
+      const res = await apiOperation(`${API_BASE}/servers/${id}/${action === 'prepare' ? 'prepare' : action}`, { method: 'POST' });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, `${action} failed`));
       await res.json().catch(() => null);
       await fetchServers();
