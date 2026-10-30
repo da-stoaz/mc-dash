@@ -126,9 +126,9 @@ export class RouterService {
           socket.removeAllListeners('data');
           serveSleepingClient(socket, buffered, {
             versionName: 'Sleeping',
-            motd: config.hibernationMotd,
+            motd: config.hibernationWakeOnConnect ? config.hibernationMotd : 'Sleeping — start this server from MC Dash',
             wakeMessage: config.hibernationWakeMessage,
-            onWake: () => void hibernationService.wake(target.id, 'player'),
+            onWake: () => hibernationService.wake(target.id, 'player'),
           });
           return;
         }

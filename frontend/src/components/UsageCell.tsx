@@ -34,7 +34,7 @@ function pressureClass(percent: number) {
 
 export function UsageCell({ server, compact = false }: { server: ServerRecord; compact?: boolean }) {
   const live = server.live;
-  const configured = `${server.resources.minRamMb}–${server.resources.maxRamMb} MB configured${
+  const configured = `${server.resources.maxRamMb} MiB container limit${
     server.resources.cpuLimit ? ` · ${server.resources.cpuLimit} CPU cap` : ''
   }`;
 

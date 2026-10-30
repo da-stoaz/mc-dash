@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, CardBody, CardHeader, Chip, Divider, Input, Spinner } from '@heroui/react';
 import { Camera, Download, RotateCcw, Trash2 } from 'lucide-react';
-import { API_BASE, apiFetch } from '../../lib/api';
+import { API_BASE, apiFetch, apiOperation } from '../../lib/api';
 import { getApiErrorMessage } from '../../lib/apiErrors';
 import { Snapshot, ServerStatus } from '../../lib/serverTypes';
 
@@ -130,7 +130,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
     setBusy(snapshot.id);
     setError(null);
     try {
-      const res = await apiFetch(`${API_BASE}/servers/${serverId}/snapshots/${snapshot.id}/restore`, {
+      const res = await apiOperation(`${API_BASE}/servers/${serverId}/snapshots/${snapshot.id}/restore`, {
         method: 'POST',
       });
       if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Restore failed'));

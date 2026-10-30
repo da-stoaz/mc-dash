@@ -9,10 +9,10 @@ const snapshot = { id: 'snap-1', serverId: server.id, label: 'Navigation backup'
 async function setup(page: Page) {
   const state = { job: null as any, snapshots: [] as any[], listFailure: false, jobFailure: false, posts: 0,
     holdList: null as null | (() => Promise<void>), holdPost: null as null | (() => Promise<void>) };
-  await page.route('**/api/**', async route => {
+  await page.route(/(?:localhost:4000\/|\/api\/)/, async route => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
-    if (path === '/api/auth/me') return json({ authenticated: true, authRequired: false });
+    if (path.endsWith('/auth/me')) return json({ authenticated: true, authRequired: false });
     if (path.endsWith('/stream')) return route.fulfill({ contentType: 'text/event-stream', body: `event: server\ndata: ${JSON.stringify(server)}\n\n` });
     if (path.endsWith('/snapshots/job')) return state.jobFailure ? json({ error: 'Job status unavailable' }, 500) : json(state.job);
     if (path.endsWith('/snapshots')) {

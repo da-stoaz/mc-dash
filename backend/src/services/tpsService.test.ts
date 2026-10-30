@@ -37,10 +37,10 @@ test('shares in-flight work and cached samples across viewers, falling back to F
   assert.equal(a, b);
   assert.equal(a.current.tps, 16.667);
   assert.deepEqual(calls, ['spark tps', 'forge tps']);
-  now = 5000;
+  now = 4999;
   await service.read(server);
   assert.equal(calls.length, 2);
-  now = 10000;
+  now = 5000;
   assert.equal((await service.read(server)).points.length, 2);
 });
 
@@ -67,8 +67,8 @@ test('missing readings create gaps, stopped servers clear history, and outages r
 test('history is bounded, and container replacement discards old samples', async () => {
   let now = 0;
   const service = new TpsService(async () => [spark], () => now);
-  for (let i = 0; i < 70; i++) { now += 10000; await service.read(server); }
-  assert.equal((await service.read(server)).points.length, 60);
+  for (let i = 0; i < 140; i++) { now += 5000; await service.read(server); }
+  assert.equal((await service.read(server)).points.length, 120);
   assert.equal((await service.read({ ...server, containerId: 'two' })).points.length, 1);
 });
 

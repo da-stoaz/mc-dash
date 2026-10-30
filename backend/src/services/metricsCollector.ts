@@ -2,6 +2,7 @@ import { dockerService } from './dockerService';
 import { serverStore } from '../serverStore';
 import { metricsStore, FINE_RESOLUTION, MetricBucket } from '../metricsStore';
 import { preparing } from '../state';
+import { observeBootMemory } from './bootMemory';
 import { logger } from '../logger';
 
 // The collector is the single metrics poller. It runs a 1s base loop and
@@ -18,7 +19,8 @@ const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
 const DUE_SLACK_MS = 250;
 
 export type MetricsPayload = Awaited<ReturnType<typeof dockerService.metrics>>;
-type MetricsListener = (metrics: MetricsPayload | null) => void;
+export type TimedMetrics = MetricsPayload & { at: number };
+type MetricsListener = (metrics: TimedMetrics | null) => void;
 
 type Sample = {
   cpuCores: number;
@@ -94,6 +96,7 @@ export type LiveMetrics = {
   cpuCores: number;
   cpuCoresAvailable: number;
   memoryBytes: number;
+  memoryWorkingSetBytes?: number;
   memoryLimitBytes: number;
   memoryPercent: number;
   at: number;
@@ -103,7 +106,7 @@ export type LiveMetrics = {
 // answering. Better to report nothing than a number from four minutes ago.
 const LIVE_TTL_MS = 30_000;
 
-class MetricsCollector {
+export class MetricsCollector {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastPruneAt = 0;
@@ -114,6 +117,19 @@ class MetricsCollector {
   // for the history rollups; this just stops that work being thrown away, so
   // the dashboard can show real CPU and memory without a second poll loop.
   private readonly live = new Map<string, LiveMetrics>();
+
+  // Keep actual readings even without viewers; rollups cannot seed a live chart.
+  private readonly recent = new Map<string, TimedMetrics[]>();
+  recentFor(serverId: string): TimedMetrics[] {
+    const points = this.recent.get(serverId) ?? [];
+    const start = Date.now() - 60_000;
+    const first = points.findIndex(point => point.at >= start);
+    if (first < 0) return [];
+    // The preceding reading is needed to draw the line up to the 60s boundary.
+    // Never retain it indefinitely or use it to bridge a collection outage.
+    const predecessor = first > 0 && points[first - 1].at >= start - 15_000;
+    return points.slice(predecessor ? first - 1 : first);
+  }
 
   /** Latest reading for one server, or null when stopped or stale. */
   liveFor(serverId: string): LiveMetrics | null {
@@ -159,7 +175,7 @@ class MetricsCollector {
     };
   }
 
-  private notify(serverId: string, metrics: MetricsPayload | null) {
+  private notify(serverId: string, metrics: TimedMetrics | null) {
     const set = this.watchers.get(serverId);
     if (!set) return;
     for (const listener of set) listener(metrics);
@@ -185,6 +201,11 @@ class MetricsCollector {
       // Drop accumulators for servers that no longer exist.
       for (const id of this.accums.keys()) if (!liveIds.has(id)) this.accums.delete(id);
       for (const id of this.live.keys()) if (!liveIds.has(id)) this.live.delete(id);
+
+      for (const id of this.recent.keys()) {
+        if (!liveIds.has(id)) this.recent.delete(id);
+        else this.recent.set(id, this.recentFor(id));
+      }
 
       for (const server of servers) {
         if (preparing.has(server.id)) continue;
@@ -223,6 +244,8 @@ class MetricsCollector {
           continue;
         }
 
+        observeBootMemory(server, metrics.memoryWorkingSetBytes ?? metrics.memoryBytes, metrics.uptimeSeconds);
+
         const dtSec = acc.prev ? (nowMs - acc.prev.tsMs) / 1000 : 0;
         acc.samples.push({
           cpuCores: metrics.cpuCores,
@@ -247,10 +270,14 @@ class MetricsCollector {
           cpuCoresAvailable: metrics.cpuCoresAvailable,
           memoryBytes: metrics.memoryBytes,
           memoryLimitBytes: metrics.memoryLimitBytes,
+          memoryWorkingSetBytes: metrics.memoryWorkingSetBytes,
           memoryPercent: metrics.memoryPercent,
           at: nowMs,
         });
-        this.notify(server.id, metrics); // live push to the SSE room
+        const sample = { ...metrics, at: Date.now() };
+        const recent = this.recentFor(server.id);
+        this.recent.set(server.id, [...recent, sample].slice(-120));
+        this.notify(server.id, sample); // live push to the SSE room
       }
 
       if (nowMs - this.lastPruneAt >= PRUNE_INTERVAL_MS) {

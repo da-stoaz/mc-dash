@@ -59,17 +59,9 @@ export function resolveContainerUser(
 // ---------------------------------------------------------------------------
 // Memory management
 //
-// A Docker `Memory` limit is a *cap*, not a reservation: nothing stops the sum
-// of every server's cap from exceeding physical RAM. Three servers capped at 8
-// GB each fit fine on a 12 GB box while they idle, and take the box down the
-// moment they all fill their heaps — first into swap, then into a freeze.
-//
-// So memory is managed on three levels, each with its own knobs below:
-//   1. per-JVM    — keep the *idle* footprint small and give heap back to the
-//                   OS (jvmTuning.ts)
-//   2. per-cgroup — a hard cap, a soft floor, and no swap (dockerService.ts)
-//   3. host-wide  — refuse to start a server whose cap doesn't fit in what's
-//                   left of the budget (hostCapacityService.ts)
+// Linux production uses a verified shared cgroup (memoryPool.ts). The legacy
+// estimate knobs below apply only when shared enforcement is disabled for dev.
+// Per-JVM and per-container limits remain useful inside the shared pool.
 // ---------------------------------------------------------------------------
 
 function envNumber(raw: string | undefined, fallback: number): number {
@@ -89,22 +81,7 @@ function envBool(raw: string | undefined, fallback: boolean): boolean {
 // box does anything else.
 const memoryReserveMb = Math.max(0, envNumber(process.env.MC_DASH_HOST_RESERVE_MB, 1536));
 
-// Admission is two-tier, the way a cluster scheduler is.
-//
-// The *guaranteed* tier is every running server's idle floor (min RAM plus JVM
-// overhead) and is never overcommitted: whatever else happens, each running
-// server can always have that much. That is the promise, and it costs 1.5 GB
-// for a server whose ceiling is 6 GB.
-//
-// The *burst* tier is the sum of ceilings, and it is allowed to exceed physical
-// RAM by this multiple. Booking every ceiling in full is what makes a strict
-// ledger useless — a 12 GB host would run exactly one 6 GB server, even though
-// three of them idle at 3 GB together and never peak at the same moment. The
-// multiple is the bet you are taking on that "never at the same moment".
-//
-// 2.0 is a deliberate default rather than a neutral one: with container swap
-// off (the default), losing the bet costs one OOM-killed server, not a frozen
-// host. Set it to 1.0 to go back to strict worst-case admission.
+// Legacy admission estimates; these are not a combined memory limit.
 const memoryBurstRatio = Math.max(
   1,
   envNumber(process.env.MC_DASH_MEMORY_BURST_RATIO ?? process.env.MC_DASH_MEMORY_OVERCOMMIT_RATIO, 2)
@@ -172,6 +149,8 @@ const elasticHeapIdleSeconds = Math.max(30, envNumber(process.env.MC_DASH_ELASTI
 // The cost is a cold start, paid by whoever wakes it.
 // ---------------------------------------------------------------------------
 
+// Master switch for automatic sleep, including pressure-triggered shutdowns.
+// Existing sleeping servers remain manually startable and can wake on connect.
 const hibernationEnabled = envBool(process.env.MC_DASH_HIBERNATE, false);
 
 // Continuous stretch with zero players before a server sleeps. Counted from
@@ -273,6 +252,8 @@ export const config = {
   hibernationWakeOnConnect,
   hibernationMotd,
   hibernationWakeMessage,
+  memoryPoolEnabled: envBool(process.env.MC_DASH_MEMORY_POOL, false),
+  memoryPoolRoot: process.env.MC_DASH_CGROUP_ROOT || '/sys/fs/cgroup',
   memoryReserveMb,
   memoryBurstRatio,
   memoryUseObservedPeaks,

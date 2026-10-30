@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs/promises';
+import { prepareServerFiles } from './serverFiles';
 import * as tar from 'tar';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -87,6 +88,9 @@ async function archiveSnapshot(
     throw new Error('Server has no data on disk to snapshot yet');
   }
 
+  // The importer deliberately rejects links/special files. Refuse to produce
+  // an archive that cannot be restored, before disabling Minecraft autosaves.
+  await prepareServerFiles(server.id, false);
   const dir = snapshotsDir(server.id);
   await fs.mkdir(dir, { recursive: true });
 
@@ -105,24 +109,27 @@ async function archiveSnapshot(
   // save-off pauses autosave so files don't change mid-archive; the save-all
   // flush RCON reply only returns once the write to disk has completed. Skipped
   // (null) for a stopped/unreachable server, whose disk is already consistent.
-  const flushed = await runServerRcon(server, ['save-off', 'save-all flush']);
-  if (!flushed && server.status === 'running') {
-    logger.warn(
-      { serverId: server.id },
-      'Could not flush world over RCON before snapshot; it may miss unsaved in-memory changes'
-    );
-  }
-
+  let flushed: string[] | null = null;
+  const live = ['running', 'starting', 'restarting', 'stopping'].includes(server.status);
   try {
-    await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+    try {
+      flushed = await runServerRcon(server, ['save-off', 'save-all flush']);
+      if (!flushed && live) {
+        throw new Error('Could not flush the running server. Snapshot cancelled; retry when RCON is available or stop the server first.');
+      }
+      await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+    } finally {
+      // The server may have executed save-off even if the flush timed out or
+      // disconnected. Never infer that nothing happened from a null response.
+      const resumed = await runServerRcon(server, ['save-on']);
+      if (!resumed && (flushed || live)) {
+        throw new Error('Could not confirm autosaving was re-enabled. Run save-on in the Minecraft console immediately; snapshot did not complete safely.');
+      }
+    }
   } catch (err) {
-    // Don't leave a half-written archive behind for the caller to trip over.
     await fs.rm(archivePath, { force: true }).catch(() => undefined);
     if (isPermissionError(err)) throw toPermissionError(err, root);
     throw err;
-  } finally {
-    // Re-enable autosave whether or not the archive succeeded.
-    if (flushed) await runServerRcon(server, ['save-on']);
   }
 
   const stat = await fs.stat(archivePath);
@@ -155,6 +162,7 @@ export async function restoreSnapshot(
   if (!(await pathExists(archivePath))) {
     throw new Error('Snapshot archive is missing on disk');
   }
+  await validateSnapshot(archivePath, serverRootDir(server.id));
 
   // Safety net first, so a restore can itself be undone.
   const safetySnapshot = await createSnapshot(server, {
@@ -164,13 +172,15 @@ export async function restoreSnapshot(
 
   const root = serverRootDir(server.id);
   const entries = await fs.readdir(root);
+  await prepareServerFiles(server.id, false);
   await Promise.all(
     entries
       .filter((entry) => entry !== SNAPSHOTS_DIRNAME)
       .map((entry) => fs.rm(path.join(root, entry), { recursive: true, force: true }))
   );
 
-  await tar.extract({ file: archivePath, cwd: root });
+  await extractSnapshot(archivePath, root);
+  await prepareServerFiles(server.id);
   logger.info({ serverId: server.id, snapshotId, safetySnapshotId: safetySnapshot.id }, 'Restored snapshot');
   return { restored: record, safetySnapshot };
 }
@@ -186,16 +196,36 @@ export async function restoreSnapshot(
  */
 export async function importSnapshotArchive(serverId: string, archivePath: string): Promise<void> {
   const root = serverRootDir(serverId);
+  await prepareServerFiles(serverId, false);
   await fs.mkdir(root, { recursive: true });
 
   // `tar` strips absolute paths and `..` segments on extract, so a malicious
   // archive can't escape the server root.
-  await tar.extract({ file: archivePath, cwd: root });
+  await extractSnapshot(archivePath, root);
 
   const packDir = path.join(root, 'pack');
   if (!(await pathExists(packDir))) {
     throw new Error('That archive is not a valid MC Dash server snapshot (no pack/ directory inside).');
   }
+  await prepareServerFiles(serverId);
+}
+
+async function validateSnapshot(file: string, root: string): Promise<void> {
+  let unsafe: string | undefined;
+  await tar.list({ file, onReadEntry: entry => {
+    const relative = path.relative(root, path.resolve(root, entry.path));
+    if (path.isAbsolute(entry.path) || relative === '..' || relative.startsWith('..' + path.sep) ||
+        relative.split(path.sep)[0] === SNAPSHOTS_DIRNAME ||
+        !['File', 'Directory', 'OldFile', 'ContiguousFile'].includes(entry.type)) {
+      unsafe = entry.path;
+    }
+  } });
+  if (unsafe !== undefined) throw new Error(`Unsafe snapshot entry: ${unsafe}`);
+}
+
+async function extractSnapshot(file: string, root: string): Promise<void> {
+  await validateSnapshot(file, root);
+  await tar.extract({ file, cwd: root, preserveOwner: false });
 }
 
 export async function deleteSnapshot(server: ServerRecord, snapshotId: string): Promise<boolean> {

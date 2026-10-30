@@ -210,22 +210,21 @@ export function StatusBar({
             aria-label="Search servers"
           />
           <Tooltip
-            content={live ? 'Live updates connected' : 'Stream dropped — reconnecting'}
+            content={live ? 'Live updates connected' : lastUpdated ? `Last update: ${lastUpdated.toLocaleString()}. Reconnecting…` : 'Connecting to live updates…'}
             size="sm"
             delay={200}
             closeDelay={0}
           >
-            <span className="flex items-center gap-1.5 text-xs muted">
+            <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs muted">
               <span
                 className={`h-2 w-2 rounded-full ${live ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}
                 aria-hidden
               />
-              {live ? 'Live' : 'Reconnecting'}
+              {live ? 'Live' : lastUpdated ? (
+                <time dateTime={lastUpdated.toISOString()}>Updated {lastUpdated.toLocaleTimeString()}</time>
+              ) : 'Connecting…'}
             </span>
           </Tooltip>
-          {lastUpdated && (
-            <span className="muted text-xs hidden md:inline">Updated {lastUpdated.toLocaleTimeString()}</span>
-          )}
           <Tooltip content="Refresh now" size="sm" delay={200} closeDelay={0}>
             <Button isIconOnly size="sm" variant="flat" onPress={onRefresh} isDisabled={loading} aria-label="Refresh">
               <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} />

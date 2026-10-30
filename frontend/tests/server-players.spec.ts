@@ -40,10 +40,52 @@ for (const mobile of [false, true]) {
     await expect(page.getByRole('menuitem', { name: 'Edit', exact: true })).toBeVisible();
     await page.getByRole('menuitem', { name: 'Restart', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Restart server' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Restart server' })).toBeVisible();
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'More actions for Offline world' }).click();
     await expect(page.getByRole('menuitem', { name: 'Rebuild', exact: true })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Restart', exact: true })).toHaveCount(0);
+  });
+}
+
+test('RAM edit submits the total container limit without adding overhead', async ({ page }) => {
+  await setup(page);
+  let submitted: { resources: { maxRamMb: number } } | undefined;
+  await page.route('**/servers/offline', async route => {
+    if (route.request().method() === 'PATCH') {
+      submitted = route.request().postDataJSON();
+      return route.fulfill({ json: { id: 'offline', ...submitted } });
+    }
+    return route.fallback();
+  });
+  await page.getByRole('button', { name: 'More actions for Offline world' }).click();
+  await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+  await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('10000');
+  await expect(page.getByText('Total container memory, including Java overhead.')).toBeVisible();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => submitted?.resources.maxRamMb).toBe(10000);
+});
+
+for (const success of [true, false]) {
+  test(`server actions poll background jobs and show ${success ? 'completion' : 'failure'}`, async ({ page }) => {
+    await setup(page);
+    let submissions = 0;
+    let polls = 0;
+    await page.route('**/servers/offline/start', async route => {
+      submissions++;
+      expect(route.request().headers().prefer).toBe('respond-async');
+      await route.fulfill({ status: 202, json: { operationId: 'operation-1', statusUrl: '/servers/offline/operations/operation-1' } });
+    });
+    await page.route('**/servers/offline/operations/operation-1', async route => {
+      polls++;
+      await route.fulfill({ json: polls < 3 ? { status: 'running' } : {
+        status: success ? 'completed' : 'failed', httpStatus: success ? 200 : 422,
+        body: success ? { id: 'offline', status: 'starting' } : { error: 'World could not be prepared', reason: 'Fixture failure: original world preserved' },
+      } });
+    });
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect.poll(() => polls).toBeGreaterThanOrEqual(3);
+    await expect(page.getByText(success ? 'Command sent.' : 'Fixture failure: original world preserved', { exact: true })).toBeVisible();
+    expect(submissions).toBe(1);
   });
 }

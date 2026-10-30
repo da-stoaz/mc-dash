@@ -7,6 +7,7 @@ import { assertAuthConfig, requireAuth } from './auth';
 import { config } from './config';
 import { logger } from './logger';
 import { routerService } from './services/routerService';
+import { memoryPressureService } from './services/memoryPressureService';
 import { metricsCollector } from './services/metricsCollector';
 import { hibernationService } from './services/hibernationService';
 import { uploadStaging } from './services/uploadStaging';
@@ -68,5 +69,6 @@ app.listen(config.port, config.bindHost, () => {
 
 routerService.start();
 metricsCollector.start();
+memoryPressureService.start();
 hibernationService.start();
 uploadStaging.start();

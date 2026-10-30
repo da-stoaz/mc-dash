@@ -151,3 +151,27 @@ test('closing hands the port back fast enough for a container to take it', async
   });
   assert.ok(rebindable, 'Docker must be able to bind the port immediately after');
 });
+
+test('a refused wake reports the actual cooldown instead of claiming a start', async () => {
+  const listener = new SleepListener(0, { ...OPTIONS, onWake: async () => 'Could not wake: RAM cooldown. Try again in 211 seconds.' });
+  await listener.listen();
+  try {
+    const port = listener.boundPort();
+    const reply = decodeJson(await talk(port, [handshake(port, 2)]));
+    assert.match(reply.text, /211 seconds/);
+    assert.doesNotMatch(reply.text, /starting/);
+  } finally { await listener.close(); }
+});
+
+test('an asynchronous wake result survives releasing the direct-port listener', async () => {
+  const listener = new SleepListener(0, { ...OPTIONS, onWake: async () => {
+    await listener.close();
+    return 'Docker accepted the start';
+  } });
+  await listener.listen();
+  try {
+    const port = listener.boundPort();
+    const reply = decodeJson(await talk(port, [handshake(port, 2)], 1000));
+    assert.equal(reply.text, 'Docker accepted the start');
+  } finally { await listener.close(); }
+});

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { isIP } from 'net';
 import type { Request, Response, NextFunction } from 'express';
 import { config } from './config';
 import { logger } from './logger';
@@ -116,11 +117,47 @@ export function isAuthenticated(req: Request): boolean {
   return verifySessionToken(cookies[COOKIE_NAME]);
 }
 
-export function setSessionCookie(res: Response): void {
+function isLocalHostname(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (isIP(host) === 4) {
+    const [a, b] = host.split('.').map(Number);
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  return isIP(host) === 6 && (host === '::1' || /^(fc|fd|fe[89ab])/i.test(host));
+}
+
+function sessionCookieSecure(req: Request): boolean {
+  // req.secure honours Express's configured trust proxy; never trust raw
+  // X-Forwarded-Proto here. Direct TLS and trusted HTTPS proxies always win.
+  if (req.secure) return true;
+
+  // A same-origin /api proxy can reach us over HTTP even when the browser uses
+  // HTTPS. Browser POSTs include Origin, which describes that public URL.
+  const origin = req.get('Origin');
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      if (url.origin === origin) {
+        if (url.protocol === 'https:') return true;
+        // Secure cookies are rejected on HTTP LAN addresses. Allow this narrow
+        // local exception even for older deployments with COOKIE_SECURE=true.
+        // Do not infer a local browser from the proxy's loopback connection.
+        if (url.protocol === 'http:' && isLocalHostname(url.hostname)) return false;
+      }
+    } catch {
+      // Missing, opaque or invalid origins retain the configured policy.
+    }
+  }
+  return config.cookieSecure;
+}
+
+export function setSessionCookie(req: Request, res: Response): void {
   res.cookie(COOKIE_NAME, createSessionToken(), {
     httpOnly: true,
     sameSite: 'lax',
-    secure: config.cookieSecure,
+    secure: sessionCookieSecure(req),
     maxAge: config.sessionTtlMs,
     path: '/',
   });

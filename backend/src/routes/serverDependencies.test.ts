@@ -70,6 +70,32 @@ test('Restart stops Docker before touching mods, then starts only after dependen
   assert.deepEqual(calls, ['status:restarting', 'stop', 'check', 'start', 'status:restarting']);
 });
 
+test('Restart releases a sleeping server port and clears its sleep flag', async t => {
+  const {server}=setup(t);
+  const sleeping={...server,hibernated:true};
+  t.mock.method(serverStore,'get',()=>sleeping);
+  let released=false;
+  t.mock.method(hibernationService,'releasePort',async()=>{released=true;});
+  t.mock.method(dockerService,'start',async()=>{assert.equal(released,true);return 'started-container';});
+  const res=response();
+  await handler('restart')({params:{id:server.id}},res);
+  assert.equal(res.statusCode,200);
+  assert.equal(res.body.hibernated,false);
+  assert.equal(res.body.containerId,'started-container');
+});
+
+test('a refused restart of a sleeping server restores wake-on-connect', async t => {
+  const {server}=setup(t);
+  t.mock.method(serverStore,'get',()=>({...server,hibernated:true}));
+  t.mock.method(dockerService,'start',async()=>{throw new UserFacingError({error:'Not enough shared RAM to start',code:'MEMORY_POOL_PRESSURE',status:409});});
+  const restore=t.mock.method(hibernationService,'restoreSleep',async()=>{});
+  const res=response();
+  await handler('restart')({params:{id:server.id}},res);
+  assert.equal(res.statusCode,409);
+  assert.equal(restore.mock.calls.length,1);
+  assert.equal(restore.mock.calls[0].arguments[0],server.id);
+});
+
 test('concurrent lifecycle requests cannot start Docker during dependency repair', async t => {
   const { server, calls } = setup(t);
   let release!: () => void;
@@ -142,4 +168,145 @@ test('entity broadcast range saves to server.properties and requires restart', a
     assert.match(properties, new RegExp(`entity-broadcast-range-percentage=${value}\\n`));
     assert.match(properties, /motd=Keep me/);
   }
+});
+
+test('settings cannot recreate a container while restore or rebuild owns its lifecycle lock', async t => {
+  const { server } = setup(t);
+  const { lifecycleBusy } = require('../state');
+  const patch = router.stack.find((layer: any) => layer.route?.path === '/:id' && layer.route.methods.patch).route.stack[0].handle;
+  const recreate = t.mock.method(prepare, 'recreateContainer', async () => { throw Error('Must not recreate'); });
+  lifecycleBusy.add(server.id);
+  try {
+    const res = response();
+    await patch({ params: { id: server.id }, body: { javaImage: 'new:java' } }, res);
+    assert.equal(res.statusCode, 409);
+    assert.equal(serverStore.update.mock.calls.length, 0);
+    assert.equal(recreate.mock.calls.length, 0);
+    assert.equal(lifecycleBusy.has(server.id), true);
+  } finally { lifecycleBusy.delete(server.id); }
+});
+
+test('a pending configuration write keeps start requests out until it finishes', async t => {
+  const { server } = setup(t);
+  const patch = router.stack.find((layer: any) => layer.route?.path === '/:id' && layer.route.methods.patch).route.stack[0].handle;
+  let release!: () => void;
+  t.mock.method(prepare, 'applyConfigFiles', () => new Promise<void>(resolve => { release = resolve; }));
+  const editing = patch({ params: { id: server.id }, body: { game: { renderDistance: 12 } } }, response());
+  const res = response();
+  await handler('start')({ params: { id: server.id } }, res);
+  assert.equal(res.statusCode, 409);
+  release();
+  await editing;
+});
+
+test('shared-pool RAM edits do not reserve every configured maximum', async t => {
+  const { server } = setup(t);
+  const { config } = require('../config');
+  const pool = require('../services/memoryPool');
+  const previousPoolEnabled = config.memoryPoolEnabled;
+  config.memoryPoolEnabled = true;
+  t.after(() => { config.memoryPoolEnabled = previousPoolEnabled; });
+  const current = { ...server, status: 'running', resources: { minRamMb: 512, maxRamMb: 6000 } };
+  t.mock.method(serverStore, 'get', () => current);
+  t.mock.method(serverStore, 'update', (_id: string, changes: any) => ({ ...current, ...changes }));
+  t.mock.method(pool, 'readVerifiedMemoryPool', async () => ({ enabled: true, enforced: true, limitMb: 12000, usedMb: 2000 }));
+  const oldGate = t.mock.method(capacity, 'capacityReport', async () => { throw Error('Legacy accounting must not run'); });
+  t.mock.method(prepare, 'applyConfigFiles', async () => {});
+  t.mock.method(dockerService, 'updateResources', async () => {});
+  const patch = router.stack.find((layer: any) => layer.route?.path === '/:id' && layer.route.methods.patch).route.stack[0].handle;
+  const res = response();
+  await patch({ params: { id: server.id }, body: { resources: { minRamMb: 512, maxRamMb: 6500 } } }, res, (err: any) => { throw err; });
+  assert.equal(res.statusCode, 200);
+  assert.equal(oldGate.mock.calls.length, 0);
+  for (const [enforced, maxRamMb, expected] of [[false, 6500, 'MEMORY_POOL_UNVERIFIED'], [true, 13000, 'MEMORY_POOL_LIMIT_EXCEEDED']] as const) {
+    t.mock.method(pool, 'readVerifiedMemoryPool', async () => ({ enabled: true, enforced, limitMb: 12000, usedMb: 2000 }));
+    const refused = response();
+    await patch({ params: { id: server.id }, body: { resources: { minRamMb: 512, maxRamMb } } }, refused, (err: any) => { throw err; });
+    assert.equal(refused.statusCode, 409);
+    assert.equal(refused.body.code, expected);
+  }
+});
+
+test('async start responds immediately, keeps the lock, and exposes the final original response', async t => {
+  const { server } = setup(t);
+  const { getServerOperation } = require('../services/serverOperationStore');
+  let release!: () => void;
+  t.mock.method(prepare, 'ensurePreparedModDependencies', () => new Promise<void>(resolve => { release = resolve; }));
+  const res = response();
+  await handler('start')({ params: { id: server.id }, headers: { prefer: 'respond-async' } }, res);
+  assert.equal(res.statusCode, 202);
+  assert.match(res.body.statusUrl, /\/operations\//);
+  assert.equal(getServerOperation(server.id, res.body.operationId).status, 'running');
+  const duplicate = response();
+  await handler('start')({ params: { id: server.id } }, duplicate);
+  assert.equal(duplicate.statusCode, 409);
+  // Reach the blocked dependency check without waiting for a real 30s timeout.
+  await new Promise(resolve => setImmediate(resolve));
+  release();
+  const deadline = Date.now() + 2000;
+  while (getServerOperation(server.id, res.body.operationId).status === 'running' && Date.now() < deadline) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  const result = getServerOperation(server.id, res.body.operationId);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.httpStatus, 200);
+  assert.equal(result.body.containerId, 'container');
+  assert.equal(getServerOperation('different-server', res.body.operationId), null);
+});
+
+test('async failures retain their API status and actionable error', async t => {
+  const { server } = setup(t);
+  const { getServerOperation } = require('../services/serverOperationStore');
+  t.mock.method(prepare, 'ensurePreparedModDependencies', async () => { throw new UserFacingError({ error: 'Dependency unavailable', code: 'MISSING_MOD', status: 422 }); });
+  const res = response();
+  await handler('start')({ params: { id: server.id }, headers: { prefer: 'respond-async' } }, res);
+  const deadline = Date.now() + 2000;
+  while (getServerOperation(server.id, res.body.operationId).status === 'running' && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+  const result = getServerOperation(server.id, res.body.operationId);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.httpStatus, 422);
+  assert.equal(result.body.code, 'MISSING_MOD');
+});
+
+test('unfinished server operations are marked interrupted on backend initialization', () => {
+  const store = require('../services/serverOperationStore');
+  const id = store.beginServerOperation('interrupted');
+  delete require.cache[require.resolve('../services/serverOperationStore')];
+  const reloaded = require('../services/serverOperationStore');
+  assert.equal(reloaded.getServerOperation('interrupted', id).status, 'failed');
+  assert.match(reloaded.getServerOperation('interrupted', id).body.error, /backend restart/);
+});
+
+test('background import retains its upload and server lock until extraction finishes', async t => {
+  const snapshots = require('../services/snapshotService');
+  const { getServerOperation } = require('../services/serverOperationStore');
+  const archive = path.join(root, 'import-fixture.tar');
+  fs.writeFileSync(archive, 'fixture upload');
+  let release!: () => void;
+  let importedId: string | undefined;
+  t.mock.method(snapshots, 'importSnapshotArchive', async (id: string, file: string) => {
+    importedId = id;
+    assert.equal(file, archive);
+    await new Promise<void>(resolve => { release = resolve; });
+    assert.equal(fs.existsSync(archive), true);
+  });
+  t.mock.method(prepare, 'recreateContainer', async () => ({ containerId: 'imported', image: 'test:java', javaSource: 'override' }));
+  const importHandler = router.stack.find((layer: any) => layer.route?.path === '/import').route.stack.at(-1).handle;
+  const res = response();
+  await importHandler({ params: {}, headers: { prefer: 'respond-async' },
+    body: { name: 'Imported fixture', minRamMb: '512', maxRamMb: '2048' },
+    file: { path: archive, originalname: 'snapshot.tar' },
+  }, res, (err: any) => { throw err; });
+  assert.equal(res.statusCode, 202);
+  assert.equal(fs.existsSync(archive), true);
+  assert.equal(preparing.has(importedId), true);
+  const competing = response();
+  await handler('start')({ params: { id: importedId } }, competing);
+  assert.equal(competing.statusCode, 409);
+  release();
+  const deadline = Date.now() + 2000;
+  while (getServerOperation(importedId, res.body.operationId).status === 'running' && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(getServerOperation(importedId, res.body.operationId).httpStatus, 201);
+  assert.equal(fs.existsSync(archive), false);
+  assert.equal(preparing.has(importedId), false);
 });
