@@ -1,6 +1,17 @@
 import type { ServerMetrics } from '../../lib/serverTypes';
 
 export const HISTORY_LIMIT = 60;
+export const LIVE_GAP_MS = 15_000;
+
+/** Keep the sample immediately before the window so lines reach its boundary.
+ * Older samples cannot bridge an outage and must still expire. Input is sorted. */
+export function retainLiveWindow<T>(points: T[], time: (point: T) => number, now = Date.now()): T[] {
+  const start = now - HISTORY_LIMIT * 1000;
+  const first = points.findIndex(point => time(point) >= start);
+  if (first < 0) return [];
+  const predecessor = first > 0 && time(points[first - 1]) >= start - LIVE_GAP_MS;
+  return points.slice(predecessor ? first - 1 : first);
+}
 
 export type LiveMetricsHistory = {
   cpuCores: (number | null)[];
@@ -24,7 +35,8 @@ export function mergeLiveHistory(previous: LiveMetricsHistory, samples: (ServerM
     if (Number.isFinite(sample.at) && sample.status === 'running') points.set(sample.at, sample);
   }
   const result = emptyLiveHistory();
-  for (const point of [...points.values()].filter(p => p.at >= now - HISTORY_LIMIT * 1000 && p.at <= now + 1000).sort((a, b) => a.at - b.at).slice(-120)) {
+  const sorted = [...points.values()].filter(p => p.at <= now + 1000).sort((a, b) => a.at - b.at);
+  for (const point of retainLiveWindow(sorted, p => p.at, now).slice(-120)) {
     result.timestamps.push(point.at);
     result.cpu.push(point.cpuPercent);
     result.memory.push(point.memoryPercent);

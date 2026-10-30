@@ -121,7 +121,14 @@ export class MetricsCollector {
   // Keep actual readings even without viewers; rollups cannot seed a live chart.
   private readonly recent = new Map<string, TimedMetrics[]>();
   recentFor(serverId: string): TimedMetrics[] {
-    return (this.recent.get(serverId) ?? []).filter(point => point.at >= Date.now() - 60_000);
+    const points = this.recent.get(serverId) ?? [];
+    const start = Date.now() - 60_000;
+    const first = points.findIndex(point => point.at >= start);
+    if (first < 0) return [];
+    // The preceding reading is needed to draw the line up to the 60s boundary.
+    // Never retain it indefinitely or use it to bridge a collection outage.
+    const predecessor = first > 0 && points[first - 1].at >= start - 15_000;
+    return points.slice(predecessor ? first - 1 : first);
   }
 
   /** Latest reading for one server, or null when stopped or stale. */
