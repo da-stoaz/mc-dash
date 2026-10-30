@@ -99,3 +99,49 @@ test('TPS refreshes every five seconds', async ({ page }) => {
   await page.clock.runFor(1);
   await expect.poll(tpsCalls).toBe(1);
 });
+
+test('TPS stays still between readings and advances only when a real sample arrives', async ({ page }, testInfo) => {
+  const { now } = await chartPage(page);
+  const chart = page.getByRole('slider', { name: /TPS history/ });
+  const line = chart.locator('path[fill="none"]');
+  const initialPath = await line.getAttribute('d');
+  expect(initialPath).toMatch(/L 100 0$/);
+
+  await page.clock.runFor(4000);
+  await expect(line).toHaveAttribute('d', initialPath!);
+
+  let nextSample: number | null = null;
+  let polls = 0;
+  await page.route('**/servers/window-test/tps', async route => {
+    polls++;
+    const at = await page.evaluate(() => Date.now());
+    return route.fulfill({ json: {
+      state: nextSample === null ? 'unavailable' : 'available',
+      current: nextSample === null ? null : { tps: 18, source: 'spark', window: '5s' },
+      sampledAt: at,
+      points: nextSample === null ? [{ t: at, tps: null }] : [
+        ...Array.from({ length: 14 }, (_, i) => ({ t: now - 65000 + i * 5000, tps: 20 })),
+        { t: nextSample, tps: 18 },
+      ],
+    } });
+  });
+  await page.clock.runFor(1000);
+  await expect.poll(() => polls).toBe(1);
+  await expect(page.getByText('Current reading unavailable; showing recent samples.')).toBeVisible();
+  await expect(line).toHaveAttribute('d', initialPath!);
+  await page.clock.runFor(10_000);
+  await expect(line).toHaveAttribute('d', initialPath!);
+
+  nextSample = now + 20_000;
+  await page.clock.runFor(5000);
+  await expect(page.getByText('18.00 TPS', { exact: true })).toBeVisible();
+  await expect(line).not.toHaveAttribute('d', initialPath!);
+  await expect(line).toHaveAttribute('d', /M 100 [\d.]+$/);
+  await chart.press('End');
+  await expect(chart).toHaveAttribute('aria-valuetext', /18.00 TPS/);
+  await chart.blur();
+  await page.screenshot({ path: testInfo.outputPath('tps-latest-sample.png'), fullPage: true });
+  const updatedPath = await line.getAttribute('d');
+  await page.clock.runFor(4000);
+  await expect(line).toHaveAttribute('d', updatedPath!);
+});

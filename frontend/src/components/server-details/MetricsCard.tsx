@@ -34,8 +34,8 @@ const RANGE_LABELS: Record<MetricRange, string> = { '1h': '1h', '1d': '1d', '7d'
 
 
 // Real elapsed time since an epoch (ms), for the chart's left timeline edge.
-function formatAgo(ms: number): string {
-  const diff = Date.now() - ms;
+function formatAgo(ms: number, now: number): string {
+  const diff = now - ms;
   if (diff < 60_000) return 'now';
   const mins = Math.round(diff / 60_000);
   if (mins < 60) return `${mins}m ago`;
@@ -108,7 +108,7 @@ function StatBlock({ icon, title, primary, secondary }: StatBlockProps) {
 
 // Historical view for a persisted range (1h / 1d / 7d): just the trend charts.
 // Current Network/Disk/Runtime live in the footer, so we don't repeat them here.
-function HistoryView({ history }: { history: MetricsHistory | null }) {
+function HistoryView({ history, now }: { history: MetricsHistory | null; now: number }) {
   const points = history?.points ?? [];
   const timestamps = points.map((p) => p.t);
   const cpuAvg = points.map((p) => p.cpuAvg);
@@ -116,7 +116,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
   const memAvg = points.map((p) => p.memAvg);
   const memMax = points.map((p) => p.memMax);
   // Left edge = age of the oldest real bucket; right edge = present.
-  const startLabel = points.length ? formatAgo(points[0].t) : undefined;
+  const startLabel = points.length ? formatAgo(points[0].t, now) : undefined;
 
   return (
     <div className="divide-y divide-white/10">
@@ -132,7 +132,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
         fill={CPU_FILL}
         avgLabel={points.length ? pct(mean(cpuAvg)) : '--'}
         startLabel={startLabel}
-        endLabel={points.length ? formatAgo(points[points.length - 1].t) : undefined}
+        endLabel={points.length ? formatAgo(points[points.length - 1].t, now) : undefined}
         emptyLabel="No recorded data in this range"
       />
       <UsageChart
@@ -147,7 +147,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
         fill={MEM_FILL}
         avgLabel={points.length ? pct(mean(memAvg)) : '--'}
         startLabel={startLabel}
-        endLabel={points.length ? formatAgo(points[points.length - 1].t) : undefined}
+        endLabel={points.length ? formatAgo(points[points.length - 1].t, now) : undefined}
         emptyLabel="No recorded data in this range"
       />
     </div>
@@ -198,6 +198,12 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
   const [tab, setTab] = useState<'live' | MetricRange>('live');
   const [rangeData, setRangeData] = useState<MetricsHistory | null>(null);
   const [rangeError, setRangeError] = useState(false);
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Fetch (and periodically refresh) persisted rollups when a range tab is active.
   useEffect(() => {
@@ -226,7 +232,6 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
     };
   }, [tab, serverId]);
 
-  const now = Date.now();
   const liveWindow: [number, number] = [now - HISTORY_LIMIT * 1000, now];
   const visibleCpu = history.cpu.filter((_, i) => history.timestamps[i] >= liveWindow[0] && history.timestamps[i] <= now);
   const visibleMemory = history.memory.filter((_, i) => history.timestamps[i] >= liveWindow[0] && history.timestamps[i] <= now);
@@ -287,7 +292,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
               </div>
             ) : rangeError ? (
               <div role="status" className="py-12 text-center text-sm muted">Could not load history. Retrying automatically…</div>
-            ) : rangeData ? <HistoryView history={rangeData} /> : (
+            ) : rangeData ? <HistoryView history={rangeData} now={now} /> : (
               <div role="status" className="py-12 text-center text-sm muted">Loading history…</div>
             )}
           </CardBody>
@@ -299,9 +304,9 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
               <h2 className="flex items-center gap-2 text-base font-semibold"><Activity size={16} />Server tick rate</h2>
               <div className="mt-3 text-3xl font-semibold tabular-nums">{tps.current ? formatTps(tps.current.tps) : '—'}</div>
               <p className="mt-1 text-xs muted">20 TPS is the target for smooth gameplay.</p>
-              <UsageChart label="TPS" window={liveWindow} values={tps.points.map(point => point.tps ?? NaN)} timestamps={tps.points.map(point => point.t)}
+              <UsageChart label="TPS" window={tps.window} values={tps.points.map(point => point.tps ?? NaN)} timestamps={tps.points.map(point => point.t)}
                 stroke="#34d399" fill="rgba(52, 211, 153, 0.18)" maxValue={Math.max(20, ...tps.points.map(point => point.tps ?? 0))}
-                formatValue={formatTps} avgLabel="" summary="Every 5s" startLabel="60s ago" endLabel="Now"
+                formatValue={formatTps} avgLabel="" summary="Every 5s" startLabel="60s earlier" endLabel="Latest sample"
                 emptyLabel={tps.unavailable ? 'Unavailable' : 'Collecting data…'} />
               {tps.unavailable && tps.points.length > 1 && <p className="text-xs text-amber-300">Current reading unavailable; showing recent samples.</p>}
             </section>

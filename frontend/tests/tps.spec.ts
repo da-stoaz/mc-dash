@@ -107,12 +107,11 @@ test('resource tooltips include recorded cores and gigabytes in live and histori
   await expect(page.getByRole('tooltip')).toContainText('Peak usage1.50 GiB');
 });
 
-test('Overview Edit opens the existing server editor', async ({ page }) => {
+test('Settings opens the organized server settings', async ({ page }) => {
   await setup(page, 'available', 'running', true);
-  await page.getByRole('button', { name: 'Edit', exact: true }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('dialog')).toContainText('Edit TPS test');
-  await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('TPS test');
+  await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Server settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Server name', exact: true })).toHaveValue('TPS test');
 });
 
 test('storage stays accessible offline, retains its last reading on failure, and can retry', async ({ page }) => {
