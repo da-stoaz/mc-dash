@@ -8,17 +8,15 @@ import { getPlayerCount } from './playerService';
 import { gracefulSleep } from './gracefulSleep';
 import { db } from '../db';
 import { SleepListener } from './sleepGateway';
+import { refreshServerStatus } from './serverStatus';
 
 // ---------------------------------------------------------------------------
 // Hibernation
 //
 // Elastic heap makes an idle server smaller. Hibernation makes it free.
 //
-// A stopped server returns 100% of its memory, its CPU and its container
-// overhead, which is a different order of saving from persuading a JVM to
-// uncommit some regions — and on a host where the real pattern is "four servers
-// exist, one is being played on", it is the only thing that actually fixes the
-// arithmetic.
+// Stopping releases process memory and CPU. File cache can remain charged to
+// the pool until Linux reclaims it; the dashboard reports that separately.
 //
 // The cost is a cold start, so the whole design is about making that cost
 // visible and small rather than pretending it isn't there:
@@ -37,6 +35,7 @@ import { SleepListener } from './sleepGateway';
 // ---------------------------------------------------------------------------
 
 const POLL_INTERVAL_MS = 30_000;
+const LISTENER_ERROR = 'Wake listener unavailable. Start this server from MC Dash; the listener will retry shortly.';
 
 // Statuses where asking about players makes sense at all.
 const RUNNABLE = new Set(['running']);
@@ -59,13 +58,15 @@ export class HibernationService {
   private readonly busy = lifecycleBusy;
 
   start() {
-    void this.restoreListeners();
+    if (this.timer) return;
+    // Existing sleeping servers still need wake listeners, even when automatic
+    // sleep has since been disabled. Retry failed binds on every poll.
+    void this.tick();
+    this.timer = setInterval(() => void this.tick(), POLL_INTERVAL_MS);
     if (!config.hibernationEnabled) {
-      logger.info('Hibernation disabled (MC_DASH_HIBERNATE=false)');
+      logger.info('Automatic sleep disabled (MC_DASH_HIBERNATE=false); existing sleepers can still wake');
       return;
     }
-    if (this.timer) return;
-    this.timer = setInterval(() => void this.tick(), POLL_INTERVAL_MS);
     logger.info(
       `Hibernation enabled: servers sleep after ${Math.round(config.hibernationIdleMs / 60000)} min with no players`
     );
@@ -74,13 +75,6 @@ export class HibernationService {
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-  }
-
-  private async restoreListeners() {
-    await this.reconcile();
-    for (const server of serverStore.list()) {
-      if (server.hibernated) await this.armListener(server);
-    }
   }
 
   /** Player count for the UI and for the idle timer, without a second RCON round trip. */
@@ -99,7 +93,13 @@ export class HibernationService {
     this.running = true;
     try {
       await this.reconcile();
-      const servers = serverStore.list();
+      // Readiness must advance even with the shared manager disabled and no
+      // dashboard open, so normal play-time RAM is not learned as boot demand.
+      const servers = await Promise.all(serverStore.list().map(refreshServerStatus));
+      if (!config.hibernationEnabled) {
+        this.trackers.clear();
+        return;
+      }
       const liveIds = new Set(servers.map((server) => server.id));
       for (const id of this.trackers.keys()) if (!liveIds.has(id)) this.trackers.delete(id);
 
@@ -151,7 +151,7 @@ export class HibernationService {
    * Occupied servers require a completed warning from the pressure controller.
    */
   async hibernate(server: ServerRecord, opts: { allowOccupied?: boolean; beforeStop?: () => Promise<boolean> } = {}): Promise<boolean> {
-    if (this.busy.has(server.id)) return false;
+    if (!config.hibernationEnabled || this.busy.has(server.id)) return false;
     this.busy.add(server.id);
     try {
       const fresh = serverStore.get(server.id);
@@ -159,6 +159,7 @@ export class HibernationService {
       if (!opts.allowOccupied && (await getPlayerCount(fresh).catch(() => null))?.online !== 0) return false;
       logger.info({ serverId: server.id, name: server.name }, 'Saving server for automatic sleep');
       await gracefulSleep(fresh, async () => {
+        if (!config.hibernationEnabled) return false;
         if (!opts.allowOccupied && (await getPlayerCount(fresh).catch(() => null))?.online !== 0) return false;
         const current = serverStore.get(server.id);
         if (!current || current.status !== 'running' || current.containerId !== fresh.containerId || preparing.has(server.id)) return false;
@@ -199,17 +200,19 @@ export class HibernationService {
       versionName: 'Sleeping',
       motd: config.hibernationMotd,
       wakeMessage: config.hibernationWakeMessage,
-      onWake: () => void this.wake(server.id, 'player'),
+      onWake: () => this.wake(server.id, 'player'),
     });
 
     try {
       await listener.listen();
       this.listeners.set(server.id, listener);
+      if (serverStore.get(server.id)?.lastError === LISTENER_ERROR) serverStore.update(server.id, { lastError: null });
       logger.info({ serverId: server.id, port: server.serverPort }, 'Sleep listener armed');
     } catch (err) {
+      if (!serverStore.get(server.id)?.lastError) serverStore.update(server.id, { lastError: LISTENER_ERROR });
       logger.warn(
         { err, serverId: server.id, port: server.serverPort },
-        'Could not bind the sleep listener; this server will not wake on connect'
+        'Could not bind the sleep listener; will retry on the next poll'
       );
     }
   }
@@ -234,6 +237,23 @@ export class HibernationService {
         if (await dockerService.waitForExit(server, 100, {requireClean:true})) await this.restoreSleep(server.id);
         db.prepare('DELETE FROM sleep_intents WHERE serverId = ?').run(server.id);
       } finally { lifecycleBusy.delete(server.id); }
+    }
+    for (const [id] of this.listeners) {
+      if (this.busy.has(id)) continue;
+      const server = serverStore.get(id);
+      // An inspection error is not evidence that the sleeping JVM restarted.
+      // Keep its working listener available through transient Docker outages.
+      if (!server?.hibernated || !config.hibernationWakeOnConnect) {
+        this.busy.add(id);
+        try { await this.releasePort(id); }
+        finally { this.busy.delete(id); }
+      }
+    }
+    for (const server of serverStore.list()) {
+      if (this.busy.has(server.id) || !server.hibernated || server.status !== 'stopped') continue;
+      this.busy.add(server.id);
+      try { await this.armListener(server); }
+      finally { this.busy.delete(server.id); }
     }
   }
 
@@ -260,12 +280,13 @@ export class HibernationService {
 
   /**
    * Wake a sleeping server. Safe to call from a socket handler: it never throws
-   * and never blocks the caller on the container start.
+   * and resolves to the start result for the player's disconnect message.
    */
-  async wake(serverId: string, trigger: 'player' | 'manual'): Promise<void> {
-    if (this.busy.has(serverId)) return;
+  async wake(serverId: string, trigger: 'player' | 'manual'): Promise<string> {
+    if (trigger === 'player' && !config.hibernationWakeOnConnect) return 'Automatic wake is disabled. Start this server from MC Dash.';
+    if (this.busy.has(serverId)) return 'A server operation is already in progress. Please reconnect shortly.';
     const server = serverStore.get(serverId);
-    if (!server || !server.hibernated) return;
+    if (!server || !server.hibernated) return 'This server is no longer asleep. Please reconnect.';
 
     this.busy.add(serverId);
     try {
@@ -275,13 +296,17 @@ export class HibernationService {
       // the process coming up reads the current files, so whatever was pending
       // is applied by this start. Without it, a server that slept with a config
       // change pending would wake up still claiming it needed a restart.
-      serverStore.update(serverId, { status: 'starting', hibernated: false, restartRequired: false });
+      serverStore.update(serverId, { status: 'starting', hibernated: false });
       const containerId = await dockerService.start(server);
-      serverStore.update(serverId, { status: 'starting', containerId });
+      serverStore.update(serverId, { status: 'starting', containerId, restartRequired: false, lastError: null });
+      return config.hibernationWakeMessage;
     } catch (err) {
       logger.error({ err, serverId }, 'Wake failed');
-      const sleeping = serverStore.update(serverId, { status: 'stopped', hibernated: true });
+      const message = err instanceof Error ? err.message : 'The server could not be started.';
+      const reason = (err as { reason?: string })?.reason;
+      const sleeping = serverStore.update(serverId, { status: 'stopped', hibernated: true, lastError: reason ? `${message}. ${reason}` : message });
       if (sleeping) await this.armListener(sleeping);
+      return `Could not wake this server: ${message}${reason ? `\n${reason}` : ''}`;
     } finally {
       this.busy.delete(serverId);
     }

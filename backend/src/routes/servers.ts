@@ -1,3 +1,4 @@
+import { serverStorageUsage } from '../services/serverFiles';
 import { Router, raw, Request, RequestHandler } from 'express';
 import multer from 'multer';
 import net from 'net';
@@ -19,6 +20,7 @@ import { config } from '../config';
 import { toApiError, UserFacingError } from '../apiErrors';
 import { readVerifiedMemoryPool, requireMemoryPool } from '../services/memoryPool';
 import { preparing, lifecycleBusy } from '../state';
+import { refreshServerStatus } from '../services/serverStatus';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
 import { runServerRcon } from '../services/rconService';
 import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands, runConsoleCommand } from '../services/consoleService';
@@ -327,14 +329,7 @@ async function resolveServerPort(requested?: number, excludeId?: string): Promis
 
 router.get('/', async (_req, res) => {
   const servers = serverStore.list();
-  const refreshed = await Promise.all(
-    servers.map(async (server) => {
-      if (preparing.has(server.id)) return server;
-      const { status, exitCode } = await dockerService.statusDetails(server);
-      const current = status === server.status ? server : serverStore.update(server.id, { status }) ?? server;
-      return { ...current, exitCode };
-    })
-  );
+  const refreshed = await Promise.all(servers.map(refreshServerStatus));
   res.json(await toServerViews(refreshed));
 });
 
@@ -346,7 +341,7 @@ router.get('/stream', (req, res) => {
 router.get('/:id', async (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
-  res.json(preparing.has(server.id) ? server : { ...server, ...await dockerService.statusDetails(server) });
+  res.json(await refreshServerStatus(server));
 });
 
 // SSE: live record + metrics for a single server.
@@ -1057,18 +1052,27 @@ router.post('/:id/restart', lifecycle(async (req, res) => {
     // container stopped and returns the dependency error to the dashboard.
     await dockerService.stop(server, { timeoutSec: 30 });
     await ensurePreparedModDependencies(server);
-    await dockerService.start(server);
-    const updated = serverStore.update(server.id, { status: 'restarting', restartRequired: false, lastError: null });
+    await hibernationService.releasePort(server.id);
+    const containerId = await dockerService.start(server);
+    const updated = serverStore.update(server.id, { status: 'restarting', containerId, hibernated: false, restartRequired: false, lastError: null });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Restart failed');
     const apiErr = toApiError(err, { error: 'Failed to restart container', status: 500 });
     serverStore.update(server.id, { status: 'error', lastError: failureReason(apiErr.body) });
+    if (server.hibernated) await hibernationService.restoreSleep(server.id);
     res.status(apiErr.status).json(apiErr.body);
   }
 }));
 
 // On-demand only: do not attach diagnostic processes on every metrics poll.
+router.get('/:id/storage', async (req, res, next) => {
+  const server = serverStore.get(String(req.params.id));
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  try { res.json(await serverStorageUsage(server.id)); }
+  catch (error) { next(error); }
+});
+
 router.get('/:id/memory-runtime', async (req, res) => {
   const server=serverStore.get(req.params.id);
   if(!server) return notFound(res);

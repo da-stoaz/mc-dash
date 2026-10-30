@@ -1,10 +1,9 @@
 import type { Response } from 'express';
-import { dockerService } from './dockerService';
+import { refreshServerStatus } from './serverStatus';
 import { getPlayerCount } from './playerService';
 import { serverStore } from '../serverStore';
 import { metricsCollector } from './metricsCollector';
 import { toServerViews } from './serverView';
-import { preparing } from '../state';
 import { logger } from '../logger';
 
 // How often the shared loops poll Docker. One loop serves every connected
@@ -46,11 +45,8 @@ async function refreshStatuses() {
     const servers = serverStore.list();
     const refreshed = await Promise.all(
       servers.map(async (server) => {
-        if (preparing.has(server.id)) return server;
         try {
-          const { status, exitCode } = await dockerService.statusDetails(server);
-          const current = status === server.status ? server : serverStore.update(server.id, { status }) ?? server;
-          return { ...current, exitCode };
+          return await refreshServerStatus(server);
         } catch {
           return server;
         }
@@ -101,14 +97,10 @@ async function refreshDetail(id: string) {
     }
 
     let current: typeof server & { exitCode?: number | null } = server;
-    if (!preparing.has(id)) {
-      try {
-        const { status, exitCode } = await dockerService.statusDetails(server);
-        if (status !== server.status) current = serverStore.update(id, { status }) ?? server;
-        current = { ...current, exitCode };
-      } catch {
-        // keep last known status
-      }
+    try {
+      current = await refreshServerStatus(server);
+    } catch {
+      // keep last known status
     }
     for (const res of room.clients) send(res, 'server', current);
 
@@ -140,6 +132,7 @@ export function addDetailClient(id: string, res: Response) {
   // Immediate snapshot from the store.
   const existing = serverStore.get(id);
   send(res, 'server', existing);
+  send(res, 'metrics-history', metricsCollector.recentFor(id));
   room.clients.add(res);
   if (!room.timer) room.timer = setInterval(() => refreshDetail(id), DETAIL_INTERVAL_MS);
 

@@ -44,5 +44,20 @@ for proc in /proc/[0-9]*; do
 done
 [ "$count" = 1 ] || exit 41
 jcmd_path="$(dirname "$java_bin")/jcmd"
-[ -x "$jcmd_path" ] || exit 42
-exec timeout -s KILL 5 "$jcmd_path" "$pid" VM.flags`;
+if [ -x "$jcmd_path" ]; then
+  exec timeout -s KILL 5 "$jcmd_path" "$pid" VM.flags
+fi
+[ -n "$1" ] || exit 42
+[ -x "$1" ] || exit 126
+exec timeout -s KILL 5 "$1" "$pid" jcmd VM.flags`;
+
+export function inspectionFailure(code: number | null): string {
+  switch (code) {
+    case 40: return 'The Java image has no timeout utility for a bounded inspection.';
+    case 41: return 'Expected exactly one running Java process. Retry when startup has finished.';
+    case 42: return 'This JRE has no jcmd, and the MC Dash diagnostic helper is unavailable.';
+    case 124: case 137: return 'The JVM did not answer within five seconds. Attach may be disabled or the JVM is busy.';
+    case 126: case 127: return 'The Java image cannot execute the diagnostic helper (architecture or executable permissions).';
+    default: return 'The JVM rejected diagnostic attach. Check attach permissions or whether this runtime supports HotSpot diagnostics.';
+  }
+}

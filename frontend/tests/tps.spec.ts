@@ -7,7 +7,18 @@ async function setup(page: Page, state: string, status = 'running', populated = 
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) => route.fulfill({ json: body });
     if (path.endsWith('/auth/me')) return json({ authenticated: true, authRequired: false });
-    if (path.endsWith('/stream')) return route.fulfill({ contentType: 'text/event-stream', body: `event: server\ndata: ${JSON.stringify(server)}\n\n` + (populated ? `event: metrics\ndata: ${JSON.stringify({ cpuPercent: 24, cpuCores: 0.96, cpuCoresAvailable: 4, memoryPercent: 62, memoryBytes: 1331439861, memoryLimitBytes: 2147483648, uptimeSeconds: 8560 })}\n\nevent: players\ndata: ${JSON.stringify({ online: 3, max: 20, names: ['Alex', 'Steve', 'Builder'] })}\n\n` : '') });
+    if (path.endsWith('/stream')) {
+      let body = `event: server\ndata: ${JSON.stringify(server)}\n\n`;
+      if (populated) {
+        const sample = { status: 'running', at: Date.now(), cpuPercent: 24, cpuCores: 0.96, cpuCoresAvailable: 4,
+          memoryPercent: 62, memoryBytes: 1331439861, memoryLimitBytes: 2147483648, uptimeSeconds: 8560 };
+        const recent = [{ ...sample, at: sample.at - 5000, cpuPercent: 25, cpuCores: 1, memoryPercent: 50, memoryBytes: 1024 ** 3 }];
+        body += `event: metrics-history\ndata: ${JSON.stringify(recent)}\n\n`;
+        body += `event: metrics\ndata: ${JSON.stringify(sample)}\n\n`;
+        body += `event: players\ndata: ${JSON.stringify({ online: 3, max: 20, names: ['Alex', 'Steve', 'Builder'] })}\n\n`;
+      }
+      return route.fulfill({ contentType: 'text/event-stream', body });
+    }
     if (path.endsWith('/tps')) return json({
       state, current: state === 'available' ? { tps: 18.75, source: 'spark', window: '5s' } : null,
       sampledAt: Date.now(), points: state === 'available' ? [{ t: Date.now() - 10000, tps: 20 }, { t: Date.now(), tps: 18.75 }] : [],
@@ -83,12 +94,14 @@ test('resource tooltips include recorded cores and gigabytes in live and histori
   const memory = page.getByRole('slider', { name: /Memory usage history/ });
   await memory.focus();
   await memory.press('Home');
-  await expect(page.getByRole('tooltip')).toContainText('Memory usage1.00 GB');
+  await expect(page.getByRole('tooltip')).toContainText('Memory usage1.00 GiB');
+  await memory.press('End');
+  await expect(page.getByRole('tooltip')).toContainText('Memory usage1.24 GiB');
   await page.getByRole('button', { name: '1h', exact: true }).click();
   await cpu.focus();
   await expect(page.getByRole('tooltip')).toContainText('Peak usage2 cores');
   await memory.focus();
-  await expect(page.getByRole('tooltip')).toContainText('Peak usage1.50 GB');
+  await expect(page.getByRole('tooltip')).toContainText('Peak usage1.50 GiB');
 });
 
 for (const status of ['verified', 'mismatch', 'unverified'] as const) {
@@ -104,7 +117,7 @@ for (const status of ['verified', 'mismatch', 'unverified'] as const) {
     await page.getByText('Check running memory settings', {exact:true}).click();
     expect(checks).toBe(0);
     await page.getByRole('button', {name:'Check settings',exact:true}).click();
-    await expect(page.getByText(status === 'verified' ? 'Heap settings match' : status === 'mismatch' ? 'Settings differ' : 'Could not verify',{exact:true})).toBeVisible();
+    await expect(page.getByText(status === 'verified' ? 'Heap settings match' : status === 'mismatch' ? 'Settings differ' : 'Heap could not be verified',{exact:true})).toBeVisible();
     await expect(page.getByText('Runtime inspection result.',{exact:true})).toBeVisible();
     expect(checks).toBe(1);
   });

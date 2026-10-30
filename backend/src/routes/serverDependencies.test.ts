@@ -70,6 +70,32 @@ test('Restart stops Docker before touching mods, then starts only after dependen
   assert.deepEqual(calls, ['status:restarting', 'stop', 'check', 'start', 'status:restarting']);
 });
 
+test('Restart releases a sleeping server port and clears its sleep flag', async t => {
+  const {server}=setup(t);
+  const sleeping={...server,hibernated:true};
+  t.mock.method(serverStore,'get',()=>sleeping);
+  let released=false;
+  t.mock.method(hibernationService,'releasePort',async()=>{released=true;});
+  t.mock.method(dockerService,'start',async()=>{assert.equal(released,true);return 'started-container';});
+  const res=response();
+  await handler('restart')({params:{id:server.id}},res);
+  assert.equal(res.statusCode,200);
+  assert.equal(res.body.hibernated,false);
+  assert.equal(res.body.containerId,'started-container');
+});
+
+test('a refused restart of a sleeping server restores wake-on-connect', async t => {
+  const {server}=setup(t);
+  t.mock.method(serverStore,'get',()=>({...server,hibernated:true}));
+  t.mock.method(dockerService,'start',async()=>{throw new UserFacingError({error:'Not enough shared RAM to start',code:'MEMORY_POOL_PRESSURE',status:409});});
+  const restore=t.mock.method(hibernationService,'restoreSleep',async()=>{});
+  const res=response();
+  await handler('restart')({params:{id:server.id}},res);
+  assert.equal(res.statusCode,409);
+  assert.equal(restore.mock.calls.length,1);
+  assert.equal(restore.mock.calls[0].arguments[0],server.id);
+});
+
 test('concurrent lifecycle requests cannot start Docker during dependency repair', async t => {
   const { server, calls } = setup(t);
   let release!: () => void;

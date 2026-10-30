@@ -7,6 +7,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcdash-pool-'));
 process.env.DATA_ROOT = root;
 process.env.SQLITE_PATH = path.join(root, 'test.sqlite');
 process.env.MC_DASH_MEMORY_POOL = 'true';
+process.env.MC_DASH_HIBERNATE = 'true';
 const poolModule = require('./memoryPool');
 const { readMemoryPool, requireMemoryPool, requireStartRoom, StartupReservations } = poolModule;
 const { MemoryPressureService } = require('./memoryPressureService');
@@ -21,7 +22,7 @@ const membership = path.join(root, 'membership');
 const good = { enabled:true,enforced:true,usedMb:5000,limitMb:12288,pressure:false,reason:null,oomKills:0 };
 function fixtures() {
   fs.mkdirSync(poolDir, {recursive:true});
-  for (const [name, value] of Object.entries({'memory.max':12288*MB,'memory.current':5000*MB,'memory.swap.max':0,'memory.events':'oom 0\noom_kill 0\n'})) fs.writeFileSync(path.join(poolDir,name),String(value));
+  for (const [name, value] of Object.entries({'memory.max':12288*MB,'memory.current':5000*MB,'memory.swap.max':0,'memory.events':'oom 0\noom_kill 0\n','memory.stat':'inactive_file 0\n'})) fs.writeFileSync(path.join(poolDir,name),String(value));
   fs.writeFileSync(membership,'0::/system.slice/mc-dash-backend.service\n');
 }
 test('verifies controller values and membership; fails closed on missing or unbounded controls', async () => {
@@ -44,7 +45,7 @@ test('verifies controller values and membership; fails closed on missing or unbo
 });
 test('admission uses usage and temporary boot allowances without reserving full maxima', () => {
   assert.doesNotThrow(()=>requireStartRoom(good,1500,1000));
-  assert.throws(()=>requireStartRoom({...good,usedMb:9500},1500,0), /Not enough shared RAM/);
+  assert.throws(()=>requireStartRoom({...good,usedMb:10500},1500,0), /Not enough shared RAM/);
   const pending = new StartupReservations(); pending.reserve('one',1500,0);
   assert.equal(pending.pending(new Map(),1000),1500);
   assert.equal(pending.pending(new Map([['one',1000]]),1000),500);
@@ -52,6 +53,28 @@ test('admission uses usage and temporary boot allowances without reserving full 
   assert.equal(pending.pending(new Map(),120001),1500);
   pending.retain(new Set());
   assert.equal(pending.pending(new Map()),0);
+});
+
+test('residual file cache is visible separately and does not block a restart', async () => {
+  fixtures();
+  fs.writeFileSync(path.join(poolDir,'memory.current'),String(1843*MB));
+  fs.writeFileSync(path.join(poolDir,'memory.stat'),`inactive_file ${1800*MB}\n`);
+  const pool=await readMemoryPool(root,membership);
+  assert.equal(pool.usedMb,1843);
+  assert.equal(pool.workingSetMb,43);
+  assert.equal(pool.reclaimableMb,1800);
+  assert.equal(pool.pressure,false);
+  assert.doesNotThrow(()=>requireStartRoom(pool,10000,0));
+  assert.throws(()=>requireStartRoom({...pool,workingSetMb:11000},1500,0),/Not enough shared RAM/);
+});
+
+test('cache growth alone cannot trigger memory pressure', async () => {
+  fixtures();
+  fs.writeFileSync(path.join(poolDir,'memory.current'),String(12100*MB));
+  fs.writeFileSync(path.join(poolDir,'memory.stat'),`inactive_file ${10000*MB}\n`);
+  assert.equal((await readMemoryPool(root,membership)).pressure,false);
+  fs.writeFileSync(path.join(poolDir,'memory.stat'),'inactive_file 0\n');
+  assert.equal((await readMemoryPool(root,membership)).pressure,true);
 });
 test('pressure sleeps only repeatedly confirmed empty servers, largest first, with cooldown', async () => {
   let now=0, pressure=true;
@@ -78,7 +101,7 @@ test('unknown readings reset idle tracking and a final player check prevents sle
 test('Docker start serializes admissions and refuses legacy container parents', async () => {
   const service = new DockerService();
   const originalPool=poolModule.readMemoryPool, originalHost=capacityModule.readHostMemory, originalLive=metricsCollector.liveAll;
-  poolModule.readMemoryPool=async()=>({...good,usedMb:9000}); capacityModule.readHostMemory=async()=>({availableKnown:false}); metricsCollector.liveAll=()=>new Map();
+  poolModule.readMemoryPool=async()=>({...good,usedMb:10000}); capacityModule.readHostMemory=async()=>({availableKnown:false}); metricsCollector.liveAll=()=>new Map();
   const starts:string[]=[]; let parent='minecraft.slice';
   service.docker={info:async()=>({CgroupDriver:'systemd',CgroupVersion:'2'}),listContainers:async()=>[],getContainer:(id:string)=>({id,update:async()=>{},inspect:async()=>({HostConfig:{CgroupParent:parent},State:{Running:false}}),start:async()=>{starts.push(id);}})};
   try {
@@ -153,7 +176,7 @@ test('occupied servers get a full countdown; fewest players first, then largest 
   ];
   const warnings:any[] = [], sleeps:any[] = [];
   const service = new MemoryPressureService({
-    pool:async()=>({...good,usedMb:11300,pressure:true}), servers:()=>servers, now:()=>now,
+    pool:async()=>({...good,usedMb:12100,pressure:true}), servers:()=>servers, now:()=>now,
     players:async(s:any)=>s.id==='busy'?5:s.id==='unknown'?null:1,
     usage:(id:string)=>id==='large'?6000:1000,
     warn:async(s:any,message:string)=>{warnings.push([s.id,message]);return true;},
@@ -168,12 +191,12 @@ test('occupied servers get a full countdown; fewest players first, then largest 
 
 test('countdown survives small fluctuations but cancels on recovery or unverified protection', async () => {
   for (const unverified of [false,true]) {
-    let now=0,usedMb=11300,enforced=true;
+    let now=0,usedMb=12100,enforced=true;
     const server={id:'one',name:'One',status:'running'}, warnings:string[]=[], sleeps:string[]=[];
-    const service=new MemoryPressureService({pool:async()=>({...good,enforced,usedMb,pressure:usedMb>=10444.8}),
+    const service=new MemoryPressureService({pool:async()=>({...good,enforced,usedMb,pressure:usedMb>=12288*0.97}),
       servers:()=>[server],now:()=>now,players:async()=>2,usage:()=>5000,
       warn:async(_s:any,msg:string)=>{warnings.push(msg);return true;},sleep:async()=>{sleeps.push('one');}});
-    await service.tick(); now=30000; usedMb=10800; await service.tick();
+    await service.tick(); now=30000; usedMb=12000; await service.tick();
     assert.equal(warnings.length,2);
     now=60000; if(unverified) enforced=false; else usedMb=9000;
     await service.tick(); assert.deepEqual(sleeps,[]); assert.match(warnings[2],/cancelled/);
@@ -195,7 +218,7 @@ test('manual stop or container replacement cancels a pending pressure shutdown',
   for (const replaced of [false,true]) {
     let now=0,sleeps=0;
     let server={id:'one',name:'One',status:'running',containerId:'original'};
-    const service=new MemoryPressureService({pool:async()=>({...good,usedMb:11300,pressure:true}),
+    const service=new MemoryPressureService({pool:async()=>({...good,usedMb:12100,pressure:true}),
       servers:()=>[server],now:()=>now,players:async()=>1,usage:()=>9000,
       warn:async()=>true,sleep:async()=>{sleeps++;}});
     await service.tick(); now=60000;
@@ -207,7 +230,7 @@ test('manual stop or container replacement cancels a pending pressure shutdown',
 test('failed saves are reported and retried without claiming a successful sleep', async () => {
   let now=0,sleeps=0;
   const server={id:'one',name:'One',status:'running'};
-  const service=new MemoryPressureService({pool:async()=>({...good,usedMb:11300,pressure:true}),
+  const service=new MemoryPressureService({pool:async()=>({...good,usedMb:12100,pressure:true}),
     servers:()=>[server],now:()=>now,players:async()=>1,usage:()=>9000,
     warn:async()=>true,sleep:async()=>{sleeps++;return false;}});
   await service.tick(); now=60000; await service.tick();
@@ -221,7 +244,7 @@ test('overlapping pressure ticks cannot schedule two shutdowns', async () => {
   let finish!:()=>void, warnings=0;
   const hold=new Promise<void>(resolve=>{finish=resolve;});
   const server={id:'one',name:'One',status:'running'};
-  const service=new MemoryPressureService({pool:async()=>({...good,usedMb:11300,pressure:true}),
+  const service=new MemoryPressureService({pool:async()=>({...good,usedMb:12100,pressure:true}),
     servers:()=>[server],now:()=>0,players:async()=>{await hold;return 2;},usage:()=>9000,
     warn:async()=>{warnings++;return true;},sleep:async()=>true});
   const first=service.tick(); await service.tick(); finish(); await first;
@@ -232,17 +255,17 @@ test('pressure refresh discovers ready servers without browser status polling', 
   const { refreshPressureServers } = require('./memoryPressureService');
   const { serverStore } = require('../serverStore');
   const { dockerService } = require('./dockerService');
-  const originalList=serverStore.list, originalGet=serverStore.get, originalUpdate=serverStore.update, originalStatus=dockerService.status;
+  const originalList=serverStore.list, originalGet=serverStore.get, originalUpdate=serverStore.update, originalStatus=dockerService.statusDetails;
   let server:any={id:'one',status:'starting',containerId:'one'};
   serverStore.list=()=>[server]; serverStore.get=()=>server;
   serverStore.update=(_id:string,update:any)=>{server={...server,...update};return server;};
-  dockerService.status=async()=> 'running';
+  dockerService.statusDetails=async()=> ({status:'running',exitCode:null});
   try {
     await refreshPressureServers(); assert.equal(server.status,'running');
     server.status='starting';
-    dockerService.status=async()=>{server={...server,status:'stopping'};return 'running';};
+    dockerService.statusDetails=async()=>{server={...server,status:'stopping'};return {status:'running',exitCode:null};};
     await refreshPressureServers(); assert.equal(server.status,'stopping');
-  } finally {serverStore.list=originalList;serverStore.get=originalGet;serverStore.update=originalUpdate;dockerService.status=originalStatus;}
+  } finally {serverStore.list=originalList;serverStore.get=originalGet;serverStore.update=originalUpdate;dockerService.statusDetails=originalStatus;}
 });
 
 test('automatic sleep requires a successful flush before sending stop', async () => {
@@ -325,7 +348,7 @@ test('hibernation keeps failed saves running and only marks a confirmed clean ex
 test('pressure recovery during refresh cancels an expiring countdown', async () => {
   let now=0, pressure=true, sleeps=0;
   const service=new MemoryPressureService({
-    pool:async()=>({...good,usedMb:11300,pressure}), servers:()=>[{id:'one',status:'running'}],
+    pool:async()=>({...good,usedMb:12100,pressure}), servers:()=>[{id:'one',status:'running'}],
     now:()=>now, players:async()=>1, usage:()=>1000, warn:async()=>true,
     refresh:async()=>{if(now===60000) pressure=false;}, sleep:async()=>{sleeps++;},
   });
@@ -335,7 +358,7 @@ test('pressure recovery during refresh cancels an expiring countdown', async () 
 test('pressure recovery during saving vetoes the stop', async () => {
   let now=0, pressure=true, stopped=false;
   const service=new MemoryPressureService({
-    pool:async()=>({...good,usedMb:11300,pressure}), servers:()=>[{id:'one',status:'running'}],
+    pool:async()=>({...good,usedMb:12100,pressure}), servers:()=>[{id:'one',status:'running'}],
     now:()=>now, players:async()=>1, usage:()=>1000, warn:async()=>true,
     sleep:async(_s:any, options:any)=>{pressure=false; stopped=await options.beforeStop();return false;},
   });
@@ -386,7 +409,7 @@ test('pressure sampling continues during a slow save without duplicate intervent
   let now=0, reads=0, sleeps=0, finish!:()=>void;
   const hold=new Promise<void>(resolve=>{finish=resolve;});
   const service=new MemoryPressureService({
-    pool:async()=>{reads++;return {...good,usedMb:11300,pressure:true};},
+    pool:async()=>{reads++;return {...good,usedMb:12100,pressure:true};},
     servers:()=>[{id:'slow',status:'running'}],now:()=>now,players:async()=>1,usage:()=>5000,warn:async()=>true,
     sleep:async()=>{sleeps++;await hold;return true;},
   });
@@ -444,13 +467,13 @@ test('host pressure warns even when the shared pool is below its threshold',asyn
     warn:async(_s:any,message:string)=>{assert.match(message,/host/);warnings++;return true;},sleep:async()=>true});
   await service.tick();assert.equal(warnings,1);
 });
-test('pressure cooldown and observed demand survive service recreation',()=>{
+test('recent pressure demand survives service recreation without a timed start lockout',()=>{
   const {recordPressureSleep,pressureRestartDemand,shutdownHorizonMs}=require('./memoryRecovery');
   try {
     recordPressureSleep('cool',4000,1000,120000);
-    assert.throws(()=>pressureRestartDemand('cool',8000,2000),/cooling down/);
-    assert.equal(pressureRestartDemand('cool',8000,301001),4000);
-    assert.equal(pressureRestartDemand('cool',2000,301001),2000);
+    assert.equal(pressureRestartDemand('cool',8000,2000),4000);
+    assert.equal(pressureRestartDemand('cool',8000,301001),0);
+    assert.equal(pressureRestartDemand('cool',2000,2000),2000);
     assert.equal(shutdownHorizonMs(),210000);
   } finally {db.prepare('DELETE FROM memory_recovery WHERE serverId=?').run('cool');}
 });
@@ -461,7 +484,7 @@ test('runtime signals use host availability and observed container limits',async
   let availableMb=4000;
   capacityModule.readHostMemory=async()=>({totalMb:14000,availableKnown:true,availableMb});
   serverStore.list=()=>[{id:'runtime',containerId:'container',status:'running',resources:{maxRamMb:99999}}];
-  metricsCollector.liveFor=()=>({memoryBytes:950*MB,memoryLimitBytes:1000*MB,at:Date.now()});
+  metricsCollector.liveFor=()=>({memoryBytes:980*MB,memoryLimitBytes:1000*MB,at:Date.now()});
   try {
     let risk=await assessRuntimeRisks(good);
     assert.equal(risk.global,false);assert.equal(risk.critical,true);assert.ok(risk.targets.has('runtime'));
@@ -498,7 +521,7 @@ test('start admission rejects a learned boot peak that would not fit',async()=>{
   const service=new DockerService();const server:any={id:'learn-start',containerId:'learn-start',status:'starting',resources:{minRamMb:512,maxRamMb:4096}};
   const originals={pool:poolModule.readMemoryPool,host:capacityModule.readHostMemory};let started=false;
   observeBootMemory(server,3000*MB,100);
-  poolModule.readMemoryPool=async()=>({...good,usedMb:8000});capacityModule.readHostMemory=async()=>({availableKnown:false});
+  poolModule.readMemoryPool=async()=>({...good,usedMb:9000});capacityModule.readHostMemory=async()=>({availableKnown:false});
   service.verifyMemoryPoolContainers=async()=>{};
   service.docker={getContainer:()=>({update:async()=>{},inspect:async()=>({State:{Running:false},HostConfig:{CgroupParent:'minecraft.slice'}}),start:async()=>{started=true;}})};
   try {await assert.rejects(()=>service.start(server),/Not enough shared RAM/);assert.equal(started,false);}

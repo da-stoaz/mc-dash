@@ -25,6 +25,8 @@ type UsageChartProps = {
   absoluteValues?: (number | null | undefined)[];
   absolutePeaks?: (number | null | undefined)[];
   formatAbsolute?: (value: number) => string;
+  absoluteCapacity?: number | null;
+  window?: [number, number];
 };
 
 function percent(value: number) {
@@ -40,18 +42,22 @@ function sampleTime(timestamp: number) {
 export function UsageChart({
   label, values, timestamps, band, resolution, stroke, fill, avgLabel,
   startLabel, endLabel, emptyLabel = 'Collecting data…',
-  maxValue = 100, formatValue = percent, summary, absoluteValues, absolutePeaks, formatAbsolute,
+  maxValue = 100, formatValue = percent, summary, absoluteValues, absolutePeaks, formatAbsolute, absoluteCapacity, window,
 }: UsageChartProps) {
   // Store the horizontal position so a stationary pointer stays aligned as live
   // samples arrive and the buffer rolls forward.
   const [position, setPosition] = useState<number | null>(null);
-  const hasData = values.length > 1 && values.some(Number.isFinite);
+  const hasData = values.length > 0 && values.some(Number.isFinite);
   const series = band ?? values;
   const peak = hasData ? Math.max(...series.filter(Number.isFinite)) : null;
-  const index = Math.round((position ?? 1) * (values.length - 1));
+  const start = window?.[0] ?? timestamps[0];
+  const end = window?.[1] ?? timestamps.at(-1) ?? start;
+  const positions = timestamps.map(t => end > start ? Math.max(0, Math.min(1, (t - start) / (end - start))) : 1);
+  const gapBefore = timestamps.map((t, i) => i > 0 && t - timestamps[i - 1] > (resolution ? resolution * 1500 : window ? 15000 : Infinity));
+  const index = positions.reduce((best, x, i) => Math.abs(x - (position ?? 1)) < Math.abs(positions[best] - (position ?? 1)) ? i : best, 0);
   const timestamp = timestamps[index];
   const selected = hasData && position !== null && Number.isFinite(timestamp) && Number.isFinite(values[index]);
-  const x = hasData ? index / (values.length - 1) * 100 : 0;
+  const x = hasData ? positions[index] * 100 : 0;
   const y = 100 - values[index] / maxValue * 100;
   const time = Number.isFinite(timestamp) ? sampleTime(timestamp) : '';
   const bucketEnd = resolution ? new Date(timestamp + resolution * 1000).toLocaleTimeString(undefined, {
@@ -82,7 +88,7 @@ export function UsageChart({
       default: return;
     }
     event.preventDefault();
-    setPosition(Math.min(values.length - 1, Math.max(0, next)) / (values.length - 1));
+    setPosition(positions[Math.min(values.length - 1, Math.max(0, next))]);
   }
 
   return (
@@ -97,6 +103,12 @@ export function UsageChart({
         </span>
       </div>
       {hasData ? (
+        <div className={formatAbsolute ? 'mt-4 grid grid-cols-[max-content_minmax(0,1fr)_max-content] gap-x-2' : 'mt-2'}>
+        {formatAbsolute && (
+          <div aria-label={`${label} absolute axis`} title={absoluteCapacity == null ? 'The allocation changed or is unavailable; absolute readings remain in the tooltip.' : undefined} className="flex h-28 flex-col justify-between text-right text-[10px] leading-none tabular-nums text-white/50">
+            {[1, 0.5, 0].map(fraction => <span key={fraction}>{absoluteCapacity != null ? formatAbsolute(absoluteCapacity * fraction) : '—'}</span>)}
+          </div>
+        )}
         <div
           role="slider"
           tabIndex={0}
@@ -105,7 +117,7 @@ export function UsageChart({
           aria-valuemax={values.length - 1}
           aria-valuenow={index}
           aria-valuetext={description}
-          className="relative mt-2 h-28 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          className="relative h-28 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           onPointerEnter={inspect}
           onPointerMove={inspect}
           onPointerDown={inspect}
@@ -116,12 +128,14 @@ export function UsageChart({
           onKeyDown={navigate}
         >
           <svg viewBox={`0 0 100 ${CHART_H}`} className="h-full w-full" preserveAspectRatio="none" aria-hidden="true">
-            <path d={buildSparklineArea(series, 100, CHART_H, maxValue)} fill={fill} opacity="0.35" />
+            {formatAbsolute && [0, CHART_H / 2, CHART_H].map(y => <line key={y} x1="0" x2="100" y1={y} y2={y} stroke="rgba(255,255,255,0.12)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
+            <path d={buildSparklineArea(series, 100, CHART_H, maxValue, positions, gapBefore)} fill={fill} opacity="0.35" />
             <path
-              d={buildSparklinePath(values, 100, CHART_H, maxValue)}
+              d={buildSparklinePath(values, 100, CHART_H, maxValue, positions, gapBefore)}
               fill="none" stroke={stroke} strokeWidth="1.75"
               strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
             />
+            {values.length === 1 && <circle cx={positions[0] * 100} cy={CHART_H * (1 - values[0] / maxValue)} r="0.7" fill={stroke} />}
           </svg>
           {selected && (
             <>
@@ -174,14 +188,15 @@ export function UsageChart({
             </>
           )}
         </div>
+        {formatAbsolute && <div aria-label={`${label} percentage axis`} className="flex h-28 flex-col justify-between text-[10px] leading-none tabular-nums text-white/50">
+          {[100, 50, 0].map(value => <span key={value}>{value}%</span>)}
+        </div>}
+        {(startLabel || endLabel) && <div className={`${formatAbsolute ? 'col-start-2' : ''} mt-1.5 flex justify-between text-[10px] tabular-nums text-white/35`}><span>{startLabel}</span><span>{endLabel}</span></div>}
+        </div>
       ) : (
         <div className="mt-2 flex h-16 items-center justify-center text-xs muted">{emptyLabel}</div>
       )}
-      {hasData && (startLabel || endLabel) && (
-        <div className="mt-1.5 flex items-center justify-between text-[10px] tabular-nums text-white/35">
-          <span>{startLabel}</span><span>{endLabel}</span>
-        </div>
-      )}
+
     </div>
   );
 }

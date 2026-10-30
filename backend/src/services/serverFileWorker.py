@@ -88,6 +88,41 @@ def atomic_write(parent, name, content, owner):
             pass
 
 
+def storage_usage(fd):
+    # Allocated blocks, not apparent file length; count hard links once and never
+    # follow symlinks. Directory descriptors pin every traversal component.
+    seen = set()
+    totals = {'filesBytes': 0, 'snapshotsBytes': 0}
+
+    def visit(directory, bucket):
+        info = os.fstat(directory)
+        key = (info.st_dev, info.st_ino)
+        if key in seen:
+            return
+        seen.add(key)
+        totals[bucket] += info.st_blocks * 512
+        for name in sorted(os.listdir(directory), key=lambda n: n == 'snapshots'):
+            target = 'snapshotsBytes' if directory == fd and name == 'snapshots' else bucket
+            try:
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    child = open_directory(directory, name)
+                    try:
+                        visit(child, target)
+                    finally:
+                        os.close(child)
+                else:
+                    key = (info.st_dev, info.st_ino)
+                    if key not in seen:
+                        seen.add(key)
+                        totals[target] += info.st_blocks * 512
+            except FileNotFoundError:
+                pass  # A live server may remove a log or temporary file mid-scan.
+    visit(fd, 'filesBytes')
+    totals['totalBytes'] = sum(totals.values())
+    return totals
+
+
 def run(request):
     parts = request['parts']
     if len(parts) < 2 or parts[0] != 'servers' or any(p in ('', '.', '..') or '/' in p for p in parts):
@@ -100,6 +135,9 @@ def run(request):
             try:
                 child = open_directory(fd, name)
             except FileNotFoundError:
+                if request['operation'] == 'storage':
+                    print(json.dumps({'filesBytes': 0, 'snapshotsBytes': 0, 'totalBytes': 0}))
+                    return
                 if request['operation'] != 'write':
                     return
                 raise
@@ -107,6 +145,8 @@ def run(request):
             fd = child
         if request['operation'] == 'write':
             atomic_write(fd, parts[-1], request['content'], owner)
+        elif request['operation'] == 'storage':
+            print(json.dumps(storage_usage(fd)))
         elif request['operation'] in ('repair', 'validate'):
             walk(fd, owner, False)
             if request['operation'] == 'repair':

@@ -4,7 +4,7 @@ import { serverStore } from '../serverStore';
 import { preparing, lifecycleBusy } from '../state';
 import { getPlayerCount } from './playerService';
 import { runServerRcon } from './rconService';
-import { dockerService } from './dockerService';
+import { refreshServerStatus } from './serverStatus';
 import { hibernationService } from './hibernationService';
 import { metricsCollector } from './metricsCollector';
 import { readVerifiedMemoryPool, MemoryPoolReport, setMemoryPoolAction } from './memoryPool';
@@ -86,7 +86,7 @@ export class MemoryPressureService {
     setMemoryPoolAction(`Saving and sleeping ${server.name} to release RAM.`);
     const result = await this.deps.sleep(server, { allowOccupied, beforeStop: async () => {
       const latest = await this.assess();
-      const proceed=latest.enforced && latest.pressure && this.relevant(server.id);
+      const proceed=config.memoryPoolEnabled && config.hibernationEnabled && latest.enforced && latest.pressure && this.relevant(server.id);
       if(proceed) this.deps.recordSleep?.(server.id,demandMb,0);
       return proceed;
     } }).catch(error => {
@@ -116,7 +116,15 @@ export class MemoryPressureService {
     if (this.busy) return;
     this.busy = true;
     try {
+      // Readiness/status refresh must continue when automatic sleep is off.
+      // Otherwise an unwatched ready server stays "starting" in the store and
+      // its ordinary play-time growth is learned as boot demand indefinitely.
       await this.deps.refresh?.();
+      if (!config.memoryPoolEnabled || !config.hibernationEnabled) {
+        this.emptySince.clear();
+        await this.cancel('Automatic sleep is disabled. The automatic shutdown is cancelled.');
+        return;
+      }
       const pool = await this.assess();
       if (!pool.enforced || !pool.pressure) {
         this.emptySince.clear();
@@ -170,10 +178,10 @@ export class MemoryPressureService {
         this.beginSleep(fresh, false);
         return;
       }
-      // 85% blocks starts and sleeps empty servers; 90% initiates player warnings.
-      // Once warned, cancel only below 85% to avoid flapping around 90%.
+      // Start admission reserves headroom separately. Shutdown requires actual
+      // exhaustion risk or sustained growth toward the hard boundary.
       const latest = await this.assess();
-      if (!latest.enforced || latest.usedMb === null || (latest.usedMb < latest.limitMb * 0.90 && !this.critical)) return;
+      if (!latest.enforced || latest.usedMb === null || ((latest.workingSetMb ?? latest.usedMb) < latest.limitMb * 0.97 && !this.critical)) return;
       eligible.sort((a, b) => (a.count ?? Infinity) - (b.count ?? Infinity)
         || this.deps.usage(b.server.id) - this.deps.usage(a.server.id));
       for (const { server } of eligible) {
@@ -197,7 +205,7 @@ export const memoryPressureService = new MemoryPressureService({
   recordSleep: (id,demand,duration)=>recordPressureSleep(id,demand,Date.now(),duration),
   servers: () => serverStore.list(),
   players: async server => (await getPlayerCount(server))?.online ?? null,
-  usage: id => metricsCollector.liveFor(id)?.memoryBytes ?? 0,
+  usage: id => { const live = metricsCollector.liveFor(id); return live?.memoryWorkingSetBytes ?? live?.memoryBytes ?? 0; },
   sleep: (server, options) => hibernationService.hibernate(server, options),
   warn: async (server, message) => {
     const output = await runServerRcon(server, [`say [MC Dash] ${message}`]);
@@ -211,15 +219,7 @@ export const memoryPressureService = new MemoryPressureService({
  * status refresh to discover that a starting JVM is now ready. */
 export async function refreshPressureServers() {
   await hibernationService.reconcile();
-  await Promise.all(serverStore.list().map(async server => {
-    if (preparing.has(server.id) || lifecycleBusy.has(server.id)) return;
-    const status = await dockerService.status(server);
-    const current = serverStore.get(server.id);
-    if (current && current.status === server.status && current.containerId === server.containerId
-      && !preparing.has(server.id) && current.status !== status) {
-      serverStore.update(server.id, { status });
-    }
-  }));
+  await Promise.all(serverStore.list().map(refreshServerStatus));
 }
 
 
@@ -227,13 +227,14 @@ const forecast=new MemoryForecast();
 export async function assessRuntimeRisks(pool:MemoryPoolReport) {
   const now=Date.now(), horizon=shutdownHorizonMs(), targets=new Set<string>();
   const keys=new Set(['pool','host']);
-  const predicted=pool.usedMb!==null && forecast.approaching('pool',pool.usedMb,pool.limitMb,now,horizon);
-  let global=predicted, critical=predicted || (pool.usedMb!==null && pool.usedMb>=pool.limitMb*0.90), reason='Shared RAM is nearly full';
+  const workingSet = pool.workingSetMb ?? pool.usedMb;
+  const predicted=workingSet!==null && forecast.approaching('pool',workingSet,pool.limitMb * 0.97,now,horizon);
+  let global=predicted, critical=predicted || (workingSet!==null && workingSet>=pool.limitMb*0.97), reason='Shared RAM is nearly full';
   if(predicted) reason='Shared RAM is growing too quickly';
   const {readHostMemory}=await import('./hostCapacityService');
   const host=await readHostMemory();
   if(host.availableKnown) {
-    const floor=Math.max(config.hostFreeFloorMb,host.totalMb*0.10);
+    const floor=config.hostFreeFloorMb;
     const hostRisk=host.availableMb<floor || forecast.approaching('host',host.totalMb-host.availableMb,host.totalMb-floor,now,horizon);
     if(hostRisk) {global=true;critical=true;reason='The host is running low on RAM';}
   }
@@ -241,9 +242,10 @@ export async function assessRuntimeRisks(pool:MemoryPoolReport) {
     const live=metricsCollector.liveFor(server.id);
     if(!live || server.status!=='running' || live.memoryLimitBytes<=0) continue;
     const key=`server:${server.id}:${server.containerId}`;keys.add(key);
-    const prediction=forecast.approaching(key,live.memoryBytes,live.memoryLimitBytes,live.at,horizon);
-    if(live.memoryBytes>=live.memoryLimitBytes*0.85 || prediction) targets.add(server.id);
-    if(live.memoryBytes>=live.memoryLimitBytes*0.90 || prediction) critical=true;
+    const used = live.memoryWorkingSetBytes ?? live.memoryBytes;
+    const prediction=forecast.approaching(key,used,live.memoryLimitBytes * 0.97,live.at,horizon);
+    if(used>=live.memoryLimitBytes*0.97 || prediction) targets.add(server.id);
+    if(used>=live.memoryLimitBytes*0.97 || prediction) critical=true;
   }
   forecast.retain(keys);
   if(!global && !pool.pressure && targets.size) reason='This server is approaching its RAM limit';

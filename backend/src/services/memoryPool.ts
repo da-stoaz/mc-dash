@@ -11,6 +11,10 @@ export type MemoryPoolReport = {
   limitMb: number;
   usedMb: number | null;
   pressure: boolean;
+  /** Charged memory excluding inactive file cache that the kernel can reclaim. */
+  workingSetMb?: number;
+  reclaimableMb?: number;
+  automaticSleepEnabled?: boolean;
   reason: string | null;
   oomKills: number;
   lastAction?: string | null;
@@ -34,17 +38,19 @@ export async function readMemoryPool(
   const result: MemoryPoolReport = {
     enabled: config.memoryPoolEnabled, enforced: false, limitMb: 0,
     usedMb: null, pressure: false, reason: null, oomKills: 0,
+    automaticSleepEnabled: config.hibernationEnabled && config.memoryPoolEnabled,
     lastAction: lastAction && Date.now() - lastAction.at < 300_000 ? lastAction.message : null,
   };
   if (!result.enabled) return { ...result, reason: 'Shared RAM limit is disabled.' };
   try {
     const pool = path.join(root, POOL_SLICE);
-    const [max, swap, current, membership, events] = await Promise.all([
+    const [max, swap, current, membership, events, stat] = await Promise.all([
       fs.readFile(path.join(pool, 'memory.max'), 'utf8'),
       fs.readFile(path.join(pool, 'memory.swap.max'), 'utf8'),
       fs.readFile(path.join(pool, 'memory.current'), 'utf8'),
       fs.readFile(membershipFile, 'utf8'),
       fs.readFile(path.join(pool, 'memory.events'), 'utf8'),
+      fs.readFile(path.join(pool, 'memory.stat'), 'utf8').catch(() => ''),
     ]);
     // The installed controller is the single source of truth. No second env
     // value to drift from the OS limit, and "max" is never accepted as a cap.
@@ -52,7 +58,10 @@ export async function readMemoryPool(
     if (limitBytes < 512 * MB) throw new Error('The Minecraft pool needs a finite limit of at least 512 MB.');
     result.limitMb = limitBytes / MB;
     result.usedMb = parseCounter(current) / MB;
-    result.pressure = result.usedMb >= result.limitMb * 0.85;
+    const inactiveFile = Number(stat.match(/^inactive_file (\d+)$/m)?.[1] ?? 0) / MB;
+    result.reclaimableMb = Math.min(result.usedMb, inactiveFile);
+    result.workingSetMb = result.usedMb - result.reclaimableMb;
+    result.pressure = result.workingSetMb >= result.limitMb * 0.97;
     result.oomKills = Number(events.match(/^oom_kill (\d+)$/m)?.[1] ?? 0);
     if (parseCounter(swap) !== 0) throw new Error('Minecraft pool swap must be disabled.');
     const controlPath = membership.split('\n').find(line => line.startsWith('0::'))?.slice(3);
@@ -99,10 +108,12 @@ export const startupReservations = new StartupReservations();
 export function requireStartRoom(report: MemoryPoolReport, requestMb: number, pendingMb: number): void {
   requireMemoryPool(report);
   if (!report.enabled) return;
-  if (report.usedMb === null || report.usedMb + pendingMb + requestMb > report.limitMb * 0.85) {
+  const usedMb = report.workingSetMb ?? report.usedMb;
+  const availableMb = Math.max(0, report.limitMb * 0.95 - (usedMb ?? 0) - pendingMb);
+  if (usedMb === null || !Number.isFinite(usedMb) || !Number.isFinite(requestMb) || !Number.isFinite(pendingMb) || requestMb > availableMb) {
     throw new UserFacingError({ error: 'Not enough shared RAM to start', code: 'MEMORY_POOL_PRESSURE', status: 409,
-      reason: 'The shared pool needs room for this server to boot and for existing servers to grow.',
-      details: 'Stop an unused server or wait for memory to be released. Individual server maximums are not reserved in full.' });
+      reason: usedMb === null ? 'Current pool usage is unavailable.' : `This start needs ${Math.ceil(requestMb)} MiB; ${Math.floor(availableMb)} MiB is available for starts.`,
+      details: `${Math.ceil(usedMb ?? 0)} MiB in use, ${Math.ceil(pendingMb)} MiB reserved for other starts, ${Math.ceil(report.limitMb * 0.05)} MiB headroom. Reclaimable file cache is excluded. Pool limit: ${Math.round(report.limitMb)} MiB.` });
   }
 }
 

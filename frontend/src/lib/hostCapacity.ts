@@ -2,7 +2,7 @@ import { ServerStatus } from './serverTypes';
 
 /** Mirrors CapacityReport in backend/src/services/hostCapacityService.ts. */
 export type HostCapacity = {
-  pool?: { enabled: boolean; enforced: boolean; limitMb: number; usedMb: number | null; pressure: boolean; reason: string | null; oomKills: number; lastAction?: string | null };
+  pool?: { enabled: boolean; enforced: boolean; limitMb: number; usedMb: number | null; workingSetMb?: number; reclaimableMb?: number; automaticSleepEnabled?: boolean; pressure: boolean; reason: string | null; oomKills: number; lastAction?: string | null };
   memory: {
     totalMb: number;
     availableMb: number;

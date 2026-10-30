@@ -8,7 +8,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS boot_memory (
 )`);
 function profile(server:ServerRecord):string {
   return JSON.stringify([server.resources?.minRamMb,server.resources?.maxRamMb,
-    server.effectiveJavaImage ?? server.javaImage,server.serverPackUrl]);
+    server.effectiveJavaImage ?? server.javaImage,server.serverPackUrl,'working-set-v1']);
 }
 /** Include the first two minutes after process start even if readiness came early.
  * A slow boot remains observable for as long as it is starting/restarting.

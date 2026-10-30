@@ -149,6 +149,8 @@ const elasticHeapIdleSeconds = Math.max(30, envNumber(process.env.MC_DASH_ELASTI
 // The cost is a cold start, paid by whoever wakes it.
 // ---------------------------------------------------------------------------
 
+// Master switch for automatic sleep, including pressure-triggered shutdowns.
+// Existing sleeping servers remain manually startable and can wake on connect.
 const hibernationEnabled = envBool(process.env.MC_DASH_HIBERNATE, false);
 
 // Continuous stretch with zero players before a server sleeps. Counted from

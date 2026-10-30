@@ -1,5 +1,6 @@
 import Docker, { Container } from 'dockerode';
 import { PassThrough } from 'stream';
+import { randomUUID } from 'crypto';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
@@ -14,7 +15,7 @@ import { UserFacingError } from '../apiErrors';
 import { serverStore } from '../serverStore';
 import { bootMemoryDemand } from './bootMemory';
 import { pressureRestartDemand, observedPressureDemand } from './memoryRecovery';
-import { interpretJvmMemory, JVM_FLAGS_COMMAND, JvmMemoryInspection } from './jvmMemoryInspection';
+import { interpretJvmMemory, JVM_FLAGS_COMMAND, JvmMemoryInspection, inspectionFailure } from './jvmMemoryInspection';
 import { javaToolOptions } from './jvmTuning';
 
 // Fixed in-container RCON port. We never publish it to the host: the backend
@@ -605,9 +606,9 @@ export class DockerService {
       await assertNoInterruptedRebuild(server.id);
       const container = await this.getContainer(server);
       const memoryPlan = containerMemoryPlan(server.resources);
-      const recoveryDemand = pressureRestartDemand(server.id, memoryPlan?.capMb ?? Infinity);
       await this.updateResources(server);
       if (config.memoryPoolEnabled) {
+        const recoveryDemand = pressureRestartDemand(server.id, memoryPlan?.capMb ?? Infinity);
         const pool = await readMemoryPool();
         requireMemoryPool(pool);
         await this.verifyMemoryPoolContainers();
@@ -615,18 +616,19 @@ export class DockerService {
         this.requirePoolParent(info.HostConfig?.CgroupParent);
         if (info.State?.Running) return container.id;
         const { metricsCollector } = await import('./metricsCollector');
-        const usage = new Map([...metricsCollector.liveAll()].map(([id, value]) => [id, value.memoryBytes / MB]));
+        const usage = new Map([...metricsCollector.liveAll()].map(([id, value]) => [id, (value.memoryWorkingSetBytes ?? value.memoryBytes) / MB]));
         const request = memoryPlan ? Math.max(bootMemoryDemand(server), recoveryDemand) : undefined;
         if (!request) throw new UserFacingError({error: 'Configure server memory first', code: 'MEMORY_LIMIT_REQUIRED', status: 409});
         startupReservations.release(server.id);
         // Keep the existing host-free-memory check for unrelated deployments.
         const { readHostMemory } = await import('./hostCapacityService');
         const host = await readHostMemory();
-        if (host.availableKnown && host.availableMb - request < Math.max(config.hostFreeFloorMb, host.totalMb * 0.10)) {
+        const pending = startupReservations.pending(usage);
+        if (host.availableKnown && host.availableMb - pending - request < config.hostFreeFloorMb) {
           throw new UserFacingError({error: 'Host memory is low', code: 'HOST_MEMORY_LOW', status: 409,
-            reason: 'Other host services need the remaining memory. Wait or stop an unused server.'});
+            reason: `${Math.round(host.availableMb)} MiB available on the host; this start needs ${Math.round(request)} MiB, other starts need ${Math.round(pending)} MiB, and ${config.hostFreeFloorMb} MiB is kept for host services.`});
         }
-        requireStartRoom(await readMemoryPool(), request, startupReservations.pending(usage));
+        requireStartRoom(await readMemoryPool(), request, pending);
         startupReservations.reserve(server.id, request);
       }
       try {
@@ -788,36 +790,65 @@ export class DockerService {
     return work;
   }
 
-  private async performJvmMemoryInspection(server: ServerRecord): Promise<JvmMemoryInspection> {
-    const checkedAt=Date.now();
-    const unknown=(reason:string):JvmMemoryInspection=>({status:'unverified',initialHeapMb:null,maximumHeapMb:null,containerLimitMb:null,checkedAt,reason});
-    try {
-      const container=await this.getContainer(server);
-      const before=await container.inspect();
-      if(!before.State.Running) return unknown('Start the server before inspecting its JVM heap.');
-      const exec=await container.exec({Cmd:['sh','-c',JVM_FLAGS_COMMAND],AttachStdout:true,AttachStderr:true,Tty:false});
-      const stream=await exec.start({hijack:true,stdin:false});
-      const output=await new Promise<Buffer>((resolve,reject)=>{
-        const chunks:Buffer[]=[];let length=0;
-        const timer=setTimeout(()=>{stream.destroy();reject(new Error('Diagnostic timed out'));},8000);
-        const finish=()=>clearTimeout(timer);
-        stream.on('data',(chunk:Buffer)=>{
-          length+=chunk.length;
-          if(length>65536) {finish();stream.destroy();reject(new Error('Diagnostic output limit exceeded'));}
-          else chunks.push(chunk);
-        });
-        stream.on('end',()=>{finish();resolve(Buffer.concat(chunks));});
-        stream.on('error',error=>{finish();reject(error);});
-        stream.on('close',()=>{finish();reject(new Error('Diagnostic connection closed'));});
+  private readonly jattachPath = path.join(__dirname, 'jattach');
+
+  private async diagnosticExec(container: Container, command: string[], timeoutMs = 8000, input?: Buffer) {
+    const exec = await container.exec({ Cmd: command, AttachStdin: !!input, AttachStdout: true, AttachStderr: true, Tty: false });
+    const stream = await exec.start({ hijack: true, stdin: !!input });
+    const output = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = []; let length = 0;
+      const timer = setTimeout(() => { stream.destroy(); reject(new Error('Diagnostic timed out')); }, timeoutMs);
+      stream.on('data', (chunk: Buffer) => {
+        length += chunk.length;
+        if (length > 65536) { clearTimeout(timer); stream.destroy(); reject(new Error('Diagnostic output limit exceeded')); }
+        else chunks.push(chunk);
       });
-      const result=await exec.inspect();
-      if(result.ExitCode!==0 || result.Running) return unknown('JVM inspection requires exactly one Java process, its JDK jcmd tool, timeout, and attach permission for the container user.');
-      const after=await container.inspect();
-      if(!after.State.Running || before.State.StartedAt!==after.State.StartedAt)
+      stream.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks)); });
+      stream.on('error', error => { clearTimeout(timer); reject(error); });
+      stream.on('close', () => { clearTimeout(timer); reject(new Error('Diagnostic connection closed')); });
+      if (input) stream.end(input);
+    });
+    return { ...(await exec.inspect()), output: demuxDockerLogBuffer(output) };
+  }
+
+  private async performJvmMemoryInspection(server: ServerRecord): Promise<JvmMemoryInspection> {
+    const checkedAt = Date.now();
+    let containerLimitMb: number | null = null;
+    const unknown = (reason: string): JvmMemoryInspection => ({ status: 'unverified', initialHeapMb: null, maximumHeapMb: null, containerLimitMb, checkedAt, reason });
+    let container: Container | undefined;
+    let scratch: string | undefined;
+    try {
+      container = await this.getContainer(server);
+      const before = await container.inspect();
+      containerLimitMb = before.HostConfig.Memory > 0 ? before.HostConfig.Memory / MB : null;
+      if (!before.State.Running) return unknown('Start the server before inspecting its JVM heap.');
+      let result = await this.diagnosticExec(container, ['sh', '-c', JVM_FLAGS_COMMAND]);
+      if (result.ExitCode === 42) {
+        // A static, checksum-pinned attach client works with our JRE images.
+        // Only VM.flags is requested, as the container user, without changing
+        // heap flags, forcing GC, installing packages or restarting Minecraft.
+        try { await fs.access(this.jattachPath); }
+        catch { return unknown(inspectionFailure(42)); }
+        scratch = `/tmp/mc-dash-inspect-${randomUUID()}`;
+        const created = await this.diagnosticExec(container, ['mkdir', '-m', '700', scratch]);
+        if (created.ExitCode !== 0) return unknown('Cannot create a temporary diagnostic directory as the Minecraft container user.');
+        const helper = await fs.readFile(this.jattachPath);
+        if (helper.length > 1024 ** 2) throw new Error('Unexpected diagnostic helper size');
+        const copied = await this.diagnosticExec(container, ['sh', '-c', 'umask 077; cat > "$1/jattach" && chmod 500 "$1/jattach"', 'copy', scratch], 8000, helper);
+        if (copied.ExitCode !== 0) return unknown('Cannot write the temporary diagnostic helper as the Minecraft container user.');
+        result = await this.diagnosticExec(container, ['sh', '-c', JVM_FLAGS_COMMAND, 'mc-dash-inspect', `${scratch}/jattach`]);
+      }
+      const after = await container.inspect();
+      containerLimitMb = after.HostConfig.Memory > 0 ? after.HostConfig.Memory / MB : null;
+      if (!after.State.Running || before.State.StartedAt !== after.State.StartedAt)
         return unknown('The container changed during JVM inspection. Retry after it has started.');
-      return interpretJvmMemory(demuxDockerLogBuffer(output),server,after.HostConfig.Memory,checkedAt);
-    } catch {
-      return unknown('JVM inspection could not complete. Check Docker connectivity and JDK diagnostic support.');
+      if (result.ExitCode !== 0 || result.Running) return unknown(inspectionFailure(result.ExitCode));
+      return interpretJvmMemory(result.output, server, after.HostConfig.Memory, checkedAt);
+    } catch (error) {
+      logger.warn({ error, serverId: server.id }, 'JVM memory inspection failed');
+      return unknown('JVM inspection could not complete. The Docker limit is shown when available; check the backend diagnostic log for the failure.');
+    } finally {
+      if (container && scratch) await this.diagnosticExec(container, ['sh', '-c', 'rm -f -- "$1/jattach"; rmdir -- "$1"', 'cleanup', scratch]).catch(() => undefined);
     }
   }
 
@@ -861,6 +892,8 @@ export class DockerService {
 
     const memoryBytes = stats?.memory_stats?.usage ?? 0;
     const memoryLimitBytes = stats?.memory_stats?.limit ?? 0;
+    const inactiveFile = stats?.memory_stats?.stats?.inactive_file ?? stats?.memory_stats?.stats?.total_inactive_file ?? 0;
+    const memoryWorkingSetBytes = Math.max(0, memoryBytes - Math.min(memoryBytes, Math.max(0, inactiveFile)));
     const memoryPercent = memoryLimitBytes ? (memoryBytes / memoryLimitBytes) * 100 : 0;
 
     let networkRxBytes = 0;
@@ -899,6 +932,7 @@ export class DockerService {
       cpuCores,
       cpuCoresAvailable,
       memoryBytes,
+      memoryWorkingSetBytes,
       memoryLimitBytes,
       memoryPercent,
       networkRxBytes,

@@ -11,7 +11,7 @@ for local development only.
 - Endpoints for listing servers, creating entries, uploading packs, and issuing start/stop/restart/logs against Docker containers.
 - Basic dashboard to list servers, view statuses, and manage uploads.
 - Live per-server CPU and RAM on the server list, plus host totals — what servers are actually using, not just what they're allowed to use.
-- Memory management: one configurable shared Linux RAM limit, elastic JVM heaps, and graceful sleep under RAM pressure (see below).
+- Memory management: one configurable shared Linux RAM limit, elastic JVM heaps, and opt-in graceful sleep under RAM pressure (`MC_DASH_HIBERNATE=true`; see below).
 - Server console: run Minecraft commands (`/give`, `/tp`, `/kill`, …) against a live server over RCON, with completion for what the server actually has and failures shown as failures (see below).
 
 ## Local development
@@ -97,7 +97,8 @@ Non-Linux development shows actual Minecraft memory usage in monitoring-only mod
 
 **Runtime enforcement has not been validated on the Ubuntu deployment.** Local
 tests cover empty-server sleep, player warning countdowns, recovery cancellation,
-and save failures. At sustained high usage, occupied servers receive a 60-second
+and save failures. Automatic sleep requires `MC_DASH_HIBERNATE=true`; false also
+disables pressure-triggered sleep. When enabled, occupied servers receive a 60-second
 warning before saving and sleeping. Automatic sleep never falls back to a forced
 Docker stop. Elastic JVM heaps also help release unused memory. Sudden growth or
 failed saves can still cause Minecraft crashes at the kernel limit.

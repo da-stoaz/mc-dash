@@ -5,6 +5,7 @@ import type { PlayerInfo, ServerMetrics, ServerStatus } from '../../lib/serverTy
 import { API_BASE, apiFetch } from '../../lib/api';
 import {
   clampPercent,
+  chartCapacity,
   formatBytes,
   formatUptime,
   HISTORY_LIMIT,
@@ -14,12 +15,13 @@ import {
   LiveMetricsHistory,
 } from './metricsUtils';
 
+import { StorageUsage } from './StorageUsage';
 import { RuntimeMemoryCheck } from './RuntimeMemoryCheck';
 import { UsageChart } from './UsageChart';
 import { useTpsHistory } from './useTpsHistory';
 
 const formatCpuAbsolute = (value: number) => `${Number(value.toFixed(2))} cores`;
-const formatMemoryAbsolute = (value: number) => `${(value / 1024 ** 3).toFixed(2)} GB`;
+const formatMemoryAbsolute = (value: number) => `${(value / 1024 ** 3).toFixed(2)} GiB`;
 
 const formatTps = (value: number) => `${value.toFixed(2)} TPS`;
 
@@ -53,7 +55,7 @@ function formatCores(n: number): string {
 const TILE = 'rounded-lg border border-white/10 bg-white/5';
 
 function pct(value: number) {
-  return `${Math.round(value)}%`;
+  return `${Number(value.toFixed(1))}%`;
 }
 
 function mean(values: number[]) {
@@ -74,7 +76,7 @@ function Gauge({ icon, label, percent, color, detail }: GaugeProps) {
           {icon}
           {label}
         </span>
-        <span className="mt-3 text-3xl font-semibold tabular-nums">{percent === null ? '—' : `${Math.round(value)}%`}</span>
+        <span className="mt-3 text-3xl font-semibold tabular-nums">{percent === null ? '—' : `${Number(value.toFixed(1))}%`}</span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
         <div className="h-full rounded-full transition-[width]" style={{ width: `${percent === null ? 0 : value}%`, backgroundColor: color }} />
@@ -121,6 +123,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
       <UsageChart
         label="CPU usage"
         absoluteValues={points.map(p => p.cpuCoresAvg)} absolutePeaks={points.map(p => p.cpuCoresMax)} formatAbsolute={formatCpuAbsolute}
+        absoluteCapacity={chartCapacity(cpuAvg, points.map(p => p.cpuCoresAvg))}
         values={cpuAvg}
         timestamps={timestamps}
         resolution={history?.resolution}
@@ -135,6 +138,7 @@ function HistoryView({ history }: { history: MetricsHistory | null }) {
       <UsageChart
         label="Memory usage"
         absoluteValues={points.map(p => p.memoryBytesAvg)} absolutePeaks={points.map(p => p.memoryBytesMax)} formatAbsolute={formatMemoryAbsolute}
+        absoluteCapacity={chartCapacity(memAvg, points.map(p => p.memoryBytesAvg))}
         values={memAvg}
         timestamps={timestamps}
         resolution={history?.resolution}
@@ -194,6 +198,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
   const [tab, setTab] = useState<'live' | MetricRange>('live');
   const [rangeData, setRangeData] = useState<MetricsHistory | null>(null);
   const [rangeError, setRangeError] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   // Fetch (and periodically refresh) persisted rollups when a range tab is active.
   useEffect(() => {
@@ -272,10 +277,10 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
           <CardBody className="px-5 pb-5 pt-0">
             {tab === 'live' ? (
               <div className="divide-y divide-white/10">
-                <UsageChart label="CPU usage" values={history.cpu} absoluteValues={history.cpuCores} formatAbsolute={formatCpuAbsolute} timestamps={history.timestamps} stroke={CPU_STROKE} fill={CPU_FILL}
-                  avgLabel={cpuAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel={history.timestamps.length ? formatAgo(history.timestamps[0]) : undefined} endLabel="Latest" />
-                <UsageChart label="Memory usage" values={history.memory} absoluteValues={history.memoryBytes} formatAbsolute={formatMemoryAbsolute} timestamps={history.timestamps} stroke={MEM_STROKE} fill={MEM_FILL}
-                  avgLabel={memAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel={history.timestamps.length ? formatAgo(history.timestamps[0]) : undefined} endLabel="Latest" />
+                <UsageChart label="CPU usage" absoluteCapacity={chartCapacity(history.cpu, history.cpuCores, history.cpuLimits)} window={[Date.now() - 60_000, Date.now()]} values={history.cpu} absoluteValues={history.cpuCores} formatAbsolute={formatCpuAbsolute} timestamps={history.timestamps} stroke={CPU_STROKE} fill={CPU_FILL}
+                  avgLabel={cpuAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel="1m ago" endLabel="Latest" />
+                <UsageChart label="Memory usage" absoluteCapacity={chartCapacity(history.memory, history.memoryBytes, history.memoryLimits)} window={[Date.now() - 60_000, Date.now()]} values={history.memory} absoluteValues={history.memoryBytes} formatAbsolute={formatMemoryAbsolute} timestamps={history.timestamps} stroke={MEM_STROKE} fill={MEM_FILL}
+                  avgLabel={memAvgLive} emptyLabel={liveChartEmptyLabel(status)} startLabel="1m ago" endLabel="Latest" />
               </div>
             ) : rangeError ? (
               <div role="status" className="py-12 text-center text-sm muted">Could not load history. Retrying automatically…</div>
@@ -309,14 +314,15 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
         </div>
       </div>
 
-      <details className={`${TILE} p-4`}>
-        <summary className="cursor-pointer text-sm font-medium">Process diagnostics <span className="ml-2 text-xs font-normal muted">Network, disk I/O and processes</span></summary>
+      <details className={`${TILE} p-4`} onToggle={event => setDiagnosticsOpen(event.currentTarget.open)}>
+        <summary className="cursor-pointer text-sm font-medium">Process diagnostics <span className="ml-2 text-xs font-normal muted">Storage, network, disk I/O and processes</span></summary>
         <p className="mt-4 text-xs muted">Cumulative transfers since the container started. Disk I/O is not storage usage.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <StatBlock icon={<Network size={16} />} title="Network transfer" primary={`Received: ${currentMetrics ? formatBytes(currentMetrics.networkRxBytes) : '—'}`} secondary={`Sent: ${currentMetrics ? formatBytes(currentMetrics.networkTxBytes) : '—'}`} />
           <StatBlock icon={<HardDrive size={16} />} title="Disk I/O" primary={`Read: ${currentMetrics ? formatBytes(currentMetrics.blkReadBytes) : '—'}`} secondary={`Written: ${currentMetrics ? formatBytes(currentMetrics.blkWriteBytes) : '—'}`} />
           <StatBlock icon={<Cpu size={16} />} title="Processes" primary={`${currentMetrics?.pids ?? '—'} PIDs`} secondary="Inside this container" />
         </div>
+        <StorageUsage key={serverId} serverId={serverId} visible={diagnosticsOpen} />
       </details>
     </div>
   );
