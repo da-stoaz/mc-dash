@@ -15,7 +15,7 @@ for local development only.
 - Server console: run Minecraft commands (`/give`, `/tp`, `/kill`, …) against a live server over RCON, with completion for what the server actually has and failures shown as failures (see below).
 
 ## Local development
-Live Usage History includes TPS alongside CPU and memory, sampled every 10 seconds while viewed. It uses `spark tps`, with `forge tps` as a fallback, and displays the last 60 seconds. The backend retains up to 10 minutes in memory. RCON and a supported TPS command are required. The TPS chart is hidden for stopped servers or confirmed unsupported commands. Missing readings appear as gaps; sampling does not start a profiler or generate health reports.
+Live Usage History includes TPS alongside CPU and memory, sampled every 5 seconds while viewed. It uses `spark tps`, with `forge tps` as a fallback, and displays the last 60 seconds. The backend retains up to 10 minutes in memory. RCON and a supported TPS command are required. The TPS chart is hidden for stopped servers or confirmed unsupported commands. Missing readings appear as gaps; sampling does not start a profiler or generate health reports.
 
 Install Python 3 alongside Node.js for local backend development. Secure file
 operations use its standard-library directory-descriptor APIs; no Python packages

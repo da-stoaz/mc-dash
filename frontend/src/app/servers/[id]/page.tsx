@@ -15,7 +15,7 @@ import {
   Tab,
   Tabs,
 } from '@heroui/react';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { EditModal, FirewallModal } from '../../../components/ServerModals';
@@ -335,6 +335,10 @@ export default function ServerDetailsPage() {
       <div className="flex flex-wrap items-start justify-between gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
       <ServerTitle server={server} />
 
+      <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="bordered" startContent={<Pencil size={14} />} onPress={() => setShowEdit(server)}>
+        Edit
+      </Button>
       <LifecycleToolbar
         busy={busy}
         canPrepare={canPrepare}
@@ -348,7 +352,7 @@ export default function ServerDetailsPage() {
         onStop={() => setConfirmState('stop')}
         onRestart={() => setConfirmState('restart')}
       />
-
+      </div>
       </div>
 
       <FailureBanner message={server.lastError} />

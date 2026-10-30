@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { API_BASE, apiFetch } from '../../lib/api';
 import type { ServerStatus } from '../../lib/serverTypes';
+import { retainLiveWindow } from './metricsUtils';
 
 type TpsHistory = {
   state: 'available' | 'stopped' | 'unavailable' | 'unsupported';
@@ -33,7 +34,7 @@ export function useTpsHistory(serverId: string, status: ServerStatus | null) {
           if (!disposed) setFailed(true);
         }
       }
-      if (!disposed) { setClock(Date.now()); timer = setTimeout(poll, 10_000); }
+      if (!disposed) { setClock(Date.now()); timer = setTimeout(poll, 5_000); }
     };
     if (status === 'running') void poll();
     return () => { disposed = true; controller.abort(); clearTimeout(timer); };
@@ -44,7 +45,7 @@ export function useTpsHistory(serverId: string, status: ServerStatus | null) {
   const current = running && !failed && !stale ? data?.current : null;
   return {
     visible: running && data?.state !== 'unsupported',
-    points: (data?.points ?? []).filter(point => clock - point.t <= 60_000),
+    points: retainLiveWindow(data?.points ?? [], point => point.t),
     current,
     unavailable: failed || stale || data?.state === 'unavailable',
   };

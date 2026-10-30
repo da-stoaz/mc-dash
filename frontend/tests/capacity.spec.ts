@@ -47,7 +47,7 @@ for (const state of ['enforced', 'unverified', 'pressure', 'disabled', 'countdow
     if (state === 'sleeping-cache') {
       await expect(meter).toHaveAttribute('aria-valuenow','0');
       await expect(page.getByText('0.0 GB',{exact:true})).toBeVisible();
-      await expect(page.getByText(/1.8 GB of reclaimable file cache excluded/)).toBeVisible();
+      await expect(page.getByText(/reclaimable file cache/)).toHaveCount(0);
     }
     if (state === 'enforced') {
       await page.setViewportSize({ width: 390, height: 844 });

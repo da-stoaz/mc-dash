@@ -24,8 +24,13 @@ test('recent readings exist before a viewer connects, expire, and use actual sam
   const collector = new MetricsCollector();
   for (let i = 0; i < 15; i++) { await collector.tick(); now += 5000; }
   const history = collector.recentFor(server.id);
-  assert.equal(history.length, 12);
-  assert.equal(history[0].at, now - 60000);
+  assert.equal(history.length, 13);
+  assert.equal(history[0].at, now - 65000);
+  assert.equal(history[1].at, now - 60000);
+  // Between collection times, the line must still cross the rolling boundary.
+  now += 2500;
+  assert.equal(collector.recentFor(server.id)[0].at, now - 62500);
+  assert.equal(collector.recentFor(server.id)[1].at, now - 57500);
   assert.equal(history.at(-1).cpuCores, 1);
   let received: any;
   const stop = collector.watch(server.id, (sample: any) => { received = sample; });

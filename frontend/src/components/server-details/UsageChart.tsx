@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Tooltip } from '@heroui/react';
-import { buildSparklineArea, buildSparklinePath } from './metricsUtils';
+import { buildSparklineArea, buildSparklinePath, LIVE_GAP_MS } from './metricsUtils';
 
 const CHART_H = 48;
 
@@ -47,14 +47,20 @@ export function UsageChart({
   // Store the horizontal position so a stationary pointer stays aligned as live
   // samples arrive and the buffer rolls forward.
   const [position, setPosition] = useState<number | null>(null);
-  const hasData = values.length > 0 && values.some(Number.isFinite);
   const series = band ?? values;
-  const peak = hasData ? Math.max(...series.filter(Number.isFinite)) : null;
   const start = window?.[0] ?? timestamps[0];
   const end = window?.[1] ?? timestamps.at(-1) ?? start;
-  const positions = timestamps.map(t => end > start ? Math.max(0, Math.min(1, (t - start) / (end - start))) : 1);
-  const gapBefore = timestamps.map((t, i) => i > 0 && t - timestamps[i - 1] > (resolution ? resolution * 1500 : window ? 15000 : Infinity));
-  const index = positions.reduce((best, x, i) => Math.abs(x - (position ?? 1)) < Math.abs(positions[best] - (position ?? 1)) ? i : best, 0);
+  // Let the preceding sample sit outside the SVG and clip the connecting line.
+  // Clamping its x coordinate would move an older reading to the 60s boundary.
+  const positions = timestamps.map(t => end > start ? (t - start) / (end - start) : 1);
+  const visibleIndices = positions.flatMap((x, i) => x >= 0 && x <= 1 ? [i] : []);
+  const hasData = visibleIndices.some(i => Number.isFinite(values[i]));
+  const peaks = visibleIndices.map(i => series[i]).filter(Number.isFinite);
+  const peak = peaks.length ? Math.max(...peaks) : null;
+  const gapBefore = timestamps.map((t, i) => i > 0 && t - timestamps[i - 1] > (resolution ? resolution * 1500 : window ? LIVE_GAP_MS : Infinity));
+  const firstIndex = visibleIndices[0] ?? 0;
+  const lastIndex = visibleIndices.at(-1) ?? 0;
+  const index = visibleIndices.reduce((best, i) => Math.abs(positions[i] - (position ?? 1)) < Math.abs(positions[best] - (position ?? 1)) ? i : best, firstIndex);
   const timestamp = timestamps[index];
   const selected = hasData && position !== null && Number.isFinite(timestamp) && Number.isFinite(values[index]);
   const x = hasData ? positions[index] * 100 : 0;
@@ -82,13 +88,13 @@ export function UsageChart({
     switch (event.key) {
       case 'ArrowLeft': case 'ArrowDown': next--; break;
       case 'ArrowRight': case 'ArrowUp': next++; break;
-      case 'Home': next = 0; break;
-      case 'End': next = values.length - 1; break;
+      case 'Home': next = firstIndex; break;
+      case 'End': next = lastIndex; break;
       case 'Escape': setPosition(null); return;
       default: return;
     }
     event.preventDefault();
-    setPosition(positions[Math.min(values.length - 1, Math.max(0, next))]);
+    setPosition(positions[Math.min(lastIndex, Math.max(firstIndex, next))]);
   }
 
   return (
@@ -113,8 +119,8 @@ export function UsageChart({
           role="slider"
           tabIndex={0}
           aria-label={`${label} history. Use arrow keys to inspect samples.`}
-          aria-valuemin={0}
-          aria-valuemax={values.length - 1}
+          aria-valuemin={firstIndex}
+          aria-valuemax={lastIndex}
           aria-valuenow={index}
           aria-valuetext={description}
           className="relative h-28 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-white/40"
@@ -127,7 +133,7 @@ export function UsageChart({
           onBlur={() => setPosition(null)}
           onKeyDown={navigate}
         >
-          <svg viewBox={`0 0 100 ${CHART_H}`} className="h-full w-full" preserveAspectRatio="none" aria-hidden="true">
+          <svg viewBox={`0 0 100 ${CHART_H}`} className="h-full w-full overflow-hidden" preserveAspectRatio="none" aria-hidden="true">
             {formatAbsolute && [0, CHART_H / 2, CHART_H].map(y => <line key={y} x1="0" x2="100" y1={y} y2={y} stroke="rgba(255,255,255,0.12)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
             <path d={buildSparklineArea(series, 100, CHART_H, maxValue, positions, gapBefore)} fill={fill} opacity="0.35" />
             <path

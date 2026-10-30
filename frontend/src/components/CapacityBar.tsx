@@ -61,9 +61,6 @@ export function CapacityBar({ capacity }: { capacity: HostCapacity | null }) {
         {!monitoring && <p className={`flex items-start gap-2 text-xs ${warning ? 'text-amber-300' : 'muted'}`}>
           {warning && <TriangleAlert size={14} className="shrink-0" aria-hidden />}{message}
         </p>}
-        {known && pool.reclaimableMb != null && pool.reclaimableMb > 0 && <p className="text-xs muted">
-          {gb(pool.reclaimableMb)} of reclaimable file cache excluded. Linux can reuse this memory, including after servers stop.
-        </p>}
       </CardBody>
     </Card>
   );

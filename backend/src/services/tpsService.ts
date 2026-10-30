@@ -21,7 +21,7 @@ export function parseTps(raw: string, source: TpsReading['source']): TpsReading 
   return { tps, source, window: source === 'spark' ? match[1] : 'overall mean' };
 }
 
-const INTERVAL = 10_000;
+const INTERVAL = 5_000;
 const RETENTION = 10 * 60_000;
 type Entry = { value?: TpsHistory; pending?: Promise<TpsHistory>; touched: number; containerId?: string | null };
 
@@ -75,7 +75,7 @@ export class TpsService {
       state = 'unavailable';
     }
     const sampledAt = this.now();
-    const points = [...history.filter(point => sampledAt - point.t < RETENTION), { t: sampledAt, tps: current?.tps ?? null }].slice(-60);
+    const points = [...history.filter(point => sampledAt - point.t < RETENTION), { t: sampledAt, tps: current?.tps ?? null }].slice(-RETENTION / INTERVAL);
     return { state, current, points, sampledAt };
   }
 }
