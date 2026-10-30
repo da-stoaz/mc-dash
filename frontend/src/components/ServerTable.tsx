@@ -1,23 +1,12 @@
 import Link from 'next/link';
 import { Card, CardBody, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
-import { ServerRecord, statusColor, formatServerStatus } from '../lib/serverTypes';
+import { ServerRecord } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 import { CopyButton } from './CopyButton';
 import { UsageCell } from './UsageCell';
 import { SleepChip } from './SleepChip';
+import { ServerStatusChip } from './ServerStatusChip';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
-import { CircleAlert, CircleCheck, CircleOff, Loader, Power, type LucideIcon } from 'lucide-react';
-
-const statusIcon: Record<ServerRecord['status'], LucideIcon> = {
-  error: CircleAlert,
-  exited: CircleOff,
-  creating: Loader,
-  starting: Loader,
-  restarting: Loader,
-  stopping: Loader,
-  stopped: Power,
-  running: CircleCheck,
-};
 
 // Long hostnames are truncated, with the full value on hover and a copy button.
 function ServerNameCell({ server, routerDomain }: { server: ServerRecord; routerDomain: string | undefined }) {
@@ -104,9 +93,7 @@ function ServerCard({
             <span className="muted font-mono text-xs">{server.id.slice(0, 8)}</span>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <Chip color={statusColor[server.status]} variant="flat" size="sm">
-              {formatServerStatus(server.status, server.exitCode)}
-            </Chip>
+            <ServerStatusChip server={server} />
             {server.restartRequired && (
               <Chip color="warning" variant="flat" size="sm">
                 Restart required
@@ -197,7 +184,6 @@ export function ServerTable({
           </TableHeader>
           <TableBody emptyContent={emptyContent} items={servers}>
             {(server) => {
-              const StatusIcon = statusIcon[server.status];
               return (
                 <TableRow key={server.id}>
                   <TableCell>
@@ -205,19 +191,7 @@ export function ServerTable({
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-2">
-                      <Chip
-                        color={statusColor[server.status]}
-                        variant="flat"
-                        size="sm"
-                        startContent={
-                          <StatusIcon
-                            size={13}
-                            className={server.status === 'starting' || server.status === 'restarting' ? 'animate-spin' : undefined}
-                          />
-                        }
-                      >
-                        {formatServerStatus(server.status, server.exitCode)}
-                      </Chip>
+                      <ServerStatusChip server={server} />
                       <SleepChip server={server} />
                       {server.restartRequired && (
                         <Chip color="warning" variant="flat" size="sm">

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { ServerRecord } from '../src/lib/serverTypes';
 
-async function setup(page: Page, options: { running?: boolean; hardcore?: boolean; failSave?: boolean } = {}) {
+async function setup(page: Page, options: { running?: boolean; hardcore?: boolean; failSave?: boolean; backgroundSave?: 'success' | 'failure' } = {}) {
   let server: ServerRecord = {
     id: 'settings-test', name: 'Sunday survival', subdomain: 'sunday', serverPort: 25567,
     status: options.running ? 'running' : 'stopped', containerId: 'test-container-123',
@@ -14,6 +14,8 @@ async function setup(page: Page, options: { running?: boolean; hardcore?: boolea
   const patches: Record<string, unknown>[] = [];
   const actions: string[] = [];
   const errors: string[] = [];
+  let pendingServer: ServerRecord | undefined;
+  let polls = 0;
   page.on('pageerror', error => errors.push(error.message));
   await page.route(/(?:localhost:4000\/|\/api\/)/, async route => {
     const request = route.request();
@@ -36,13 +38,29 @@ async function setup(page: Page, options: { running?: boolean; hardcore?: boolea
       actions.push('prepare'); server = { ...server, packReady: true };
       return route.fulfill({ json: server });
     }
+    if (path === '/servers/settings-test/operations/settings-save') {
+      if (++polls === 1) return route.fulfill({ json: { status: 'running' } });
+      if (options.backgroundSave === 'failure') return route.fulfill({ json: {
+        status: 'failed', httpStatus: 409, body: { error: 'Not enough memory' },
+      } });
+      server = pendingServer!;
+      return route.fulfill({ json: { status: 'completed', httpStatus: 200, body: server } });
+    }
     if (path === '/servers/settings-test') {
       if (request.method() === 'PATCH') {
         const patch = request.postDataJSON();
         patches.push(patch);
         if (options.failSave && patches.length === 1) return route.fulfill({ status: 409, json: { error: 'Not enough memory' } });
         // Match the backend: nested game/resources objects are replacements.
-        server = { ...server, ...patch, restartRequired: Boolean(patch.game || patch.resources) };
+        const updated = { ...server, ...patch, restartRequired: Boolean(patch.game || patch.resources) };
+        if (options.backgroundSave) {
+          expect(request.headers().prefer).toBe('respond-async');
+          pendingServer = updated;
+          return route.fulfill({ status: 202, json: {
+            operationId: 'settings-save', statusUrl: '/servers/settings-test/operations/settings-save',
+          } });
+        }
+        server = updated;
       }
       if (request.method() === 'DELETE') actions.push('delete');
       return route.fulfill({ json: server });
@@ -75,7 +93,7 @@ test('rename saves only the name and keeps edits across categories', async ({ pa
   const { patches } = await setup(page);
   await page.getByLabel('Server name', { exact: true }).fill('A new name');
   await page.getByRole('tab', { name: 'Resources', exact: true }).click();
-  await page.getByLabel('Maximum RAM (MB)', { exact: true }).fill('10000');
+  await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('10000');
   await page.getByRole('tab', { name: 'General', exact: true }).click();
   await expect(page.getByLabel('Server name', { exact: true })).toHaveValue('A new name');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
@@ -83,19 +101,19 @@ test('rename saves only the name and keeps edits across categories', async ({ pa
   expect(patches[0]).toEqual({ name: 'A new name' });
   await expect(page.getByText('Saved. Changes will apply the next time the server starts.', { exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Resources', exact: true }).click();
-  await expect(page.getByLabel('Maximum RAM (MB)', { exact: true })).toHaveValue('10000');
+  await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toHaveValue('10000');
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  await expect(page.getByLabel('Maximum RAM (MB)', { exact: true })).toHaveValue('8192');
+  await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toHaveValue('8192');
 });
 
 test('failed save keeps the draft and allows retry; CPU cap can be removed', async ({ page }) => {
   const { patches } = await setup(page, { failSave: true });
   await page.getByRole('tab', { name: 'Resources', exact: true }).click();
-  await page.getByLabel('Maximum RAM (MB)', { exact: true }).fill('9000');
+  await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('9000');
   await page.getByLabel('CPU limit (cores)', { exact: true }).fill('');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Not enough memory' })).toBeVisible();
-  await expect(page.getByLabel('Maximum RAM (MB)', { exact: true })).toHaveValue('9000');
+  await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toHaveValue('9000');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => patches.length).toBe(2);
   expect(patches[1]).toEqual({ resources: { minRamMb: 4096, maxRamMb: 9000 } });
@@ -105,13 +123,77 @@ test('failed save keeps the draft and allows retry; CPU cap can be removed', asy
 test('RAM range is validated before a request is sent', async ({ page }) => {
   const { patches } = await setup(page);
   await page.getByRole('tab', { name: 'Resources', exact: true }).click();
-  await page.getByLabel('Minimum RAM (MB)', { exact: true }).fill('10000');
+  await page.getByLabel('Initial Java heap (MiB)', { exact: true }).fill('10000');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   expect(patches).toEqual([]);
-  expect(await page.getByLabel('Minimum RAM (MB)', { exact: true }).evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(false);
-  await page.getByLabel('Minimum RAM (MB)', { exact: true }).fill('5000');
+  expect(await page.getByLabel('Initial Java heap (MiB)', { exact: true }).evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(false);
+  await page.getByLabel('Initial Java heap (MiB)', { exact: true }).fill('5000');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => patches.length).toBe(1);
+});
+
+test('RAM limit enforces the backend minimum before saving', async ({ page }) => {
+  const { patches } = await setup(page);
+  await page.getByRole('tab', { name: 'Resources', exact: true }).click();
+  await page.getByLabel('Initial Java heap (MiB)', { exact: true }).fill('256');
+  const limit = page.getByLabel('RAM limit (MiB)', { exact: true });
+  await limit.fill('511');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  expect(patches).toEqual([]);
+  expect(await limit.evaluate((input: HTMLInputElement) => input.validity.rangeUnderflow)).toBe(true);
+  await limit.fill('512');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toEqual({ resources: { minRamMb: 256, maxRamMb: 512, cpuLimit: 2 } });
+});
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`settings save waits for background ${outcome}`, async ({ page }) => {
+    const { patches } = await setup(page, { backgroundSave: outcome });
+    await page.getByRole('tab', { name: 'Resources', exact: true }).click();
+    await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('9000');
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Saving…', exact: true })).toBeDisabled();
+    await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toBeDisabled();
+    if (outcome === 'success') {
+      await expect(page.getByText('Saved. Restart the server to apply these changes.', { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled();
+    } else {
+      await expect(page.getByRole('alert').filter({ hasText: 'Not enough memory' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled();
+    }
+    await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toHaveValue('9000');
+    expect(patches).toHaveLength(1);
+  });
+}
+
+test('saving a RAM edit preserves untouched resource changes from live updates', async ({ page }) => {
+  await page.addInitScript(() => {
+    class DetailEvents extends EventTarget {
+      constructor() {
+        super();
+        Object.assign(window, { detailEvents: this });
+        setTimeout(() => this.dispatchEvent(new MessageEvent('server', { data: JSON.stringify({
+          id: 'settings-test', name: 'Sunday survival', status: 'stopped', serverPort: 25567,
+          resources: { minRamMb: 4096, maxRamMb: 8192, cpuLimit: 2 }, game: {},
+        }) })), 0);
+      }
+      close() {}
+    }
+    Object.assign(window, { EventSource: DetailEvents });
+  });
+  const { patches } = await setup(page);
+  await page.getByRole('tab', { name: 'Resources', exact: true }).click();
+  await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('9000');
+  await page.evaluate(server => {
+    (window as unknown as { detailEvents: EventTarget }).detailEvents.dispatchEvent(new MessageEvent('server', { data: JSON.stringify(server) }));
+  }, {
+    id: 'settings-test', name: 'Sunday survival', status: 'stopped', serverPort: 25567,
+    resources: { minRamMb: 2048, maxRamMb: 8192, cpuLimit: 4 }, game: {},
+  });
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toEqual({ resources: { minRamMb: 2048, maxRamMb: 9000, cpuLimit: 4 } });
 });
 
 test('changing gameplay preserves the rest of the world configuration', async ({ page }) => {
@@ -170,7 +252,7 @@ test('deletion still requires confirmation', async ({ page }) => {
 test('Java runtime supports custom images, discard, and auto-detection', async ({ page }) => {
   const { patches } = await setup(page);
   await page.getByRole('tab', { name: 'Server pack', exact: true }).click();
-  const runtime = page.getByLabel('Java runtime', { exact: true });
+  const runtime = page.getByRole('button', { name: 'Java runtime', exact: true });
   await runtime.click();
   await expect(runtime).toHaveAttribute('aria-expanded', 'true');
   await page.getByRole('option', { name: 'Custom image…', exact: true }).click();

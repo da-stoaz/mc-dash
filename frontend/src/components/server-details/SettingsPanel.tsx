@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronDown, Cpu, Gamepad2, Loader2, Package, Settings2, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { Alert, Button, Divider, Input, Progress, Select, SelectItem, Switch, Tab, Tabs, Textarea } from '@heroui/react';
-import { API_BASE, apiFetch } from '@/lib/api';
+import { API_BASE, apiFetch, apiOperation } from '@/lib/api';
 import { getApiErrorMessage } from '@/lib/apiErrors';
 import { uploadInChunks } from '@/lib/chunkedUpload';
 import { formatHostname, useRouterDomain } from '@/lib/routerDomain';
@@ -88,7 +88,7 @@ function SettingsForm<T extends object>({ server, initial, toPatch, onUpdated, b
     setSaving(true);
     setNotice(null);
     try {
-      const response = await apiFetch(`${API_BASE}/servers/${server.id}`, {
+      const response = await apiOperation(`${API_BASE}/servers/${server.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(toPatch(draft.values, draft.baseline)),
       });
@@ -147,7 +147,7 @@ function GeneralSettings({ server, busy, onUpdated, onDelete }: Props) {
             {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} value={values.subdomain} pattern="[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*" onChange={event => set('subdomain', event.target.value)} placeholder="my-server" />}
           </Field>
           <Field label="Server port" description={portLocked ? 'Stop the server before changing its port.' : 'Players connect to this port. The container is recreated if it changes.'}>
-            {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} required type="number" min={1} max={65535} isDisabled={portLocked} value={values.port} onChange={event => set('port', event.target.value)} />}
+            {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} required type="number" min={1024} max={65535} isDisabled={portLocked} value={values.port} onChange={event => set('port', event.target.value)} />}
           </Field>
         </div>
       </>}
@@ -227,22 +227,27 @@ function ResourceSettings({ server, busy, onUpdated }: Props) {
     <Heading title="Resources">Balance server performance with the capacity of your host.</Heading>
     <SettingsForm server={server} busy={busy} onUpdated={onUpdated}
       initial={{ minimum: String(server.resources.minRamMb), maximum: String(server.resources.maxRamMb), cpu: server.resources.cpuLimit?.toString() ?? '' }}
-      toPatch={values => ({ resources: { minRamMb: Number(values.minimum), maxRamMb: Number(values.maximum), ...(values.cpu && { cpuLimit: Number(values.cpu) }) } })}>
+      toPatch={(values, baseline) => ({ resources: {
+        ...server.resources,
+        ...(values.minimum !== baseline.minimum && { minRamMb: Number(values.minimum) }),
+        ...(values.maximum !== baseline.maximum && { maxRamMb: Number(values.maximum) }),
+        ...(values.cpu !== baseline.cpu && { cpuLimit: values.cpu ? Number(values.cpu) : undefined }),
+      } })}>
       {(values, set) => <>
-        <div><h4 className="text-sm font-medium">Memory</h4><p className="mt-1 text-xs text-default-500">The JVM heap range, in MB. 1,024 MB = 1 GB.</p></div>
+        <div><h4 className="text-sm font-medium">Memory</h4><p className="mt-1 text-xs text-default-500">Set the initial Java heap and total server memory limit. 1,024 MiB = 1 GiB.</p></div>
         <div className="grid gap-6 sm:grid-cols-2">
-          <Field label="Minimum RAM (MB)" description="Memory the server starts with.">
+          <Field label="Initial Java heap (MiB)" description="The starting heap size. MC Dash can adjust it to fit the RAM limit.">
             {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} type="number" min={1} max={Number(values.maximum) || undefined} step={1} required value={values.minimum} onChange={event => set('minimum', event.target.value)} />}
           </Field>
-          <Field label="Maximum RAM (MB)" description="The most heap memory the server can use.">
-            {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} type="number" min={Number(values.minimum) || 1} step={1} required value={values.maximum} onChange={event => set('maximum', event.target.value)} />}
+          <Field label="RAM limit (MiB)" description="Total container memory, including Java overhead.">
+            {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} type="number" min={Math.max(512, Number(values.minimum) || 0)} step={1} required value={values.maximum} onChange={event => set('maximum', event.target.value)} />}
           </Field>
         </div>
         <Divider />
         <Field label="CPU limit (cores)" description="Leave empty for no CPU cap. Fractions such as 1.5 are supported.">
           {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} className="sm:max-w-xs" type="number" min={0.01} step="any" placeholder="Unlimited" value={values.cpu} onChange={event => set('cpu', event.target.value)} />}
         </Field>
-        <p className="rounded-md bg-default-100 px-4 py-3 text-xs leading-relaxed text-default-500">The host also needs memory outside the Java heap. MC Dash checks host capacity before starting a server or increasing memory on a running server.</p>
+        <p className="rounded-md bg-default-100 px-4 py-3 text-xs leading-relaxed text-default-500">MC Dash reserves room for Java overhead within the RAM limit. Unused memory is shared with other servers; host capacity is checked before starting a server or increasing its limit.</p>
       </>}
     </SettingsForm>
   </>;
