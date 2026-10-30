@@ -28,7 +28,7 @@ import { MetricsCard } from '../../../components/server-details/MetricsCard';
 import { SnapshotsCard } from '../../../components/server-details/SnapshotsCard';
 import { ServerTitle } from '../../../components/server-details/ServerTitle';
 import { FailureBanner } from '../../../components/server-details/FailureBanner';
-import { clampPercent, HISTORY_LIMIT, LiveMetricsHistory, MetricsHistory } from '../../../components/server-details/metricsUtils';
+import { emptyLiveHistory, mergeLiveHistory, LiveMetricsHistory } from '../../../components/server-details/metricsUtils';
 import { FirewallState, FormState, hasLiveProcess, PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch, apiOperation } from '../../../lib/api';
@@ -40,7 +40,7 @@ export default function ServerDetailsPage() {
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
   const [players, setPlayers] = useState<PlayerInfo | null>(null);
-  const [history, setHistory] = useState<LiveMetricsHistory>({ cpu: [], memory: [], timestamps: [], cpuCores: [], memoryBytes: [] });
+  const [history, setHistory] = useState<LiveMetricsHistory>(emptyLiveHistory);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
@@ -80,7 +80,10 @@ export default function ServerDetailsPage() {
 
   useEffect(() => {
     if (!serverId) return;
+    setHistory(emptyLiveHistory());
+    setMetrics(null);
     let es: EventSource | null = null;
+    const prune = setInterval(() => setHistory(previous => mergeLiveHistory(previous, [])), 1000);
 
     const connect = () => {
       if (es) return;
@@ -94,9 +97,17 @@ export default function ServerDetailsPage() {
         }
         setLoading(false);
       });
+      es.addEventListener('metrics-history', (e) => {
+        try {
+          const samples = JSON.parse((e as MessageEvent).data);
+          if (Array.isArray(samples)) setHistory(previous => mergeLiveHistory(previous, samples));
+        } catch { /* ignore malformed frame */ }
+      });
       es.addEventListener('metrics', (e) => {
         try {
-          setMetrics(JSON.parse((e as MessageEvent).data));
+          const sample = JSON.parse((e as MessageEvent).data);
+          setMetrics(sample);
+          if (sample) setHistory(previous => mergeLiveHistory(previous, [{ ...sample, at: sample.at ?? Date.now() }]));
         } catch {
           setMetrics(null);
         }
@@ -129,53 +140,9 @@ export default function ServerDetailsPage() {
     connect();
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
+      clearInterval(prune);
       document.removeEventListener('visibilitychange', onVisibility);
       disconnect();
-    };
-  }, [serverId]);
-
-  useEffect(() => {
-    if (!metrics) return;
-    const timestamp = Date.now();
-    const cpu = clampPercent(metrics.cpuPercent);
-    const memory = clampPercent(metrics.memoryPercent);
-    setHistory((prev) => ({
-      cpuCores: [...prev.cpuCores, metrics.cpuCores].slice(-HISTORY_LIMIT),
-      memoryBytes: [...prev.memoryBytes, metrics.memoryBytes].slice(-HISTORY_LIMIT),
-      cpu: [...prev.cpu, cpu].slice(-HISTORY_LIMIT),
-      memory: [...prev.memory, memory].slice(-HISTORY_LIMIT),
-      timestamps: [...prev.timestamps, timestamp].slice(-HISTORY_LIMIT),
-    }));
-  }, [metrics]);
-
-  // Seed the live buffer from persisted rollups so the graph isn't empty on
-  // connect. Prepends the recent tail; live samples still stream in on top.
-  useEffect(() => {
-    if (!serverId) return;
-    let active = true;
-    (async () => {
-      try {
-        const res = await apiFetch(`${API_BASE}/servers/${serverId}/metrics/history?range=1h`);
-        if (!res.ok) return;
-        const data = (await res.json()) as MetricsHistory;
-        const tail = data.points.filter((p) => p.t >= Date.now() - HISTORY_LIMIT * 1000);
-        if (!active || tail.length === 0) return;
-        setHistory((prev) => {
-          const seed = tail.filter((p) => p.t < (prev.timestamps[0] ?? Infinity));
-          return {
-            cpuCores: [...seed.map(p => p.cpuCoresAvg ?? null), ...prev.cpuCores].slice(-HISTORY_LIMIT),
-            memoryBytes: [...seed.map(p => p.memoryBytesAvg ?? null), ...prev.memoryBytes].slice(-HISTORY_LIMIT),
-            cpu: [...seed.map((p) => clampPercent(p.cpuAvg)), ...prev.cpu].slice(-HISTORY_LIMIT),
-            memory: [...seed.map((p) => clampPercent(p.memAvg)), ...prev.memory].slice(-HISTORY_LIMIT),
-            timestamps: [...seed.map((p) => p.t), ...prev.timestamps].slice(-HISTORY_LIMIT),
-          };
-        });
-      } catch {
-        // best-effort seed; live stream will fill in regardless
-      }
-    })();
-    return () => {
-      active = false;
     };
   }, [serverId]);
 

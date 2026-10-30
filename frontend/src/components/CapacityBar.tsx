@@ -14,15 +14,18 @@ export function CapacityBar({ capacity }: { capacity: HostCapacity | null }) {
   const running = capacity?.servers?.filter(server => server.live) ?? [];
   const usageKnown = monitoring && capacity?.servers != null && running.every(server => server.actualMb != null);
   const measuredMb = running.reduce((sum, server) => sum + (server.actualMb ?? 0), 0);
-  const known = pool?.enforced && pool.usedMb != null;
-  const percent = known && pool.limitMb > 0 ? Math.min(100, Math.max(0, pool.usedMb! / pool.limitMb * 100)) : 0;
+  const usedMb = pool?.workingSetMb ?? pool?.usedMb;
+  const known = pool?.enforced && usedMb != null;
+  const percent = known && pool.limitMb > 0 ? Math.min(100, Math.max(0, usedMb / pool.limitMb * 100)) : 0;
   const warning = capacity && !monitoring && (!pool?.enforced || pool.pressure);
   const message = !capacity ? 'Waiting for a current RAM reading…'
     : monitoring ? 'Monitoring only. The shared RAM limit is not enforced on this host.'
     : !pool ? 'Shared RAM protection has not been verified.'
     : !pool.enforced ? pool.reason || 'Shared RAM protection has not been verified.'
     : pool.lastAction ? pool.lastAction
-    : pool.pressure ? 'RAM is high. New starts are limited. Servers may save and sleep; players are warned first.'
+    : pool.pressure ? pool.automaticSleepEnabled
+      ? 'RAM is high. New starts are limited. Servers may save and sleep; players are warned first.'
+      : 'RAM is high. New starts are limited. Automatic sleep is disabled.'
     : 'Shared by Minecraft servers. MC Dash runs outside this limit.';
 
   return (
@@ -44,7 +47,7 @@ export function CapacityBar({ capacity }: { capacity: HostCapacity | null }) {
             </Tooltip>}
           </div>
           <span className="tabular-nums">
-            {known ? <><strong className="font-semibold">{gb(pool.usedMb!)}</strong><span className="muted"> / {gb(pool.limitMb)} limit</span></>
+            {known ? <><strong className="font-semibold">{gb(usedMb)}</strong><span className="muted"> / {gb(pool.limitMb)} limit</span></>
               : monitoring ? <span>{usageKnown ? `${gb(measuredMb)} used` : 'Waiting for usage readings…'}</span>
               : pool?.enabled ? <span className="muted">{pool.limitMb > 0 ? `${gb(pool.limitMb)} detected · unverified` : 'Limit unverified'}</span> : <span className="muted">—</span>}
           </span>
@@ -52,11 +55,14 @@ export function CapacityBar({ capacity }: { capacity: HostCapacity | null }) {
         {!monitoring && <div className="h-2 overflow-hidden rounded-full bg-white/10"
           role={known ? 'meter' : undefined} aria-label="Minecraft shared RAM usage"
           aria-valuenow={known ? Math.round(percent) : undefined} aria-valuemin={0} aria-valuemax={100}
-          aria-valuetext={known ? `${gb(pool.usedMb!)} used out of ${gb(pool.limitMb)}` : undefined}>
+          aria-valuetext={known ? `${gb(usedMb)} used out of ${gb(pool.limitMb)}` : undefined}>
           {known && <div className={`h-full rounded-full ${pool.pressure ? 'bg-warning' : 'bg-emerald-500'} transition-[width] duration-500`} style={{ width: `${percent}%` }} />}
         </div>}
         {!monitoring && <p className={`flex items-start gap-2 text-xs ${warning ? 'text-amber-300' : 'muted'}`}>
           {warning && <TriangleAlert size={14} className="shrink-0" aria-hidden />}{message}
+        </p>}
+        {known && pool.reclaimableMb != null && pool.reclaimableMb > 0 && <p className="text-xs muted">
+          {gb(pool.reclaimableMb)} of reclaimable file cache excluded. Linux can reuse this memory, including after servers stop.
         </p>}
       </CardBody>
     </Card>

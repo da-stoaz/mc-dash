@@ -143,3 +143,23 @@ test('snapshot imports reject symbolic and hard links before extracting files', 
 test('descriptor-relative operations resist directory races and preserve files on write failure', () => {
   execFileSync('python3', [path.join(__dirname, 'serverFileWorker.test.py')], { env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
 });
+
+test('storage measures allocated server files and snapshots without following links or counting hard links twice', async () => {
+  const { serverStorageUsage } = require('./serverFiles');
+  const id = 'storage';
+  const world = file(id, 'pack/world/region.mca', 'data'.repeat(4096));
+  const snapshot = file(id, 'snapshots/backup.zip', 'zip'.repeat(2048));
+  const outside = file('outside-storage', 'large', 'outside'.repeat(8192));
+  fs.symlinkSync(path.dirname(outside), path.join(root, 'servers', id, 'outside-link'));
+  fs.linkSync(world, path.join(root, 'servers', id, 'pack', 'world-hardlink'));
+  const sparse = file(id, 'pack/sparse'); fs.truncateSync(sparse, 64 * 1024 ** 2);
+  const allocated = (file: string) => fs.lstatSync(file).blocks * 512;
+  const pack = path.join(root, 'servers', id, 'pack');
+  const expectedFiles = [path.join(root, 'servers', id), pack, path.dirname(world), world, sparse, path.join(root, 'servers', id, 'outside-link')].reduce((sum, f) => sum + allocated(f), 0);
+  const usage = await serverStorageUsage(id);
+  assert.equal(usage.filesBytes, expectedFiles);
+  assert.equal(usage.snapshotsBytes, allocated(path.dirname(snapshot)) + allocated(snapshot));
+  assert.equal(usage.totalBytes, usage.filesBytes + usage.snapshotsBytes);
+  assert.ok(usage.totalBytes < 64 * 1024 ** 2, 'sparse file size is not allocated disk space');
+  assert.equal(await serverStorageUsage(id), usage, 'repeat requests reuse the recent scan');
+});

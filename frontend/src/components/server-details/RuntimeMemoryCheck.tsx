@@ -11,7 +11,7 @@ type Inspection = {
   checkedAt: number;
   reason: string;
 };
-const gb = (mb: number | null) => mb === null ? 'Unknown' : `${(mb / 1024).toFixed(2)} GB`;
+const gb = (mb: number | null) => mb === null ? 'Unknown' : `${(mb / 1024).toFixed(2)} GiB`;
 
 export function RuntimeMemoryCheck({ serverId, running }: { serverId: string; running: boolean }) {
   const [result, setResult] = useState<Inspection | null>(null);
@@ -40,7 +40,7 @@ export function RuntimeMemoryCheck({ serverId, running }: { serverId: string; ru
         {error && <p className="mt-3 text-amber-400">{error}</p>}
         {result && <div className="mt-3 space-y-2">
           <p className={result.status === 'verified' ? 'text-emerald-400' : 'text-amber-400'}>
-            {result.status === 'verified' ? 'Heap settings match' : result.status === 'mismatch' ? 'Settings differ' : 'Could not verify'}
+            {result.status === 'verified' ? 'Heap settings match' : result.status === 'mismatch' ? 'Settings differ' : 'Heap could not be verified'}
           </p>
           <p className="text-xs muted">{result.reason}</p>
           <dl className="grid grid-cols-2 gap-2 text-xs">

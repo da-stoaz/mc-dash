@@ -1,3 +1,5 @@
+import type { ServerMetrics } from '../../lib/serverTypes';
+
 export const HISTORY_LIMIT = 60;
 
 export type LiveMetricsHistory = {
@@ -6,11 +8,49 @@ export type LiveMetricsHistory = {
   cpu: number[];
   memory: number[];
   timestamps: number[];
+  cpuLimits: number[];
+  memoryLimits: number[];
 };
+
+export const emptyLiveHistory = (): LiveMetricsHistory => ({ cpu: [], memory: [], timestamps: [], cpuCores: [], memoryBytes: [], cpuLimits: [], memoryLimits: [] });
+
+/** Merge reconnect snapshots and streaming readings by their collection time. */
+export function mergeLiveHistory(previous: LiveMetricsHistory, samples: (ServerMetrics & { at: number })[], now = Date.now()): LiveMetricsHistory {
+  const points = new Map(previous.timestamps.map((at, i) => [at, {
+    at, cpuPercent: previous.cpu[i], memoryPercent: previous.memory[i], cpuCores: previous.cpuCores[i],
+    memoryBytes: previous.memoryBytes[i], cpuCoresAvailable: previous.cpuLimits[i], memoryLimitBytes: previous.memoryLimits[i],
+  }]));
+  for (const sample of samples) {
+    if (Number.isFinite(sample.at) && sample.status === 'running') points.set(sample.at, sample);
+  }
+  const result = emptyLiveHistory();
+  for (const point of [...points.values()].filter(p => p.at >= now - HISTORY_LIMIT * 1000 && p.at <= now + 1000).sort((a, b) => a.at - b.at).slice(-120)) {
+    result.timestamps.push(point.at);
+    result.cpu.push(point.cpuPercent);
+    result.memory.push(point.memoryPercent);
+    result.cpuCores.push(point.cpuCores);
+    result.memoryBytes.push(point.memoryBytes);
+    result.cpuLimits.push(point.cpuCoresAvailable);
+    result.memoryLimits.push(point.memoryLimitBytes);
+  }
+  return result;
+}
+
+/** One absolute scale only exists when the allocation was constant in this range. */
+export function chartCapacity(values: number[], absolute: (number | null | undefined)[], limits: number[] = []): number | null {
+  const capacities = limits.filter(n => Number.isFinite(n) && n > 0);
+  if (!capacities.length) values.forEach((percent, i) => {
+    const usage = absolute[i];
+    if (percent > 0 && usage != null && usage > 0) capacities.push(usage * 100 / percent);
+  });
+  if (!capacities.length) return null;
+  const first = capacities[0];
+  return capacities.every(n => Math.abs(n - first) <= first * 0.001) ? first : null;
+}
 
 export function formatBytes(bytes?: number | null) {
   if (!bytes || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   let value = bytes;
   let index = 0;
   while (value >= 1024 && index < units.length - 1) {
@@ -41,22 +81,22 @@ export function clampPercent(value?: number | null) {
 
 // `max` scales the y-axis: percentages pass 100, byte/sec rates pass the
 // series peak so the curve fills the box regardless of magnitude.
-export function buildSparklinePath(values: number[], width = 100, height = 36, max = 100) {
+export function buildSparklinePath(values: number[], width = 100, height = 36, max = 100, positions?: number[], gapBefore?: boolean[]) {
   if (values.length === 0) return '';
   const scale = max > 0 ? max : 1;
   const step = values.length > 1 ? width / (values.length - 1) : width;
   return values
     .map((value, index) => {
       if (!Number.isFinite(value)) return '';
-      const x = index * step;
+      const x = positions ? positions[index] * width : index * step;
       const y = height - (value / scale) * height;
-      return `${index === 0 || !Number.isFinite(values[index - 1]) ? 'M' : 'L'} ${x} ${y}`;
+      return `${index === 0 || !Number.isFinite(values[index - 1]) || gapBefore?.[index] ? 'M' : 'L'} ${x} ${y}`;
     })
     .join(' ');
 }
 
-export function buildSparklineArea(values: number[], width = 100, height = 36, max = 100) {
-  const line = buildSparklinePath(values, width, height, max);
+export function buildSparklineArea(values: number[], width = 100, height = 36, max = 100, positions?: number[], gapBefore?: boolean[]) {
+  const line = buildSparklinePath(values, width, height, max, positions, gapBefore);
   if (!line) return '';
   // Close each contiguous segment separately so missing samples remain gaps.
   return line.split('M ').filter(Boolean).map(segment => {

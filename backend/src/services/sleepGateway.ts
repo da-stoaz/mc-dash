@@ -45,8 +45,8 @@ export type SleepGatewayOptions = {
   wakeMessage: string;
   /** Server-list version label, e.g. "Sleeping". */
   versionName: string;
-  /** Called on a join attempt. Errors are logged, never surfaced to the client. */
-  onWake: () => void;
+  /** Resolves to the actual start result (including admission refusals). */
+  onWake: () => void | string | Promise<void | string>;
 };
 
 /**
@@ -72,11 +72,25 @@ export function serveSleepingClient(socket: net.Socket, initial: Buffer, opts: S
   const wake = () => {
     if (woken) return;
     woken = true;
-    try {
-      opts.onWake();
-    } catch (err) {
+    clearTimeout(timer);
+    socket.removeAllListeners('data');
+    // Releasing the listening port must not discard this pending reply.
+    socket.emit('mc-dash-wake');
+    const reply = (message: string) => {
+      if (!socket.destroyed && !socket.writableEnded) socket.end(loginDisconnect(message));
+    };
+    // Preparation can outlast the client's login timeout. Never claim success
+    // before Docker accepts the start; a retry will see the resulting state.
+    const waiting = setTimeout(() => reply('Wake requested; the start check is still running. Reconnect shortly to check its result.'), 4000);
+    Promise.resolve().then(() => opts.onWake()).then(message => {
+      clearTimeout(waiting);
+      reply(message || opts.wakeMessage);
+    }).catch(err => {
+      clearTimeout(waiting);
       logger.warn({ err }, 'Sleep gateway wake callback failed');
-    }
+      reply('This server could not be started. Check MC Dash for details.');
+    });
+    socket.once('close', () => clearTimeout(waiting));
   };
 
   const consume = () => {
@@ -103,16 +117,6 @@ export function serveSleepingClient(socket: net.Socket, initial: Buffer, opts: S
       buffered = buffered.subarray(parsed.size);
 
       if (handshake.nextState === 2) {
-        // Joining. Queue the disconnect *before* waking: waking releases this
-        // listener's port, which closes the very socket we are replying on, so
-        // waking first is a race the reply loses — the server starts but the
-        // player sees a bare dropped connection and no reason for it. No need to
-        // wait for Login Start; a disconnect is valid as soon as the client is
-        // in the login state.
-        socket.write(loginDisconnect(opts.wakeMessage));
-        socket.end();
-        clearTimeout(timer);
-        socket.removeAllListeners('data');
         wake();
         return;
       }
@@ -204,6 +208,7 @@ export class SleepListener {
         socket.setNoDelay(true);
         this.sockets.add(socket);
         socket.on('close', () => this.sockets.delete(socket));
+        socket.once('mc-dash-wake', () => this.sockets.delete(socket));
         serveSleepingClient(socket, Buffer.alloc(0), this.options);
       });
       server.once('error', (err) => {

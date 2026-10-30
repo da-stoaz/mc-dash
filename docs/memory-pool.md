@@ -110,7 +110,7 @@ terminate the applications still in it.
 
 ## Startup demand learning
 
-The metrics collector persists observed RAM peaks while a server is starting or
+The metrics collector persists observed working-set RAM peaks (excluding inactive file cache) while a server is starting or
 restarting, and during the first two minutes even if it became ready sooner.
 Subsequent starts budget the greater of the configured minimum plus overhead and
 that peak plus 10%, bounded by the container ceiling. Measurements are keyed by
@@ -118,41 +118,62 @@ server, RAM settings, pack URL, and Java image. These are sampled estimates, not
 a guarantee that the next boot cannot exceed the forecast. New configurations
 still begin with their configured floor until observations are available.
 Docker auditing preserves larger outstanding boot allowances and reconstructs
-learned and pressure-restart demand after a backend restart.
+learned and recent pressure-restart demand after a backend restart. Legacy boot
+and pressure observations that included file cache are ignored when admitting starts.
+The dashboard shows working-set usage and lists reclaimable file cache separately;
+cache can remain charged to the pool after the JVM exits.
 
 ## Current pressure behavior and its limits
 
-In addition to the static pool thresholds below, sustained growth can start the
-warning earlier. The controller also watches host available RAM and each server's
-actual Docker memory limit. Host headroom is the greater of the configured floor
-and 10% of host RAM. An individual-server warning targets that server. Trend
+`MC_DASH_HIBERNATE=false` (the default) disables **all automatic sleep**,
+including pressure shutdowns. Shared and per-container kernel limits still apply,
+and start admission remains active while `MC_DASH_MEMORY_POOL=true`. Existing
+sleepers can still wake; failed wake-listener binds are retried every 30 seconds
+even with automatic sleep disabled.
+Status refresh also runs with the shared manager disabled and no dashboard open.
+It ignores Docker readings that became stale during a lifecycle operation, and
+clears the sleep flag when Docker confirms a server was started externally.
+Restart releases a sleeping server's listener before starting Docker and restores
+it if admission fails. The wake-on-connect switch applies to subdomain routing too.
+
+When automatic sleep is enabled, sustained growth can start the warning earlier
+than the static thresholds below, but only above 85% of the warning boundary. The controller also watches host available RAM and each server's
+actual Docker memory limit. Host headroom uses the configured `MC_DASH_HOST_FREE_FLOOR_MB` floor. An individual-server warning targets that server. Trend
 samples must show sustained growth; the lookahead allows for the player warning,
 saving and shutdown. These heuristics still need Ubuntu workload validation.
 
-A server slept for pressure cannot restart for five minutes. After that, admission
-accounts for its observed pre-sleep usage, rather than just its configured minimum.
-This state survives backend restarts and applies to manual and player-triggered
-starts. Reducing the configured server maximum bounds that historical demand.
+A pressure-slept server can restart immediately if current capacity fits its
+startup demand. For five minutes, admission also accounts for its most recent
+pre-sleep working set, bounded by its configured limit. This allowance expires
+and is replaced by each new pressure sleep; it is not a timed start prohibition.
+Legacy cache-inclusive demand is ignored. Disabling `MC_DASH_MEMORY_POOL` skips
+this shared-manager gate, including its persisted recovery demand.
 Effective JVM heap settings can be inspected on demand through the runtime diagnostic below.
+
+Local socket regressions exercise both direct-port and subdomain-router wakes
+through the hibernation service and shared-memory admission: refusal, continued
+status replies, retry after capacity recovers, and rebinding the game to the
+released port. Docker and cgroup readings are simulated in these tests; they do
+not replace the outstanding Ubuntu runtime exercise.
 
 
 - Starts are serialized and use current pool usage plus temporary boot
   allowances, not the sum of configured maximums. Boot allowances are rebuilt
   from Docker readiness checks and do not expire solely because time passed. Starts are refused when that
-  would consume the 15% operating margin. Host free memory is checked separately.
+  would consume the 5% startup margin. Host free memory is checked separately.
   Wake-on-connect and restart use the same gate; `force` cannot bypass it.
-- At 85% usage, MC Dash checks for empty servers every ten seconds. After a
+- At 97% working-set usage (or a qualifying near-limit trend), MC Dash checks for empty servers every ten seconds. After a
   minute of confirmed zero players, it saves and sleeps the largest eligible
   server. Unknown counts do not count as empty. Player counts are rechecked
   before and after saving; there is still a small join/shutdown race.
-- At 90%, if no confirmed-empty server can be slept immediately, MC Dash warns
+- At the same pressure boundary, if no confirmed-empty server can be slept immediately, MC Dash warns
   one server's players with a 60-second countdown and a reminder at 30 seconds.
   It selects the fewest known players, then the largest memory consumer.
   Unknown player counts rank last and still require a successful warning.
   It does not shorten the promised countdown as usage rises.
-- A countdown cancels if usage drops below 85%, protection becomes unverified,
-  or the selected server stops/is replaced. This gap between warning and
-  recovery thresholds avoids repeatedly starting/cancelling near 90%.
+- A countdown cancels when pressure and qualifying trends recover, automatic
+  sleep is disabled, protection becomes unverified, or the selected server
+  stops/is replaced.
   The dashboard's existing RAM summary shows the countdown or latest result.
 - Automatic sleep uses `save-all flush`, requires a recognized successful save
   response, sends RCON `stop`, and waits up to 60 seconds for a clean exit.
@@ -206,6 +227,8 @@ and that an independently hosted panel stays reachable while the pool is under
 pressure. Include failed saves, occupied servers, concurrent starts, and a
 backend restart. These are outstanding runtime checks, not claims based on mocks.
 
+The working-set calculation follows [Docker stats](https://docs.docker.com/reference/cli/docker/container/stats/): subtract `inactive_file` on cgroup v2.
+
 References: [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html),
 [Docker cgroup parent](https://docs.docker.com/reference/cli/dockerd/#default-cgroup-parent).
 
@@ -213,8 +236,10 @@ References: [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide
 
 `GET /api/servers/:id/memory-runtime` performs an on-demand diagnostic inside the
 existing container, as its configured user. It selects exactly one Java process
-and invokes its JDK's `jcmd PID VM.flags`. It does not change flags, request GC,
-create a heap dump, install tools, or restart the server.
+and invokes its JDK's `jcmd PID VM.flags`. For JRE images without `jcmd`, the
+backend copies its checksum-pinned static `jattach` helper into a private temporary
+directory, requests the same flags, and removes the helper afterward. It does not
+change flags, request GC, create a heap dump, install packages, or restart the server.
 
 The response contains `status` (`verified`, `mismatch`, or `unverified`),
 `initialHeapMb`, `maximumHeapMb`, `containerLimitMb`, `checkedAt`, and `reason`.
@@ -223,7 +248,7 @@ allowing JVM alignment tolerance. A pending restart is distinguished from a pack
 argument override. A maximum heap consuming the entire container limit is a
 mismatch because it leaves no room for native allocations.
 
-JRE-only images, multiple Java processes, unavailable `timeout`/`readlink`, denied
+An unavailable or incompatible helper on JRE images, multiple Java processes, unavailable `timeout`/`readlink`, denied
 attach permissions, unsupported flag output, and container restarts during the
 check produce an unverified result. The diagnostic process has a five-second
 limit and output collection is capped. A verified result describes heap sizes
@@ -234,23 +259,23 @@ modpacks before relying on its results.
 
 Reference: [Oracle jcmd documentation](https://docs.oracle.com/en/java/javase/21/docs/specs/man/jcmd.html).
 
-## Release verification status (2026-10-23)
+## JVM diagnostic verification (2026-10-30)
 
-The local Java 17 integration test runs a real non-root JVM in a disposable,
-network-isolated, 512 MiB Docker container. It verifies observed heap sizes,
-detects an intentional settings mismatch, and checks that inspection leaves the
-JVM running. Run it explicitly after pulling `eclipse-temurin:17-jdk`:
+The integration test runs real non-root JVMs in disposable, network-isolated,
+384 MiB Docker containers: Java 17 JDK, Java 17/21/25 JRE, and Java 25 with attach
+disabled. It verifies heap sizes, detects intentional mismatches, preserves the
+Docker-limit reading on attach failure, checks helper cleanup, and leaves the JVM
+running. Run it explicitly after pulling those Temurin images:
 
 ```sh
+docker build --target jattach -t mc-dash-jattach:inspection-check backend
 cd backend
 npm run test:jvm-integration
 ```
 
 `DOCKER_SOCKET` can select the test daemon socket. The test removes only its own
-container and temporary files. This test passed on Docker Desktop with cgroup v2
-and the cgroupfs driver. It is **not** evidence for Ubuntu systemd enforcement.
-JRE-only production images will still report unverified heap diagnostics unless
-a compatible JDK with attach support is selected and the server rebuilt.
+containers and temporary files. These cases passed on local Docker Desktop.
+They are **not** evidence for Ubuntu systemd enforcement.
 
 Production enablement remains blocked until a disposable Linux/systemd deployment
 completes all of these checks and records its versions/results:
