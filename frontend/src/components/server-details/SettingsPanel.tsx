@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Check, ChevronDown, Cpu, Gamepad2, Loader2, Package, Settings2, ShieldCheck, Trash2, Upload } from 'lucide-react';
-import { Alert, Button, Divider, Input, Progress, Select, SelectItem, Switch, Tab, Tabs, Textarea } from '@heroui/react';
+import { Alert, Button, Divider, Input, Progress, Select, SelectItem, Switch, Textarea } from '@heroui/react';
 import { API_BASE, apiFetch, apiOperation } from '@/lib/api';
 import { getApiErrorMessage } from '@/lib/apiErrors';
 import { uploadInChunks } from '@/lib/chunkedUpload';
@@ -19,8 +19,8 @@ type Props = {
 
 const sections = [
   { id: 'general', label: 'General', icon: Settings2 },
-  { id: 'gameplay', label: 'Gameplay', icon: Gamepad2 },
   { id: 'resources', label: 'Resources', icon: Cpu },
+  { id: 'gameplay', label: 'Gameplay', icon: Gamepad2 },
   { id: 'players', label: 'Player access', icon: ShieldCheck },
   { id: 'pack', label: 'Server pack', icon: Package },
 ];
@@ -31,9 +31,10 @@ const inputClasses = {
 };
 
 function Heading({ title, children }: { title: string; children: ReactNode }) {
-  return <div className="mb-7 border-b border-white/10 pb-5">
-    <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
-    <p className="mt-1 text-sm leading-relaxed text-default-500">{children}</p>
+  const Icon = sections.find(section => section.label === title)?.icon;
+  return <div className="mb-5">
+    <h3 className="flex items-center gap-2 text-base font-semibold">{Icon && <Icon size={17} className="muted" aria-hidden="true" />}{title}</h3>
+    <p className="mt-1 text-xs leading-relaxed muted">{children}</p>
   </div>;
 }
 
@@ -42,7 +43,7 @@ function Field({ label, description, children }: { label: string; description?: 
   return <div className="space-y-2">
     <label id={`${id}-label`} htmlFor={id} className="text-sm font-medium">{label}</label>
     {children(id)}
-    {description && <p id={`${id}-description`} className="text-xs leading-relaxed text-default-500">{description}</p>}
+    {description && <p id={`${id}-description`} className="text-xs leading-relaxed muted">{description}</p>}
   </div>;
 }
 
@@ -106,7 +107,7 @@ function SettingsForm<T extends object>({ server, initial, toPatch, onUpdated, b
       setSaving(false);
     }
   }}>
-    <fieldset disabled={saving || busy} className="space-y-6 disabled:opacity-60">
+    <fieldset disabled={saving || busy} className="space-y-5 disabled:opacity-60">
       {children(draft.values, (key, value) => {
         setDraft(previous => ({ ...previous, values: { ...previous.values, [key]: value } }));
         setNotice(null);
@@ -114,19 +115,19 @@ function SettingsForm<T extends object>({ server, initial, toPatch, onUpdated, b
     </fieldset>
     {notice && <Alert color={notice.error ? 'danger' : 'success'} variant="flat"
       role={notice.error ? 'alert' : 'status'} className="mt-6" description={notice.text} />}
-    <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
-      <p className="text-xs text-default-500" role="status">{dirty ? 'You have unsaved changes' : 'All changes saved'}</p>
+    {(dirty || saving || notice) && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+      <p className="text-xs muted" role="status">{dirty ? 'You have unsaved changes' : 'All changes saved'}</p>
       <div className="flex gap-2">
         <Button size="sm" type="button" variant="light" isDisabled={!dirty || saving || busy} onPress={() => {
           setDraft({ values: initial, baseline: initial }); setNotice(null);
         }}>Discard</Button>
         <Button size="sm" color="primary" type="submit" isDisabled={!dirty || saving || busy}>{saving && <Loader2 className="animate-spin" />} {saving ? 'Saving…' : 'Save changes'}</Button>
       </div>
-    </div>
+    </div>}
   </form>;
 }
 
-function GeneralSettings({ server, busy, onUpdated, onDelete }: Props) {
+function GeneralSettings({ server, busy, onUpdated }: Props) {
   const routerDomain = useRouterDomain();
   const portLocked = hasLiveProcess(server.status) || server.status === 'stopping' || server.status === 'creating';
   return <>
@@ -152,18 +153,13 @@ function GeneralSettings({ server, busy, onUpdated, onDelete }: Props) {
         </div>
       </>}
     </SettingsForm>
-    <details className="group mt-8 rounded-lg border border-white/10 px-4 py-3">
+    <details className="group mt-5 border-t border-white/10 pt-4">
       <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium">Technical details <ChevronDown size={15} className="transition-transform group-open:rotate-180" /></summary>
       <dl className="mt-4 space-y-3 text-xs">
-        <div><dt className="text-default-500">Server ID</dt><dd className="mt-1 break-all font-mono">{server.id}</dd></div>
-        <div><dt className="text-default-500">Container</dt><dd className="mt-1 break-all font-mono">{server.containerId ?? 'Created when the server is prepared'}</dd></div>
+        <div><dt className="muted">Server ID</dt><dd className="mt-1 break-all font-mono">{server.id}</dd></div>
+        <div><dt className="muted">Container</dt><dd className="mt-1 break-all font-mono">{server.containerId ?? 'Created when the server is prepared'}</dd></div>
       </dl>
     </details>
-    <Divider className="my-8" />
-    <div className="flex flex-wrap items-center justify-between gap-4">
-      <div className="max-w-sm"><h4 className="text-sm font-medium text-rose-300">Delete server</h4><p className="mt-1 text-xs leading-relaxed text-default-500">Permanently remove this server, its worlds, and snapshots. This cannot be undone.</p></div>
-      <Button size="sm" type="button" variant="bordered" color="danger" onPress={onDelete} isDisabled={busy} startContent={<Trash2 size={15} />}>Delete server</Button>
-    </div>
   </>;
 }
 
@@ -205,7 +201,7 @@ function GameplaySettings({ server, busy, onUpdated }: Props) {
           </Field>
         </div>
         <Divider />
-        <div><h4 className="text-sm font-medium">World & visibility</h4><p className="mt-1 text-xs text-default-500">Visibility changes take effect after a restart.</p></div>
+        <div><h4 className="text-sm font-medium">World & visibility</h4><p className="mt-1 text-xs muted">Visibility changes take effect after a restart.</p></div>
         <div className="grid gap-6 sm:grid-cols-2">
           <Field label="Render distance (chunks)" description="How far the world loads around each player. Lower values use fewer resources.">
             {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} type="number" min={2} max={32} required value={values.renderDistance} onChange={event => set('renderDistance', event.target.value)} />}
@@ -234,7 +230,7 @@ function ResourceSettings({ server, busy, onUpdated }: Props) {
         ...(values.cpu !== baseline.cpu && { cpuLimit: values.cpu ? Number(values.cpu) : undefined }),
       } })}>
       {(values, set) => <>
-        <div><h4 className="text-sm font-medium">Memory</h4><p className="mt-1 text-xs text-default-500">Set the initial Java heap and total server memory limit. 1,024 MiB = 1 GiB.</p></div>
+        <div><h4 className="text-sm font-medium">Memory</h4><p className="mt-1 text-xs muted">Set the initial Java heap and total server memory limit. 1,024 MiB = 1 GiB.</p></div>
         <div className="grid gap-6 sm:grid-cols-2">
           <Field label="Initial Java heap (MiB)" description="The starting heap size. MC Dash can adjust it to fit the RAM limit.">
             {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} type="number" min={1} max={Number(values.maximum) || undefined} step={1} required value={values.minimum} onChange={event => set('minimum', event.target.value)} />}
@@ -247,7 +243,7 @@ function ResourceSettings({ server, busy, onUpdated }: Props) {
         <Field label="CPU limit (cores)" description="Leave empty for no CPU cap. Fractions such as 1.5 are supported.">
           {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} className="sm:max-w-xs" type="number" min={0.01} step="any" placeholder="Unlimited" value={values.cpu} onChange={event => set('cpu', event.target.value)} />}
         </Field>
-        <p className="rounded-md bg-default-100 px-4 py-3 text-xs leading-relaxed text-default-500">MC Dash reserves room for Java overhead within the RAM limit. Unused memory is shared with other servers; host capacity is checked before starting a server or increasing its limit.</p>
+        <p className="rounded-md bg-white/5 px-4 py-3 text-xs leading-relaxed muted">MC Dash reserves room for Java overhead within the RAM limit. Unused memory is shared with other servers; host capacity is checked before starting a server or increasing its limit.</p>
       </>}
     </SettingsForm>
   </>;
@@ -268,14 +264,14 @@ function PlayerSettings({ server, busy, onUpdated }: Props) {
         {(['whitelist', 'blacklist'] as const).map((list, index) => <div key={list}>
           {index > 0 && <Divider className="mb-6" />}
           <div className="mb-4 flex items-start justify-between gap-6">
-            <div><label id={`${server.id}-${list}-label`} htmlFor={`${server.id}-${list}-enabled`} className="text-sm font-medium">{list === 'whitelist' ? 'Only allow invited players' : 'Block specific players'}</label><p className="mt-1 text-xs leading-relaxed text-default-500">{list === 'whitelist' ? 'When enabled, only players on this list can join.' : 'When enabled, players on this list cannot join.'}</p></div>
+            <div><label id={`${server.id}-${list}-label`} htmlFor={`${server.id}-${list}-enabled`} className="text-sm font-medium">{list === 'whitelist' ? 'Only allow invited players' : 'Block specific players'}</label><p className="mt-1 text-xs leading-relaxed muted">{list === 'whitelist' ? 'When enabled, only players on this list can join.' : 'When enabled, players on this list cannot join.'}</p></div>
             <Switch id={`${server.id}-${list}-enabled`} aria-labelledby={`${server.id}-${list}-label`} size="sm" isSelected={values[`${list}Enabled`]} onValueChange={value => set(`${list}Enabled`, value)} />
           </div>
           <Field label={list === 'whitelist' ? 'Allowed players' : 'Blocked players'} description="One Minecraft name or UUID per line. Lists are kept when disabled.">
             {id => <Textarea variant="bordered" radius="sm" minRows={4} id={id} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} value={values[list]} onChange={event => set(list, event.target.value)} placeholder={'Steve\nAlex'} className="resize-y font-mono text-sm" />}
           </Field>
         </div>)}
-        <p className="text-xs leading-relaxed text-default-500">Names are resolved to UUIDs when possible. If a name does not apply, use its UUID. Player bans can apply live; whitelist changes may require a restart.</p>
+        <p className="text-xs leading-relaxed muted">Names are resolved to UUIDs when possible. If a name does not apply, use its UUID. Player bans can apply live; whitelist changes may require a restart.</p>
       </>}
     </SettingsForm>
   </>;
@@ -298,13 +294,15 @@ function PackSettings({ server, busy, onUpdated, onPrepare }: Props) {
     : javaOptions.some(option => option.value === server.javaImage) ? server.javaImage : 'custom';
   return <>
     <Heading title="Server pack">Update your modpack and choose its Java runtime.</Heading>
+    <div className="grid items-start gap-6 lg:grid-cols-2">
+    <div>
     <div className="mb-6 flex items-center gap-3 rounded-lg border border-white/10 p-4">
-      <div className="rounded-md bg-default-100 p-2.5"><Package size={20} className="text-default-500" /></div>
-      <div className="min-w-0 flex-1"><p className="break-all text-sm font-medium">{server.serverPackName ?? (server.packReady ? 'Imported from snapshot' : 'No server pack uploaded')}</p><p className="mt-1 text-xs text-default-500">{pending ? 'Uploaded · preparation required' : server.packReady ? 'Current server pack' : 'Upload a server pack to get started'}</p></div>
+      <div className="rounded-md bg-white/5 p-2.5"><Package size={20} className="muted" /></div>
+      <div className="min-w-0 flex-1"><p className="break-all text-sm font-medium">{server.serverPackName ?? (server.packReady ? 'Imported from snapshot' : 'No server pack uploaded')}</p><p className="mt-1 text-xs muted">{pending ? 'Uploaded · preparation required' : server.packReady ? 'Current server pack' : 'Upload a server pack to get started'}</p></div>
       {server.packReady && <Check size={16} className="shrink-0 text-emerald-400" />}
     </div>
     <div className="space-y-4">
-      <div><h4 className="text-sm font-medium">Replace server pack</h4><p className="mt-1 text-xs leading-relaxed text-default-500">Upload a ZIP, then prepare the server to apply it. Your existing world is preserved. Create a snapshot first if you need a rollback.</p></div>
+      <div><h4 className="text-sm font-medium">Replace server pack</h4><p className="mt-1 text-xs leading-relaxed muted">Upload a ZIP, then prepare the server to apply it. Your existing world is preserved. Create a snapshot first if you need a rollback.</p></div>
       {!stopped && <Alert color="warning" variant="flat" description="Stop the server to upload or prepare a replacement pack." />}
       <Field label="Server pack ZIP">
         {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} ref={fileRef} type="file" accept=".zip" isDisabled={!stopped || uploading || busy} className="h-auto py-2 file:mr-4 file:cursor-pointer file:text-foreground" onChange={event => {
@@ -333,7 +331,8 @@ function PackSettings({ server, busy, onUpdated, onPrepare }: Props) {
       </div>
       {pending && <p role="status" className="text-xs text-amber-300">Your pack is uploaded. Prepare the server before starting it.</p>}
     </div>
-    <Divider className="my-8" />
+    </div>
+    <div className="border-t border-white/10 pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
     <SettingsForm server={server} busy={busy || uploading || !stopped} onUpdated={onUpdated}
       initial={{ runtime: initialRuntime, custom: initialRuntime === 'custom' ? server.javaImage ?? '' : '' }}
       toPatch={values => ({ javaImage: values.runtime === 'auto' ? null : values.runtime === 'custom' ? values.custom.trim() : values.runtime })}>
@@ -345,34 +344,41 @@ function PackSettings({ server, busy, onUpdated, onPrepare }: Props) {
           {values.runtime === 'custom' && <Field label="Custom Java image" description="A Docker image with a compatible Java runtime.">
             {id => <Input validationBehavior="aria" variant="bordered" radius="sm" classNames={inputClasses} id={id} aria-labelledby={`${id}-label`} required pattern=".*\S.*" value={values.custom} onChange={event => set('custom', event.target.value)} placeholder="eclipse-temurin:21-jre" />}
           </Field>}
-          <p className="text-xs leading-relaxed text-default-500">Current runtime: <span className="font-mono text-foreground">{server.effectiveJavaImage ?? server.javaImage ?? 'Detected during preparation'}</span>{server.packRecommendedJavaMajor && <><br />Pack recommends Java {server.packRecommendedJavaMajor}.</>}</p>
+          <p className="text-xs leading-relaxed muted">Current runtime: <span className="font-mono text-foreground">{server.effectiveJavaImage ?? server.javaImage ?? 'Detected during preparation'}</span>{server.packRecommendedJavaMajor && <><br />Pack recommends Java {server.packRecommendedJavaMajor}.</>}</p>
         </>;
       }}
     </SettingsForm>
+    </div>
+    </div>
   </>;
 }
 
 export function SettingsPanel(props: Props) {
-  return <section aria-label="Server settings" className="text-foreground">
-    <div className="mb-5"><h2 className="text-xl font-semibold tracking-tight">Server settings</h2><p className="mt-1 text-sm text-default-500">Make it your world. Manage how it runs and who can join.</p></div>
-    <Tabs aria-label="Settings categories" defaultSelectedKey="general" isVertical
-      destroyInactiveTabPanel={false} disableAnimation disableCursorAnimation
-      classNames={{
-        tabWrapper: 'grid min-w-0 overflow-hidden rounded-xl border border-white/10 bg-content1 md:grid-cols-[200px_minmax(0,1fr)]',
-        base: 'w-full border-b border-white/10 bg-white/[0.015] p-3 md:h-full md:border-r md:border-b-0 md:p-4',
-        tabList: 'grid w-full grid-cols-2 gap-1 bg-transparent p-0 sm:grid-cols-3 md:flex md:flex-col',
-        tab: 'h-auto w-full justify-start rounded-lg px-3 py-2.5 data-[selected=true]:bg-white/10',
-        tabContent: 'w-full text-left text-default-500 group-data-[selected=true]:text-foreground',
-        panel: 'min-w-0 w-full px-5 py-6 sm:p-8 md:col-start-2 md:row-start-1 md:px-10',
-      }}>
-      {sections.map(({ id, label, icon: Icon }) => <Tab key={id} textValue={label}
-        title={<span className="flex items-center gap-2.5"><Icon size={16} />{label}</span>}>
+  return <section aria-label="Server settings" className="space-y-5">
+    <div>
+      <h2 className="text-base font-semibold">Server settings</h2>
+      <p className="mt-1 text-sm muted">All your server settings in one place. Save changes in each section.</p>
+      <nav aria-label="Jump to settings" className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+        <span className="muted">Jump to</span>
+        {sections.map(({ id, label }) => <a key={id} href={`#settings-${id}`}
+          className="rounded-sm text-cyan-300 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-cyan-400">
+          {id === 'resources' ? 'RAM & CPU' : id === 'pack' ? 'Server pack & Java' : label}
+        </a>)}
+      </nav>
+    </div>
+    <div className="grid items-start gap-5 xl:grid-cols-2">
+      {sections.map(({ id, label }) => <section key={id} id={`settings-${id}`} aria-label={label} tabIndex={-1}
+        className={`min-w-0 scroll-mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-5 focus-visible:outline-2 focus-visible:outline-cyan-400 ${id === 'pack' ? 'xl:col-span-2' : ''}`}>
         {id === 'general' && <GeneralSettings {...props} />}
         {id === 'gameplay' && <GameplaySettings {...props} />}
         {id === 'resources' && <ResourceSettings {...props} />}
         {id === 'players' && <PlayerSettings {...props} />}
         {id === 'pack' && <PackSettings {...props} />}
-      </Tab>)}
-    </Tabs>
+      </section>)}
+    </div>
+    <section aria-label="Delete server" className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-rose-500/20 bg-rose-500/5 p-5">
+      <div><h3 className="text-sm font-medium text-rose-300">Delete server</h3><p className="mt-1 text-xs leading-relaxed muted">Permanently remove this server, its worlds, and snapshots. This cannot be undone.</p></div>
+      <Button size="sm" type="button" variant="flat" color="danger" onPress={props.onDelete} isDisabled={props.busy} startContent={<Trash2 size={15} />}>Delete server</Button>
+    </section>
   </section>;
 }

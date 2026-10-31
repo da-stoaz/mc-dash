@@ -65,11 +65,10 @@ function ServerCard({
   routerDomain,
   actionLoading,
   onAction,
-  onEdit,
   onDeleteServer,
 }: { server: ServerRecord; routerDomain: string | undefined } & Pick<
   Props,
-  'actionLoading' | 'onAction' | 'onEdit' | 'onDeleteServer'
+  'actionLoading' | 'onAction' | 'onDeleteServer'
 >) {
   const hostname = formatHostname(server.subdomain, routerDomain);
 
@@ -120,7 +119,6 @@ function ServerCard({
           server={server}
           busy={actionLoading[server.id]}
           onAction={onAction}
-          onEdit={() => onEdit(server)}
           onDeleteServer={() => onDeleteServer(server.id)}
           align="start"
         />
@@ -134,7 +132,6 @@ type Props = {
   emptyContent?: string;
   actionLoading: Record<string, string>;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
-  onEdit: (server: ServerRecord) => void;
   onDeleteServer: (id: string) => void;
 };
 
@@ -143,7 +140,6 @@ export function ServerTable({
   emptyContent = 'No servers yet.',
   actionLoading,
   onAction,
-  onEdit,
   onDeleteServer,
 }: Props) {
   const routerDomain = useRouterDomain();
@@ -164,7 +160,6 @@ export function ServerTable({
               routerDomain={routerDomain}
               actionLoading={actionLoading}
               onAction={onAction}
-              onEdit={onEdit}
               onDeleteServer={onDeleteServer}
             />
           ))
@@ -180,7 +175,7 @@ export function ServerTable({
             <TableColumn>Port</TableColumn>
             <TableColumn width={160}>Usage</TableColumn>
             <TableColumn>Game</TableColumn>
-            <TableColumn align="end" width={168}>Actions</TableColumn>
+            <TableColumn align="end" width={208}>Actions</TableColumn>
           </TableHeader>
           <TableBody emptyContent={emptyContent} items={servers}>
             {(server) => {
@@ -217,7 +212,6 @@ export function ServerTable({
                       server={server}
                       busy={actionLoading[server.id]}
                       onAction={onAction}
-                      onEdit={() => onEdit(server)}
                       onDeleteServer={() => onDeleteServer(server.id)}
                     />
                   </TableCell>

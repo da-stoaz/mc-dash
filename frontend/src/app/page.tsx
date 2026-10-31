@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { addToast, Button } from '@heroui/react';
 import { LogOut, Plus, Upload } from 'lucide-react';
-import { emptyForm, FormState, hasLiveProcess, ServerRecord, ServerStatus } from '../lib/serverTypes';
+import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { FilterKey, StatusBar } from '../components/StatusBar';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 import { ServerTable } from '../components/ServerTable';
-import { CreateModal, EditModal, ImportModal, ImportFields } from '../components/ServerModals';
+import { CreateModal, ImportModal, ImportFields } from '../components/ServerModals';
 import { useAuth } from '../components/AuthGate';
 import { getApiErrorMessage } from '../lib/apiErrors';
 import { API_BASE, apiFetch, apiOperation } from '../lib/api';
@@ -23,7 +23,6 @@ export default function Page() {
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [showEdit, setShowEdit] = useState<ServerRecord | null>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [packFile, setPackFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
@@ -230,46 +229,6 @@ export default function Page() {
     }
   };
 
-  const handleUpdate = async (id: string, changes: Partial<FormState>) => {
-    try {
-      const res = await apiOperation(`${API_BASE}/servers/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: changes.name?.trim() ? changes.name.trim() : undefined,
-          javaImage: changes.javaImage ? changes.javaImage : null,
-          serverPort: changes.serverPort ? Number(changes.serverPort) : undefined,
-          subdomain: changes.subdomain ? changes.subdomain : undefined,
-          resources: {
-            minRamMb: changes.minRamMb !== undefined ? Number(changes.minRamMb) : undefined,
-            maxRamMb: changes.maxRamMb !== undefined ? Number(changes.maxRamMb) : undefined,
-            cpuLimit: changes.cpuLimit ? Number(changes.cpuLimit) : undefined,
-          },
-          game: {
-            renderDistance: changes.renderDistance !== undefined ? Number(changes.renderDistance) : undefined,
-            entityBroadcastRangePercentage: changes.entityBroadcastRangePercentage,
-            gameMode: changes.gameMode,
-            difficulty: changes.difficulty,
-            seed: changes.seed,
-          },
-        }),
-      });
-      if (!res.ok) throw new Error(await getApiErrorMessage(res, 'Update failed'));
-      const updated = await res.json().catch(() => null);
-      await fetchServers();
-      setShowEdit(null);
-      if (updated?.restartRequired) {
-        notify('Saved — restart required', 'Start or restart the server to apply these changes.', 'warning');
-      } else if (!hasLiveProcess(updated?.status)) {
-        notify('Saved', 'Applied the next time this server starts.', 'success');
-      } else {
-        notify('Saved', 'Changes applied live — no restart needed.', 'success');
-      }
-    } catch (err: any) {
-      notify('Update failed', err?.message ?? 'Update failed', 'danger');
-    }
-  };
-
   const invokeAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => {
     setActionLoading((m) => ({ ...m, [id]: action }));
     try {
@@ -400,7 +359,6 @@ export default function Page() {
           emptyContent={filtering ? 'No servers match these filters.' : 'No servers yet.'}
           actionLoading={actionLoading}
           onAction={invokeAction}
-          onEdit={setShowEdit}
           onDeleteServer={deleteServer}
         />
       </div>
@@ -430,7 +388,6 @@ export default function Page() {
         isImporting={importing}
         uploadProgress={importProgress}
       />
-      <EditModal server={showEdit} onClose={() => setShowEdit(null)} onSave={handleUpdate} />
     </div>
   );
 }

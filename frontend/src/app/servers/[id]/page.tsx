@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import {
   addToast,
   Button,
@@ -16,7 +16,7 @@ import {
 } from '@heroui/react';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { SettingsPanel } from '../../../components/server-details/SettingsPanel';
 import { ConsoleCard } from '../../../components/server-details/ConsoleCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
@@ -31,7 +31,18 @@ import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch, apiOperation } from '../../../lib/api';
 
 export default function ServerDetailsPage() {
+  return <Suspense fallback={<div className="page muted">Loading server…</div>}><ServerDetails /></Suspense>;
+}
+
+const sectionLabels: Record<string, string> = {
+  overview: 'Overview', console: 'Console', logs: 'Logs', snapshots: 'Snapshots', settings: 'Settings',
+};
+
+function ServerDetails() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const requestedSection = searchParams.get('tab') ?? 'overview';
+  const section = Object.hasOwn(sectionLabels, requestedSection) ? requestedSection : 'overview';
   const serverId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const [server, setServer] = useState<ServerRecord | null>(null);
   const [metrics, setMetrics] = useState<ServerMetrics | null>(null);
@@ -41,6 +52,21 @@ export default function ServerDetailsPage() {
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
   const [loading, setLoading] = useState(true);
   const serverErrorRef = useRef(false);
+
+  const selectSection = (key: string) => {
+    if (key === section) return;
+    const url = new URL(window.location.href);
+    if (key === 'overview') url.searchParams.delete('tab');
+    else url.searchParams.set('tab', key);
+    url.hash = '';
+    window.history.pushState(null, '', url);
+  };
+
+  useEffect(() => {
+    if (server?.id && section === 'settings' && window.location.hash.startsWith('#settings-')) {
+      document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ block: 'start' });
+    }
+  }, [server?.id, section]);
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -213,7 +239,7 @@ export default function ServerDetailsPage() {
         <Button as={Link} href="/" variant="flat" startContent={<ArrowLeft size={16} />}>
           All servers
         </Button>
-        <span className="muted">Server overview</span>
+        <span className="muted">{sectionLabels[section]}</span>
       </div>
 
       <div className="flex flex-wrap items-start justify-between gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
@@ -240,6 +266,9 @@ export default function ServerDetailsPage() {
 
       <Tabs
         aria-label="Server sections"
+        selectedKey={section}
+        onSelectionChange={key => selectSection(String(key))}
+        destroyInactiveTabPanel={false}
         variant="underlined"
         size="lg"
         classNames={{
@@ -252,7 +281,7 @@ export default function ServerDetailsPage() {
         }}
       >
         <Tab key="overview" title="Overview">
-          <div className="space-y-4">
+          {section === 'overview' && <div className="space-y-4">
             <MetricsCard
               serverId={serverId}
               metrics={metrics}
@@ -260,19 +289,19 @@ export default function ServerDetailsPage() {
               status={server.status}
               history={history}
             />
-          </div>
+          </div>}
         </Tab>
 
         <Tab key="console" title="Console">
-          <ConsoleCard serverId={server.id} status={server.status} exitCode={server.exitCode} playerNames={players?.names ?? []} />
+          {section === 'console' && <ConsoleCard serverId={server.id} status={server.status} exitCode={server.exitCode} playerNames={players?.names ?? []} />}
         </Tab>
 
         <Tab key="logs" title="Logs">
-          <LogsCard serverId={server.id} apiBase={API_BASE} />
+          {section === 'logs' && <LogsCard serverId={server.id} apiBase={API_BASE} />}
         </Tab>
 
         <Tab key="snapshots" title="Snapshots">
-          <SnapshotsCard serverId={server.id} status={server.status} onRestored={() => fetchServer()} />
+          {section === 'snapshots' && <SnapshotsCard serverId={server.id} status={server.status} onRestored={() => fetchServer()} />}
         </Tab>
 
         <Tab key="settings" title="Settings">
