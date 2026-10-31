@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { Card, CardBody, Table, TableBody, TableCell, TableColumn, TableHeader, TableRow, Chip, Tooltip } from '@heroui/react';
-import { ServerRecord, statusColor, formatServerStatus } from '../lib/serverTypes';
+import { ServerRecord } from '../lib/serverTypes';
 import { ActionButtons } from './ActionButtons';
 import { CopyButton } from './CopyButton';
 import { UsageCell } from './UsageCell';
 import { SleepChip } from './SleepChip';
+import { ServerStatusChip } from './ServerStatusChip';
 import { formatHostname, useRouterDomain } from '../lib/routerDomain';
 
 // Long hostnames are truncated, with the full value on hover and a copy button.
@@ -64,11 +65,10 @@ function ServerCard({
   routerDomain,
   actionLoading,
   onAction,
-  onEdit,
   onDeleteServer,
 }: { server: ServerRecord; routerDomain: string | undefined } & Pick<
   Props,
-  'actionLoading' | 'onAction' | 'onEdit' | 'onDeleteServer'
+  'actionLoading' | 'onAction' | 'onDeleteServer'
 >) {
   const hostname = formatHostname(server.subdomain, routerDomain);
 
@@ -92,9 +92,7 @@ function ServerCard({
             <span className="muted font-mono text-xs">{server.id.slice(0, 8)}</span>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <Chip color={statusColor[server.status]} variant="flat" size="sm">
-              {formatServerStatus(server.status, server.exitCode)}
-            </Chip>
+            <ServerStatusChip server={server} />
             {server.restartRequired && (
               <Chip color="warning" variant="flat" size="sm">
                 Restart required
@@ -121,7 +119,6 @@ function ServerCard({
           server={server}
           busy={actionLoading[server.id]}
           onAction={onAction}
-          onEdit={() => onEdit(server)}
           onDeleteServer={() => onDeleteServer(server.id)}
           align="start"
         />
@@ -135,7 +132,6 @@ type Props = {
   emptyContent?: string;
   actionLoading: Record<string, string>;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
-  onEdit: (server: ServerRecord) => void;
   onDeleteServer: (id: string) => void;
 };
 
@@ -144,7 +140,6 @@ export function ServerTable({
   emptyContent = 'No servers yet.',
   actionLoading,
   onAction,
-  onEdit,
   onDeleteServer,
 }: Props) {
   const routerDomain = useRouterDomain();
@@ -165,69 +160,67 @@ export function ServerTable({
               routerDomain={routerDomain}
               actionLoading={actionLoading}
               onAction={onAction}
-              onEdit={onEdit}
               onDeleteServer={onDeleteServer}
             />
           ))
         )}
       </div>
 
-    <Card shadow="sm" className="max-md:hidden bg-white/5 border border-white/10">
-      <Table aria-label="Servers" removeWrapper>
-        <TableHeader>
-          <TableColumn>Name</TableColumn>
-          <TableColumn>Status</TableColumn>
-          <TableColumn>Players</TableColumn>
-          <TableColumn>Port</TableColumn>
-          <TableColumn width={160}>Usage</TableColumn>
-          <TableColumn>Game</TableColumn>
-          <TableColumn align="end" width={168}>Actions</TableColumn>
-        </TableHeader>
-        <TableBody emptyContent={emptyContent} items={servers}>
-          {(server) => (
-            <TableRow key={server.id}>
-              <TableCell>
-                <ServerNameCell server={server} routerDomain={routerDomain} />
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-wrap gap-2">
-                  <Chip color={statusColor[server.status]} variant="flat" size="sm">
-                    {formatServerStatus(server.status, server.exitCode)}
-                  </Chip>
-                  <SleepChip server={server} />
-                  {server.restartRequired && (
-                    <Chip color="warning" variant="flat" size="sm">
-                      Restart required
-                    </Chip>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell>
-                <PlayerCount server={server} />
-              </TableCell>
-              <TableCell>
-                <span className="text-sm">{server.serverPort}</span>
-              </TableCell>
-              <TableCell>
-                <UsageCell server={server} />
-              </TableCell>
-              <TableCell>
-                <GameSummary server={server} />
-              </TableCell>
-              <TableCell>
-                <ActionButtons
-                  server={server}
-                  busy={actionLoading[server.id]}
-                  onAction={onAction}
-                  onEdit={() => onEdit(server)}
-                  onDeleteServer={() => onDeleteServer(server.id)}
-                />
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </Card>
+      <Card shadow="sm" className="max-md:hidden bg-white/5 border border-white/10">
+        <Table aria-label="Servers" removeWrapper>
+          <TableHeader>
+            <TableColumn>Name</TableColumn>
+            <TableColumn>Status</TableColumn>
+            <TableColumn>Players</TableColumn>
+            <TableColumn>Port</TableColumn>
+            <TableColumn width={160}>Usage</TableColumn>
+            <TableColumn>Game</TableColumn>
+            <TableColumn align="end" width={208}>Actions</TableColumn>
+          </TableHeader>
+          <TableBody emptyContent={emptyContent} items={servers}>
+            {(server) => {
+              return (
+                <TableRow key={server.id}>
+                  <TableCell>
+                    <ServerNameCell server={server} routerDomain={routerDomain} />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-2">
+                      <ServerStatusChip server={server} />
+                      <SleepChip server={server} />
+                      {server.restartRequired && (
+                        <Chip color="warning" variant="flat" size="sm">
+                          Restart required
+                        </Chip>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <PlayerCount server={server} />
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm">{server.serverPort}</span>
+                  </TableCell>
+                  <TableCell>
+                    <UsageCell server={server} />
+                  </TableCell>
+                  <TableCell>
+                    <GameSummary server={server} />
+                  </TableCell>
+                  <TableCell>
+                    <ActionButtons
+                      server={server}
+                      busy={actionLoading[server.id]}
+                      onAction={onAction}
+                      onDeleteServer={() => onDeleteServer(server.id)}
+                    />
+                  </TableCell>
+                </TableRow>
+              );
+            }}
+          </TableBody>
+        </Table>
+      </Card>
     </>
   );
 }

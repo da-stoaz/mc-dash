@@ -10,7 +10,13 @@ async function setup(page: Page) {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/auth/me')) return route.fulfill({ json: { authenticated: true, authRequired: false } });
     if (path.endsWith('/host/capacity')) return route.fulfill({ status: 503, json: { error: 'Not part of this fixture' } });
-    if (path.endsWith('/stream')) return route.fulfill({ contentType: 'text/event-stream', body: `event: servers\ndata: ${JSON.stringify(servers)}\n\n` });
+    if (path.endsWith('/servers/stream')) return route.fulfill({ contentType: 'text/event-stream', body: `event: servers\ndata: ${JSON.stringify(servers)}\n\n` });
+    const server = servers.find(server => path.includes(`/servers/${server.id}`));
+    if (server && path.endsWith('/stream')) return route.fulfill({ contentType: 'text/event-stream', body: `event: server\ndata: ${JSON.stringify(server)}\n\n` });
+    if (server && path.endsWith(`/servers/${server.id}`)) {
+      if (route.request().method() === 'PATCH') Object.assign(server, route.request().postDataJSON());
+      return route.fulfill({ json: server });
+    }
     if (path.endsWith('/servers')) return route.fulfill({ json: servers });
     return route.fulfill({ json: {} });
   });
@@ -37,7 +43,7 @@ for (const mobile of [false, true]) {
     await page.screenshot({ path: testInfo.outputPath(`server-list-${mobile ? 'mobile' : 'desktop'}.png`), fullPage: true });
     await page.getByRole('button', { name: 'More actions for Online world' }).click();
     await expect(page.getByRole('menuitem', { name: 'Rebuild', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('menuitem', { name: 'Edit', exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Edit', exact: true })).toHaveCount(0);
     await page.getByRole('menuitem', { name: 'Restart', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     await expect(page.getByRole('dialog', { name: 'Restart server' })).toBeVisible();
@@ -54,15 +60,16 @@ test('RAM edit submits the total container limit without adding overhead', async
   await page.route('**/servers/offline', async route => {
     if (route.request().method() === 'PATCH') {
       submitted = route.request().postDataJSON();
-      return route.fulfill({ json: { id: 'offline', ...submitted } });
     }
     return route.fallback();
   });
-  await page.getByRole('button', { name: 'More actions for Offline world' }).click();
-  await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+  await page.getByRole('link', { name: 'Settings for Offline world', exact: true }).click();
+  await expect(page).toHaveURL(/\/servers\/offline\?tab=settings$/);
+  await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('10000');
   await expect(page.getByText('Total container memory, including Java overhead.')).toBeVisible();
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('region', { name: 'Resources', exact: true }).getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => submitted?.resources.maxRamMb).toBe(10000);
 });
 

@@ -1,7 +1,8 @@
 import { Chip } from '@heroui/react';
 import type { ServerRecord } from '../../lib/serverTypes';
-import { statusColor, formatServerStatus } from '../../lib/serverTypes';
 import { CopyButton } from '../CopyButton';
+import { ServerStatusChip } from '../ServerStatusChip';
+import { SleepChip } from '../SleepChip';
 import { formatHostname, useRouterDomain } from '../../lib/routerDomain';
 
 type ServerTitleProps = {
@@ -28,9 +29,8 @@ export function ServerTitle({ server }: ServerTitleProps) {
           )}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Chip color={statusColor[server.status]} variant="flat" size="sm">
-            {formatServerStatus(server.status, server.exitCode)}
-          </Chip>
+          <ServerStatusChip server={server} />
+          <SleepChip server={server} />
           {server.restartRequired && (
             <Chip color="warning" variant="flat" size="sm">
               Restart required

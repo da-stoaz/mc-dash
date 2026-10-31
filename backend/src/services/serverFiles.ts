@@ -23,7 +23,7 @@ export function serverDirectory(id: string): string {
  * and macOS. O_NOFOLLOW on a Node pathname only protects its final component.
  * Never fall back to pathname writes if the worker is unavailable.
  */
-async function operate(file: string, operation: 'write' | 'repair' | 'validate' | 'storage', content?: string) {
+async function operate(file: string, operation: 'write' | 'repair' | 'validate' | 'storage', content?: string, signal?: AbortSignal) {
   const base = path.resolve(config.dataRoot);
   const relative = path.relative(base, path.resolve(file));
   const parts = relative.split(path.sep);
@@ -34,16 +34,21 @@ async function operate(file: string, operation: 'write' | 'repair' | 'validate' 
   // DATA_ROOT is administrator-controlled. Resolve its OS aliases (e.g. macOS
   // /var -> /private/var) once; all Minecraft-controlled components use dir_fd.
   const root = await fs.realpath(base);
+  signal?.throwIfAborted();
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('python3', [path.join(__dirname, 'serverFileWorker.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('python3', [path.join(__dirname, 'serverFileWorker.py')], { stdio: ['pipe', 'pipe', 'pipe'], signal });
     let error = '', output = '';
     const timeout = operation === 'storage' ? setTimeout(() => child.kill('SIGKILL'), 60000) : null;
     child.stdout.on('data', chunk => { output = (output + chunk).slice(-8192); });
     child.stderr.on('data', chunk => { error = (error + chunk).slice(-8192); });
-    child.on('error', err => reject(new Error(`Cannot run secure server file worker: ${err.message}. Python 3 is required.`)));
+    child.on('error', err => {
+      // On cancellation wait for the worker to exit before releasing the job.
+      if (!signal?.aborted) reject(new Error(`Cannot run secure server file worker: ${err.message}. Python 3 is required.`));
+    });
     child.stdin.on('error', () => { /* close/error below reports the worker failure */ });
     child.on('close', code => {
       if (timeout) clearTimeout(timeout);
+      if (signal?.aborted) { reject(signal.reason); return; }
       code === 0 ? resolve(output) : reject(new Error(error.trim() || 'Secure server file operation failed or timed out'));
     });
     child.stdin.end(JSON.stringify({ root, parts, operation, owner: target ?? null, content }));
@@ -51,8 +56,8 @@ async function operate(file: string, operation: 'write' | 'repair' | 'validate' 
 }
 
 /** Repair working files while stopped. Snapshot archives remain backend-owned. */
-export async function prepareServerFiles(id: string, repair = true): Promise<void> {
-  await operate(serverDirectory(id), repair ? 'repair' : 'validate');
+export async function prepareServerFiles(id: string, repair = true, signal?: AbortSignal): Promise<void> {
+  await operate(serverDirectory(id), repair ? 'repair' : 'validate', undefined, signal);
 }
 
 /** Atomically replace configuration through a pinned parent directory. */

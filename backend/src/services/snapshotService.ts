@@ -1,5 +1,8 @@
 import path from 'path';
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import { pipeline } from 'stream/promises';
+import { Worker } from 'worker_threads';
 import { prepareServerFiles } from './serverFiles';
 import * as tar from 'tar';
 import { config } from '../config';
@@ -7,7 +10,92 @@ import { logger } from '../logger';
 import { serverStore } from '../serverStore';
 import { runServerRcon } from './rconService';
 import { ServerRecord, SnapshotKind, SnapshotRecord } from '../types';
-import { beginSnapshotJob, finishSnapshotJob } from './snapshotJobStore';
+import { beginSnapshotJob, finishSnapshotJob, updateSnapshotProgress, setSafetySnapshot, SnapshotJob, getSnapshotJob, requestSnapshotCancellation } from './snapshotJobStore';
+
+export class SnapshotCancelledError extends Error {
+  constructor() { super('Snapshot cancelled'); }
+}
+
+const snapshotControllers = new Map<string, AbortController>();
+
+/** Match the job the user saw so a delayed request cannot cancel a newer job. */
+export function cancelSnapshot(serverId: string, startedAt: string): SnapshotJob | null {
+  const job = getSnapshotJob(serverId);
+  if (!job || job.startedAt !== startedAt || job.operation !== 'create') return null;
+  if (job.status === 'cancelled') return job;
+  const controller = snapshotControllers.get(serverId);
+  if (job.status !== 'running' || !controller) return null;
+  requestSnapshotCancellation(serverId);
+  controller.abort(new SnapshotCancelledError());
+  return getSnapshotJob(serverId);
+}
+
+type Progress = (bytes: number, finished?: boolean) => void;
+type ArchiveProgress = {
+  onBytes: Progress;
+  onPhase?: (phase: SnapshotJob['phase'], bytes: number) => void;
+};
+
+// Persist at most twice per second, not once per chunk of a large archive.
+function progressReporter(serverId: string, phase: SnapshotJob['phase'], total: number | null = null, initialize = true): Progress {
+  if (initialize) updateSnapshotProgress(serverId, phase, 0, total);
+  let lastUpdate = 0;
+  let lastBytes = -1;
+  return (bytes, finished = false) => {
+    if (!finished && bytes === lastBytes) return;
+    if (!finished && Date.now() - lastUpdate < 500 && bytes !== total) return;
+    updateSnapshotProgress(serverId, phase, bytes, total);
+    lastUpdate = Date.now();
+    lastBytes = bytes;
+  };
+}
+
+async function readArchive(file: string, destination: NodeJS.WritableStream, progress?: Progress): Promise<void> {
+  const input = createReadStream(file);
+  input.on('data', () => progress?.(input.bytesRead));
+  await pipeline(input, destination);
+  progress?.(input.bytesRead);
+}
+
+/** Terminating the worker also closes tar's pending file readers and zlib
+ * handles. Wait for exit before deleting the partial archive or unlocking. */
+async function writeArchive(root: string, entries: string[], archivePath: string, progress: Progress, signal?: AbortSignal): Promise<number> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'snapshotArchiveWorker.cjs'), {
+      workerData: { root, entries, archivePath }, trackUnmanagedFds: true,
+    });
+    let completed = false;
+    let bytes = 0;
+    let failure: Error | undefined;
+    const terminate = () => { void worker.terminate().catch(err => { failure ??= err; }); };
+    const abort = () => {
+      failure ??= signal?.reason;
+      terminate();
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    worker.on('message', message => {
+      if (failure || signal?.aborted) return;
+      if (message.error) {
+        failure = Object.assign(new Error(message.error), { code: message.code, path: message.path });
+        terminate();
+        return;
+      }
+      bytes = message.bytes;
+      completed = message.done === true;
+      try { progress(bytes, completed); }
+      catch (err) { failure = err instanceof Error ? err : new Error(String(err)); terminate(); }
+    });
+    worker.on('error', err => { failure ??= err instanceof Error ? err : new Error(String(err)); });
+    worker.on('exit', code => {
+      signal?.removeEventListener('abort', abort);
+      if (failure) reject(failure);
+      else if (!completed || code !== 0) reject(new Error('Snapshot archive worker stopped unexpectedly'));
+      else resolve(bytes);
+    });
+    if (signal?.aborted) abort();
+  });
+}
 
 // Subdirectory (relative to the server root) that holds the snapshot archives.
 // It is excluded from snapshots and preserved across restores so a server's
@@ -69,28 +157,42 @@ export async function createSnapshot(
   options: { label?: string | null; kind?: SnapshotKind } = {}
 ): Promise<SnapshotRecord> {
   beginSnapshotJob(server.id);
+  const controller = new AbortController();
+  snapshotControllers.set(server.id, controller);
   try {
-    const snapshot = await archiveSnapshot(server, options);
+    const snapshot = await archiveSnapshot(server, options, {
+      onBytes: progressReporter(server.id, 'archiving', null, false),
+      onPhase: (phase, bytes) => updateSnapshotProgress(server.id, phase, bytes),
+    }, controller.signal);
     finishSnapshotJob(server.id, snapshot.id, null);
     return snapshot;
   } catch (err) {
-    finishSnapshotJob(server.id, null, err instanceof Error ? err.message : String(err));
+    const cancelled = err instanceof SnapshotCancelledError ||
+      (controller.signal.aborted && (err as Error)?.name === 'AbortError');
+    finishSnapshotJob(server.id, null, cancelled ? null : err instanceof Error ? err.message : String(err), cancelled);
+    if (cancelled) throw new SnapshotCancelledError();
     throw err;
+  } finally {
+    snapshotControllers.delete(server.id);
   }
 }
 
 async function archiveSnapshot(
   server: ServerRecord,
-  options: { label?: string | null; kind?: SnapshotKind }
+  options: { label?: string | null; kind?: SnapshotKind },
+  progress: ArchiveProgress,
+  signal?: AbortSignal
 ): Promise<SnapshotRecord> {
   const root = serverRootDir(server.id);
+  signal?.throwIfAborted();
   if (!(await pathExists(root))) {
     throw new Error('Server has no data on disk to snapshot yet');
   }
 
   // The importer deliberately rejects links/special files. Refuse to produce
   // an archive that cannot be restored, before disabling Minecraft autosaves.
-  await prepareServerFiles(server.id, false);
+  await prepareServerFiles(server.id, false, signal);
+  signal?.throwIfAborted();
   const dir = snapshotsDir(server.id);
   await fs.mkdir(dir, { recursive: true });
 
@@ -110,79 +212,125 @@ async function archiveSnapshot(
   // flush RCON reply only returns once the write to disk has completed. Skipped
   // (null) for a stopped/unreachable server, whose disk is already consistent.
   let flushed: string[] | null = null;
+  let saveAttempted = false;
+  let bytes = 0;
   const live = ['running', 'starting', 'restarting', 'stopping'].includes(server.status);
   try {
     try {
+      signal?.throwIfAborted();
+      progress.onPhase?.('flushing', bytes);
+      saveAttempted = true;
       flushed = await runServerRcon(server, ['save-off', 'save-all flush']);
+      signal?.throwIfAborted();
       if (!flushed && live) {
         throw new Error('Could not flush the running server. Snapshot cancelled; retry when RCON is available or stop the server first.');
       }
-      await tar.create({ gzip: true, file: archivePath, cwd: root, portable: true }, entries);
+      progress.onPhase?.('archiving', bytes);
+      bytes = await writeArchive(root, entries, archivePath, (written, finished) => {
+        bytes = written;
+        progress.onBytes(written, finished);
+      }, signal);
     } finally {
       // The server may have executed save-off even if the flush timed out or
       // disconnected. Never infer that nothing happened from a null response.
-      const resumed = await runServerRcon(server, ['save-on']);
-      if (!resumed && (flushed || live)) {
-        throw new Error('Could not confirm autosaving was re-enabled. Run save-on in the Minecraft console immediately; snapshot did not complete safely.');
+      if (saveAttempted) try {
+        progress.onPhase?.('resuming', bytes);
+      } finally {
+        // A failed progress write (for example a full disk) must not prevent
+        // the save-on command from reaching Minecraft.
+        const resumed = await runServerRcon(server, ['save-on']);
+        if (!resumed && (flushed || live)) {
+          throw new Error('Could not confirm autosaving was re-enabled. Run save-on in the Minecraft console immediately; snapshot did not complete safely.');
+        }
       }
     }
+    signal?.throwIfAborted();
+    progress.onPhase?.('finalizing', bytes);
+    const stat = await fs.stat(archivePath);
+    signal?.throwIfAborted();
+    const record = serverStore.createSnapshot({
+      serverId: server.id,
+      label: options.label ?? null,
+      fileName,
+      sizeBytes: stat.size,
+      kind: options.kind ?? 'manual',
+    });
+    logger.info({ serverId: server.id, snapshotId: record.id, sizeBytes: record.sizeBytes }, 'Created snapshot');
+    return record;
   } catch (err) {
-    await fs.rm(archivePath, { force: true }).catch(() => undefined);
+    try { await fs.rm(archivePath, { force: true }); }
+    catch (cleanupError) {
+      throw new Error(`Could not remove the partial snapshot archive ${archivePath}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+    }
     if (isPermissionError(err)) throw toPermissionError(err, root);
     throw err;
   }
-
-  const stat = await fs.stat(archivePath);
-  const record = serverStore.createSnapshot({
-    serverId: server.id,
-    label: options.label ?? null,
-    fileName,
-    sizeBytes: stat.size,
-    kind: options.kind ?? 'manual',
-  });
-  logger.info({ serverId: server.id, snapshotId: record.id, sizeBytes: record.sizeBytes }, 'Created snapshot');
-  return record;
 }
 
 /**
- * Restore a snapshot over the server's data folder. Always takes an automatic
+ * Restore a snapshot over the server's data folder. By default takes an automatic
  * safety snapshot of the current state first, then wipes everything except the
  * snapshots/ history and extracts the chosen archive. The caller must ensure the
  * server is stopped.
  */
 export async function restoreSnapshot(
   server: ServerRecord,
-  snapshotId: string
-): Promise<{ restored: SnapshotRecord; safetySnapshot: SnapshotRecord }> {
-  const record = serverStore.getSnapshot(snapshotId);
-  if (!record || record.serverId !== server.id) {
-    throw new Error('Snapshot not found');
+  snapshotId: string,
+  options: { createSafetySnapshot?: boolean } = {}
+): Promise<{ restored: SnapshotRecord; safetySnapshot: SnapshotRecord | null }> {
+  const createSafetySnapshot = options.createSafetySnapshot !== false;
+  beginSnapshotJob(server.id, 'restore', snapshotId, createSafetySnapshot);
+  let replacingData = false;
+  let safetySnapshot: SnapshotRecord | null = null;
+  try {
+    const record = serverStore.getSnapshot(snapshotId);
+    if (!record || record.serverId !== server.id) {
+      throw new Error('Snapshot not found');
+    }
+    const archivePath = snapshotFilePath(server.id, record.fileName);
+    if (!(await pathExists(archivePath))) {
+      throw new Error('Snapshot archive is missing on disk');
+    }
+    const { size } = await fs.stat(archivePath);
+    await validateSnapshot(archivePath, serverRootDir(server.id), progressReporter(server.id, 'validating', size));
+
+    // Safety net first, so a restore can itself be undone.
+    if (createSafetySnapshot) {
+      safetySnapshot = await archiveSnapshot(server, {
+        label: `Auto-backup before restoring "${record.label ?? record.createdAt}"`,
+        kind: 'auto-pre-restore',
+      }, { onBytes: progressReporter(server.id, 'backup') });
+      setSafetySnapshot(server.id, safetySnapshot.id);
+    }
+
+    const root = serverRootDir(server.id);
+    const entries = await fs.readdir(root);
+    await prepareServerFiles(server.id, false);
+    updateSnapshotProgress(server.id, 'clearing');
+    replacingData = true;
+    await Promise.all(
+      entries
+        .filter((entry) => entry !== SNAPSHOTS_DIRNAME)
+        .map((entry) => fs.rm(path.join(root, entry), { recursive: true, force: true }))
+    );
+
+    // This archive was fully validated before any data was removed. Do not
+    // decompress it a second time just to repeat the same validation.
+    await readArchive(archivePath, tar.extract({ cwd: root, preserveOwner: false, strict: true }),
+      progressReporter(server.id, 'extracting', size));
+    updateSnapshotProgress(server.id, 'permissions');
+    await prepareServerFiles(server.id);
+    finishSnapshotJob(server.id, snapshotId, null);
+    logger.info({ serverId: server.id, snapshotId, safetySnapshotId: safetySnapshot?.id ?? null }, 'Restored snapshot');
+    return { restored: record, safetySnapshot };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const recovery = replacingData
+      ? ' Server data may be incomplete. Keep the server stopped and retry the restore.' + (safetySnapshot ? ' You can also restore the automatic safety backup from the snapshot list.' : ' No safety backup was created.')
+      : ' Existing server data has not been replaced.';
+    finishSnapshotJob(server.id, snapshotId, message + recovery);
+    throw err;
   }
-  const archivePath = snapshotFilePath(server.id, record.fileName);
-  if (!(await pathExists(archivePath))) {
-    throw new Error('Snapshot archive is missing on disk');
-  }
-  await validateSnapshot(archivePath, serverRootDir(server.id));
-
-  // Safety net first, so a restore can itself be undone.
-  const safetySnapshot = await createSnapshot(server, {
-    label: `Auto-backup before restoring "${record.label ?? record.createdAt}"`,
-    kind: 'auto-pre-restore',
-  });
-
-  const root = serverRootDir(server.id);
-  const entries = await fs.readdir(root);
-  await prepareServerFiles(server.id, false);
-  await Promise.all(
-    entries
-      .filter((entry) => entry !== SNAPSHOTS_DIRNAME)
-      .map((entry) => fs.rm(path.join(root, entry), { recursive: true, force: true }))
-  );
-
-  await extractSnapshot(archivePath, root);
-  await prepareServerFiles(server.id);
-  logger.info({ serverId: server.id, snapshotId, safetySnapshotId: safetySnapshot.id }, 'Restored snapshot');
-  return { restored: record, safetySnapshot };
 }
 
 /**
@@ -210,16 +358,16 @@ export async function importSnapshotArchive(serverId: string, archivePath: strin
   await prepareServerFiles(serverId);
 }
 
-async function validateSnapshot(file: string, root: string): Promise<void> {
+async function validateSnapshot(file: string, root: string, progress?: Progress): Promise<void> {
   let unsafe: string | undefined;
-  await tar.list({ file, onReadEntry: entry => {
+  await readArchive(file, tar.list({ strict: true, onReadEntry: entry => {
     const relative = path.relative(root, path.resolve(root, entry.path));
     if (path.isAbsolute(entry.path) || relative === '..' || relative.startsWith('..' + path.sep) ||
         relative.split(path.sep)[0] === SNAPSHOTS_DIRNAME ||
         !['File', 'Directory', 'OldFile', 'ContiguousFile'].includes(entry.type)) {
       unsafe = entry.path;
     }
-  } });
+  } }), progress);
   if (unsafe !== undefined) throw new Error(`Unsafe snapshot entry: ${unsafe}`);
 }
 

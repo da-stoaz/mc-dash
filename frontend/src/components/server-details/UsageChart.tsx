@@ -141,7 +141,11 @@ export function UsageChart({
               fill="none" stroke={stroke} strokeWidth="1.75"
               strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
             />
-            {values.length === 1 && <circle cx={positions[0] * 100} cy={CHART_H * (1 - values[0] / maxValue)} r="0.7" fill={stroke} />}
+            {values.map((value, i) => Number.isFinite(value) &&
+              (i === 0 || !Number.isFinite(values[i - 1]) || gapBefore[i]) &&
+              (i === values.length - 1 || !Number.isFinite(values[i + 1]) || gapBefore[i + 1]) && (
+                <circle key={timestamps[i]} cx={positions[i] * 100} cy={CHART_H * (1 - value / maxValue)} r="0.7" fill={stroke} />
+              ))}
           </svg>
           {selected && (
             <>

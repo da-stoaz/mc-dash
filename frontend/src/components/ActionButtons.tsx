@@ -11,10 +11,11 @@ import {
   DropdownMenu,
   DropdownItem,
   DropdownTrigger,
+  Tooltip,
 } from '@heroui/react';
 import {
   MoreHorizontal,
-  Pencil,
+  Settings2,
   Play,
   RefreshCw,
   Square,
@@ -27,12 +28,11 @@ type Props = {
   server: ServerRecord;
   busy?: string;
   onAction: (id: string, action: 'start' | 'stop' | 'restart' | 'prepare') => void;
-  onEdit: () => void;
   onDeleteServer: () => void;
   align?: 'start' | 'end';
 };
 
-export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, align = 'end' }: Props) {
+export function ActionButtons({ server, busy, onAction, onDeleteServer, align = 'end' }: Props) {
   const disabled = !!busy;
   const canStart = ['stopped', 'exited', 'error'].includes(server.status);
   const canStop = ['running', 'starting', 'restarting'].includes(server.status);
@@ -42,7 +42,6 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, 
   const [confirmState, setConfirmState] = useState<null | 'stop' | 'restart' | 'deleteServer'>(null);
 
   const menuItems = [
-    { key: 'edit', label: 'Edit', icon: <Pencil size={16} /> },
     ...(canRestart ? [{ key: 'restart', label: 'Restart', icon: <RefreshCw size={16} /> }] : []),
     ...(canPrepare && server.containerId ? [{ key: 'prepare', label: 'Rebuild', icon: <Wand2 size={16} /> }] : []),
     { key: 'deleteServer', label: 'Delete server and files', icon: <Trash2 size={16} /> },
@@ -61,7 +60,7 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, 
     <div className={`flex items-center gap-2 whitespace-nowrap ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
       <Button
         as={needsSetup ? Link : 'button'}
-        href={needsSetup ? `/servers/${server.id}` : undefined}
+        href={needsSetup ? `/servers/${server.id}?tab=settings#settings-pack` : undefined}
         size="sm"
         className="min-w-24"
         color={canStop || stopping || restarting ? 'default' : needsPrepare || preparing ? 'warning' : 'success'}
@@ -75,6 +74,11 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, 
       >
         {primaryLabel}
       </Button>
+      <Tooltip content="Settings" delay={200} closeDelay={0}>
+        <Button as={Link} role="link" href={`/servers/${server.id}?tab=settings`} size="sm" variant="flat" isIconOnly aria-label={`Settings for ${server.name}`}>
+          <Settings2 size={16} />
+        </Button>
+      </Tooltip>
       <Dropdown placement="bottom-end">
         <DropdownTrigger>
           <Button size="sm" variant="flat" isIconOnly aria-label={`More actions for ${server.name}`} isDisabled={disabled}>
@@ -82,7 +86,6 @@ export function ActionButtons({ server, busy, onAction, onEdit, onDeleteServer, 
           </Button>
         </DropdownTrigger>
         <DropdownMenu aria-label={`Actions for ${server.name}`} items={menuItems} onAction={key => {
-          if (key === 'edit') onEdit();
           if (key === 'prepare') onAction(server.id, 'prepare');
           if (key === 'restart' || key === 'deleteServer') setConfirmState(key);
         }}>
