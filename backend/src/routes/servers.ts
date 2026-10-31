@@ -13,7 +13,7 @@ import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer, purgeServerData, ensurePreparedModDependencies } from '../services/prepareService';
 import { syncBlacklistLive } from '../services/accessControlService';
 import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
-import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive } from '../services/snapshotService';
+import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive, cancelSnapshot, SnapshotCancelledError } from '../services/snapshotService';
 import { getSnapshotJob } from '../services/snapshotJobStore';
 import { beginServerOperation, finishServerOperation, getServerOperation } from '../services/serverOperationStore';
 import { config } from '../config';
@@ -1274,6 +1274,16 @@ router.get('/:id/snapshots/job', (req, res) => {
   res.json(getSnapshotJob(req.params.id));
 });
 
+router.post('/:id/snapshots/job/cancel', (req, res, next) => {
+  try {
+    if (!serverStore.get(req.params.id)) return notFound(res);
+    const { startedAt } = z.object({ startedAt: z.string().min(1) }).parse(req.body);
+    const job = cancelSnapshot(req.params.id, startedAt);
+    if (!job) return res.status(409).json({ error: 'This snapshot can no longer be cancelled. Refresh its status.' });
+    return res.status(job.status === 'running' ? 202 : 200).json(job);
+  } catch (err) { next(err); }
+});
+
 router.get('/:id/snapshots', (req, res) => {
   const server = serverStore.get(req.params.id);
   if (!server) return notFound(res);
@@ -1292,13 +1302,17 @@ router.post('/:id/snapshots', async (req, res, next) => {
     const pending = createSnapshot(server, { label: parsed.label ?? null, kind: 'manual' })
       .finally(() => lifecycleBusy.delete(server.id));
     if (parsed.background) {
-      void pending.catch(err => logger.error({ err, serverId: server.id }, 'Snapshot creation failed'));
+      void pending.catch(err => {
+        if (err instanceof SnapshotCancelledError) logger.info({ serverId: server.id }, 'Snapshot cancelled');
+        else logger.error({ err, serverId: server.id }, 'Snapshot creation failed');
+      });
       return res.status(202).json(getSnapshotJob(server.id));
     }
     const snapshot = await pending;
     res.status(201).json(snapshot);
   } catch (err: any) {
     if (err?.name === 'ZodError') return next(err);
+    if (err instanceof SnapshotCancelledError) return res.status(409).json({ error: err.message });
     logger.error({ err, serverId: req.params.id }, 'Snapshot creation failed');
     res.status(500).json({ error: err?.message ?? 'Snapshot failed' });
   }
@@ -1321,13 +1335,15 @@ router.get('/:id/snapshots/:snapshotId/download', (req, res) => {
 
 router.post('/:id/snapshots/:snapshotId/restore', lifecycle<{id:string; snapshotId:string}>(async (req, res, next) => {
   try {
+    const options = z.object({ createSafetySnapshot: z.boolean().default(true) }).safeParse(req.body ?? {});
+    if (!options.success) return res.status(400).json({ error: 'createSafetySnapshot must be a boolean.' });
     const server = serverStore.get(req.params.id);
     if (!server) return notFound(res);
     const status = await dockerService.status(server);
     if (['running', 'starting', 'restarting', 'stopping'].includes(status)) {
       return res.status(409).json({ error: 'Stop the server before restoring a snapshot.' });
     }
-    const result = await restoreSnapshot(server, req.params.snapshotId);
+    const result = await restoreSnapshot(server, req.params.snapshotId, options.data);
     const updated = serverStore.update(server.id, { restartRequired: false }) ?? server;
     res.json({ ok: true, restored: result.restored, safetySnapshot: result.safetySnapshot, server: updated });
   } catch (err: any) {
@@ -1343,6 +1359,9 @@ router.delete('/:id/snapshots/:snapshotId', async (req, res, next) => {
   try {
     const server = serverStore.get(req.params.id);
     if (!server) return notFound(res);
+    if (lifecycleBusy.has(server.id) || getSnapshotJob(server.id)?.status === 'running') {
+      return res.status(409).json({ error: 'Wait for the current server operation to finish before deleting a snapshot.' });
+    }
     const removed = await deleteSnapshot(server, req.params.snapshotId);
     if (!removed) return res.status(404).json({ error: 'Snapshot not found' });
     res.json({ ok: true });

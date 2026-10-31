@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc -p tsconfig.json && cp src/services/serverFileWorker*.py src/services/zipExtractionWorker.cjs dist/services/",
+    "build": "tsc -p tsconfig.json && cp src/services/serverFileWorker*.py src/services/zipExtractionWorker.cjs src/services/snapshotArchiveWorker.cjs dist/services/",
     "start": "node dist/index.js",
     "lint": "echo \"lint not configured\"",
     "test": "node -r ts-node/register --test \"src/**/*.test.ts\"",
