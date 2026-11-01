@@ -1,4 +1,4 @@
-import AdmZip from 'adm-zip';
+import { unzipSync } from 'fflate';
 import { parse } from '@iarna/toml';
 import fs from 'fs/promises';
 import path from 'path';
@@ -156,12 +156,25 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader, inclu
   let nestedCount = 0;
   function read(data: Buffer, label: string, embedded: boolean, depth: number): Mod[] {
     if (depth > 8 || ++nestedCount > MAX_NESTED) throw new Error(`Too many embedded JARs in ${file}`);
-    const zip = new AdmZip(data);
+    // Inspect only the requested entry in memory. Shaded mod JARs can contain
+    // duplicate licenses/resources; these must not prevent metadata inspection.
+    // Duplicates of entries we actually consume remain ambiguous and are rejected.
+    // Pack extraction continues to use adm-zip's stricter archive-wide checks.
+    function entryData(name: string, limit: number): Buffer | undefined {
+      let found = false;
+      const entries = unzipSync(data, { filter(entry) {
+        if (entry.name !== name) return false;
+        if (found) throw new Error(`Duplicate entry ${name} in ${label}`);
+        found = true;
+        if (entry.originalSize > limit || (entry.compression === 0 && entry.size > limit)) throw new Error(`Oversized ${name} in ${label}`);
+        return true;
+      } });
+      if (!found) return undefined;
+      if (entries[name].length > limit) throw new Error(`Oversized ${name} in ${label}`);
+      return Buffer.from(entries[name]);
+    }
     function text(name: string): string | undefined {
-      const entry = zip.getEntry(name);
-      if (!entry) return undefined;
-      if (entry.header.size > MAX_METADATA) throw new Error(`Oversized ${name} in ${label}`);
-      return entry.getData().toString('utf8');
+      return entryData(name, MAX_METADATA)?.toString('utf8');
     }
     const mods: Mod[] = [];
     const nested = new Map<string, boolean>();
@@ -212,9 +225,9 @@ export function readMods(buffer: Buffer, file: string, preferred?: Loader, inclu
       if (payload) nested.set(payload, embedded);
     }
     for (const [name, nestedEmbedded] of nested) {
-      const entry = zip.getEntry(name);
-      if (!entry || entry.header.size > 128 * 1024 * 1024) throw new Error(`Missing or oversized embedded JAR ${name} in ${label}`);
-      mods.push(...read(entry.getData(), `${label}!/${name}`, nestedEmbedded, depth + 1));
+      const entry = entryData(name, 128 * 1024 * 1024);
+      if (!entry) throw new Error(`Missing or oversized embedded JAR ${name} in ${label}`);
+      mods.push(...read(entry, `${label}!/${name}`, nestedEmbedded, depth + 1));
     }
     return mods;
   }
