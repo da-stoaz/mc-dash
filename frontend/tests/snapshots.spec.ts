@@ -58,7 +58,7 @@ async function setup(page: Page, withSnapshot = false, serverStatus = 'stopped')
     return json({});
   });
   await page.goto(`/servers/${server.id}`);
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Take snapshot' })).toBeEnabled();
   return state;
 }
@@ -113,7 +113,7 @@ test('snapshot cancellation survives reload, keeps controls locked during cleanu
   await expect(page.getByRole('button', { name: 'Restore', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Cancel snapshot', exact: true })).toBeDisabled();
   await page.reload();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Cancelling snapshot…')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel snapshot', exact: true })).toBeDisabled();
   state.job = { ...state.job, status: 'cancelled', finishedAt: new Date().toISOString() };
@@ -175,18 +175,18 @@ test('snapshot creation survives Logs tab, remount, reload and completion while 
   const state = await setup(page);
   await page.getByRole('button', { name: 'Take snapshot' }).click();
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible();
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   await expect(page.getByText(/^Creating snapshot$/)).not.toBeVisible();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Take snapshot' })).toBeDisabled();
   await page.reload();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible();
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   state.job = { ...running, status: 'completed', finishedAt: snapshot.createdAt };
   state.snapshots = [snapshot];
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Navigation backup', { exact: true })).toBeVisible();
   await expect(page.getByText(/Last snapshot completed/)).toBeVisible();
   expect(state.posts).toBe(1);
@@ -205,7 +205,7 @@ for (const mobile of [false, true]) test(`snapshot creation shows live archive a
   await expect(page.getByRole('progressbar', { name: 'Compressing snapshot' })).not.toHaveAttribute('aria-valuenow');
   state.job = { ...state.job, bytesProcessed: 2097152 };
   await page.reload();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Archive written: 2.0 MB')).toBeVisible();
   await expect(page.getByRole('list', { name: 'Snapshot stages' })).not.toBeVisible();
   await page.getByText('Details', { exact: true }).click();
@@ -276,7 +276,7 @@ for (const mobile of [false, true]) test(`restore modal defaults to backup, rese
   await expect(page.getByRole('list', { name: 'Restore stages' })).not.toContainText('Creating safety backup');
   state.job = { ...state.job, phase: 'extracting' };
   await page.reload();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Step 3 of 4 · Extracting snapshot')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(mobile ? 390 : 1280);
 });
@@ -295,12 +295,12 @@ test('restore shows stages and byte progress, survives navigation and reload, an
   await expect(page.getByText('Safety archive written: 2.0 KB')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete snapshot' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Take snapshot' })).toBeDisabled();
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   state.job = { ...state.job, phase: 'extracting', bytesProcessed: 3072, totalBytes: 4096, safetySnapshotId: 'safety-1' };
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Step 4 of 5 · Extracting snapshot')).toBeVisible();
   await page.reload();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByRole('progressbar', { name: 'Extracting snapshot' })).toHaveAttribute('aria-valuenow', '75');
   await expect.poll(() => page.getByRole('progressbar', { name: 'Extracting snapshot' }).locator('div').last().evaluate(element =>
     new DOMMatrix(getComputedStyle(element).transform).m41 / element.getBoundingClientRect().width
@@ -328,10 +328,10 @@ test('restore status remains visible across polling errors and failure while awa
   state.jobFailure = false;
   state.job = { ...state.job, phase: 'backup', totalBytes: null, updatedAt: new Date(Date.now() - 60000).toISOString() };
   await expect(page.getByText(/No new file activity/)).toBeVisible({ timeout: 8000 });
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   state.job = { ...state.job, status: 'failed', finishedAt: new Date().toISOString(), error: 'Disk full. Existing server data has not been replaced.' };
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
-  const failure = page.getByRole('tabpanel', { name: 'Snapshots' }).getByRole('alert');
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
+  const failure = page.getByRole('alert').filter({ hasText: 'Restore failed' });
   await expect(failure).toContainText('Restore failed');
   await expect(failure).toContainText('Existing server data has not been replaced.');
   await expect(page.getByRole('button', { name: 'Restore', exact: true })).toBeEnabled();
@@ -344,8 +344,8 @@ test('leaving before restore acceptance still recovers the running restore', asy
   await page.getByRole('button', { name: 'Restore', exact: true }).click();
   await page.getByRole('button', { name: 'Back up and restore', exact: true }).click();
   await expect.poll(() => state.restorePosts).toBe(1);
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Step 1 of 5 · Checking snapshot')).toBeVisible();
   release();
   await expect(page.getByRole('button', { name: 'Restore', exact: true })).toBeDisabled();
@@ -357,8 +357,8 @@ test('switching tabs before the create response arrives restores the accepted jo
   state.holdPost = () => new Promise<void>(resolve => { release = resolve; });
   await page.getByRole('button', { name: 'Take snapshot' }).click();
   await expect.poll(() => state.posts).toBe(1);
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible();
   release();
   await expect(page.getByRole('button', { name: 'Take snapshot' })).toBeDisabled();
@@ -368,18 +368,18 @@ test('failure while away remains visible when returning', async ({ page }) => {
   const state = await setup(page);
   await page.getByRole('button', { name: 'Take snapshot' }).click();
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible();
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   state.job = { ...running, status: 'failed', finishedAt: snapshot.createdAt, error: 'Disk full' };
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Snapshot failed: Disk full')).toBeVisible();
 });
 
 test('running job remains visible even when loading the archive list fails', async ({ page }) => {
   const state = await setup(page);
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   state.job = { ...running };
   state.listFailure = true;
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Archive list unavailable')).toBeVisible();
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Take snapshot' })).toBeDisabled();
@@ -413,9 +413,9 @@ test('completion is picked up automatically without leaving or refreshing', asyn
 
 test('unknown job status on return is not presented as permission to start another job', async ({ page }) => {
   const state = await setup(page);
-  await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+  await page.getByRole('link', { name: 'Logs', exact: true }).click();
   state.jobFailure = true;
-  await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
+  await page.getByRole('link', { name: 'Snapshots', exact: true }).click();
   await expect(page.getByText('Job status unavailable')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Take snapshot' })).toBeDisabled();
   state.jobFailure = false;
