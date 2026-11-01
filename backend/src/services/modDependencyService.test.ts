@@ -61,6 +61,53 @@ class Fixtures extends DependencySources {
   }
 }
 
+// adm-zip's writer replaces existing entries. Rename an equal-length placeholder
+// in both ZIP headers to reproduce the duplicate resources in shaded mod JARs.
+function duplicateEntry(jar: Buffer, name: string, content: Buffer | string): Buffer {
+  const zip = new AdmZip(jar);
+  const placeholder = name.slice(0, -1) + '~';
+  zip.addFile(placeholder, Buffer.from(content));
+  const result = zip.toBuffer();
+  const from = Buffer.from(placeholder), to = Buffer.from(name);
+  for (let offset = result.indexOf(from); offset !== -1; offset = result.indexOf(from, offset + to.length)) to.copy(result, offset);
+  return result;
+}
+
+test('ATM10-style duplicate licenses do not block NeoForge dependency inspection or alter jars', async t => {
+  const zip = new AdmZip();
+  zip.addFile('META-INF/neoforge.mods.toml', Buffer.from('[[mods]]\nmodId="ars_nouveau"\nversion="5.13.3"\n[[dependencies.ars_nouveau]]\nmodId="library"\ntype="required"\nversionRange="[1,)"\n'));
+  zip.addFile('META-INF/LICENSE.txt', Buffer.from('First license'));
+  const jar = duplicateEntry(zip.toBuffer(), 'META-INF/LICENSE.txt', 'Second license');
+  assert.throws(() => new AdmZip(jar).getEntries(), /Duplicate entry name/);
+  const mods = readMods(jar, 'ars_nouveau-1.21.1-5.13.3.jar', 'neoforge');
+  assert.equal(mods[0].id, 'ars_nouveau');
+  assert.equal(mods[0].requirements[0].id, 'library');
+  const root = await pack(t, { 'ars_nouveau.jar': jar }, 'MINECRAFT_VERSION=1.21.1\nMODLOADER=NeoForge\n');
+  const library = new AdmZip();
+  library.addFile('META-INF/neoforge.mods.toml', Buffer.from('[[mods]]\nmodId="library"\nversion="1"\n'));
+  assert.deepEqual(await ensureModDependencies(root, new Fixtures({ library: [library.toBuffer()] })), { installed: ['library-0.jar'] });
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods', 'ars_nouveau.jar')), jar);
+});
+
+test('duplicate resources are also tolerated inside embedded jars', () => {
+  const inner = duplicateEntry(fabric('inner', '1', {}, {}, { 'META-INF/LICENSE.txt': Buffer.from('First') }), 'META-INF/LICENSE.txt', 'Second');
+  const outer = fabric('outer', '1', {}, { jars: [{ file: 'inner.jar' }] }, { 'inner.jar': inner });
+  assert.deepEqual(readMods(outer, 'outer.jar').map(m => [m.id, m.embedded]), [['outer', false], ['inner', true]]);
+});
+
+test('duplicate metadata and referenced embedded jars remain rejected', () => {
+  const metadata = duplicateEntry(fabric('first', '1'), 'fabric.mod.json', JSON.stringify({ id: 'second', version: '2' }));
+  assert.throws(() => readMods(metadata, 'ambiguous.jar'), /Duplicate entry fabric.mod.json/);
+  const outer = fabric('outer', '1', {}, { jars: [{ file: 'inner.jar' }] }, { 'inner.jar': fabric('first', '1') });
+  assert.throws(() => readMods(duplicateEntry(outer, 'inner.jar', fabric('second', '2')), 'outer.jar'), /Duplicate entry inner.jar/);
+});
+
+test('metadata inspection still enforces decompressed size limits', () => {
+  const zip = new AdmZip();
+  zip.addFile('fabric.mod.json', Buffer.alloc(2 * 1024 * 1024 + 1, ' '));
+  assert.throws(() => readMods(zip.toBuffer(), 'oversized.jar'), /Oversized fabric.mod.json/);
+});
+
 test('Fabric metadata accepts literal controls without changing dependencies or installed jars', async t => {
   const zip = new AdmZip();
   const description = 'First line\r\nSecond\tline\u0000 with "quotes" and \\slashes';
