@@ -109,7 +109,7 @@ test('resource tooltips include recorded cores and gigabytes in live and histori
 
 test('Settings opens the organized server settings', async ({ page }) => {
   await setup(page, 'available', 'running', true);
-  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Server settings', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Server name', exact: true })).toHaveValue('TPS test');
 });

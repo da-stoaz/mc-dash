@@ -253,7 +253,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
             {currentPlayers && <span className="text-base font-normal muted"> / {currentPlayers.max}</span>}
           </div>
           <p className="mt-2 text-xs muted">{currentPlayers ? 'Connected right now' : playerFallbackLabel(status)}</p>
-          <Link href={`/servers/${serverId}/settings?section=players`} className="mt-2 inline-block rounded-sm py-1 text-xs text-cyan-300 hover:underline focus-visible:outline-2 focus-visible:outline-cyan-400">Manage player access</Link>
+          <Link href={`/servers/${serverId}?tab=settings&section=players`} className="mt-2 inline-block rounded-sm py-1 text-xs text-cyan-300 hover:underline focus-visible:outline-2 focus-visible:outline-cyan-400">Manage player access</Link>
         </div>
         <Gauge icon={<Cpu size={16} />} label="CPU" percent={currentMetrics?.cpuPercent ?? null} color={CPU_STROKE}
           detail={currentMetrics ? `${formatCores(currentMetrics.cpuCores)} / ${formatCores(currentMetrics.cpuCoresAvailable)} cores` : unavailable} />
@@ -274,7 +274,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
             <div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                 <h2 className="text-base font-semibold">Resource usage</h2>
-                <Link href={`/servers/${serverId}/settings?section=resources`} className="rounded-sm py-1 text-xs text-cyan-300 hover:underline focus-visible:outline-2 focus-visible:outline-cyan-400">Adjust resources</Link>
+                <Link href={`/servers/${serverId}?tab=settings&section=resources`} className="rounded-sm py-1 text-xs text-cyan-300 hover:underline focus-visible:outline-2 focus-visible:outline-cyan-400">Adjust resources</Link>
               </div>
               <p className="mt-1 text-xs muted">{tab === 'live' ? 'Recent CPU and memory readings' : 'Average usage with peaks shaded'}</p>
             </div>

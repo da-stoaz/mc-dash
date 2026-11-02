@@ -11,6 +11,8 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Tab,
+  Tabs,
 } from '@heroui/react';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
@@ -42,8 +44,8 @@ function ServerDetails() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
-  const settingsPage = pathname.endsWith('/settings');
-  const requestedSection = settingsPage ? 'settings' : searchParams.get('tab') ?? 'overview';
+  const legacySettingsPage = pathname.endsWith('/settings');
+  const requestedSection = legacySettingsPage ? 'settings' : searchParams.get('tab') ?? 'overview';
   const section = Object.hasOwn(sectionLabels, requestedSection) ? requestedSection : 'overview';
   const serverId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const [server, setServer] = useState<ServerRecord | null>(null);
@@ -55,13 +57,23 @@ function ServerDetails() {
   const [loading, setLoading] = useState(true);
   const serverErrorRef = useRef(false);
 
-  // Keep bookmarks from the former settings tab working, including its anchors.
+  // Redirect dedicated-page bookmarks and old category anchors into the tabs.
   useEffect(() => {
-    if (!settingsPage && searchParams.get('tab') === 'settings') {
-      const category = window.location.hash.replace('#settings-', '') || 'general';
-      router.replace(`/servers/${serverId}/settings?section=${encodeURIComponent(category)}`);
+    const anchor = window.location.hash;
+    if (legacySettingsPage || (section === 'settings' && anchor.startsWith('#settings-'))) {
+      const category = searchParams.get('section') ?? (anchor.startsWith('#settings-') ? anchor.slice(10) : 'general');
+      router.replace(`/servers/${serverId}?tab=settings&section=${encodeURIComponent(category)}`, { scroll: false });
     }
-  }, [settingsPage, searchParams, serverId, router]);
+  }, [legacySettingsPage, section, searchParams, serverId, router]);
+
+  const selectSection = (key: string) => {
+    if (key === section) return;
+    const url = new URL(window.location.href);
+    url.pathname = `/servers/${serverId}`;
+    url.search = key === 'overview' ? '' : `?tab=${key}`;
+    url.hash = '';
+    window.history.pushState(null, '', url);
+  };
 
   const notify = (title: string, description?: string, severity: 'default' | 'success' | 'warning' | 'danger' = 'default') => {
     addToast({
@@ -234,10 +246,10 @@ function ServerDetails() {
         <Button as={Link} role="link" href="/" variant="flat" startContent={<ArrowLeft size={16} />}>
           All servers
         </Button>
-        {settingsPage ? <Button as={Link} role="link" href={`/servers/${server.id}`} variant="light" startContent={<ArrowLeft size={16} />}>Back to server</Button> : <span className="muted">{sectionLabels[section]}</span>}
+        <span className="muted">{sectionLabels[section]}</span>
       </div>
 
-      {settingsPage ? <header className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.03] p-5">
+      {section === 'settings' ? <header className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.03] p-5">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Server settings</h1>
           <p className="mt-1 break-words text-sm muted">{server.name}</p>
@@ -265,25 +277,28 @@ function ServerDetails() {
 
       <FailureBanner message={server.lastError} />
 
-      <nav aria-label="Server sections" className="flex gap-1 border-b border-white/10 max-md:gap-0">
-        {Object.entries(sectionLabels).map(([key, label]) => <Link key={key}
-          href={key === 'settings' ? `/servers/${server.id}/settings` : `/servers/${server.id}${key === 'overview' ? '' : `?tab=${key}`}`}
-          aria-current={section === key ? 'page' : undefined}
-          className={`min-h-11 border-b-2 px-3 py-3 text-center text-sm transition-colors max-md:flex-1 max-md:px-1 focus-visible:outline-2 focus-visible:outline-cyan-400 ${section === key ? 'border-white text-white' : 'border-transparent text-gray-400 hover:border-white/30 hover:text-white'}`}>
-          {label}
-        </Link>)}
-      </nav>
-
-      {section === 'overview' && <MetricsCard serverId={serverId} metrics={metrics} players={players} status={server.status} history={history} />}
-      {section === 'console' && <ConsoleCard serverId={server.id} status={server.status} exitCode={server.exitCode} playerNames={players?.names ?? []} />}
-      {section === 'logs' && <LogsCard serverId={server.id} apiBase={API_BASE} />}
-      {section === 'snapshots' && <SnapshotsCard serverId={server.id} status={server.status} onRestored={fetchServer} />}
-
-      {/* Keep forms mounted in the shared layout so navigation preserves drafts. */}
-      <div hidden={!settingsPage}>
-        <SettingsPanel key={server.id} server={server} busy={Boolean(busy)} onUpdated={fetchServer}
-          onPrepare={() => invokeAction(server.id, 'prepare')} onDelete={() => setConfirmState('deleteServer')} />
-      </div>
+      <Tabs aria-label="Server sections" selectedKey={section}
+        onSelectionChange={key => selectSection(String(key))}
+        destroyInactiveTabPanel={false} variant="underlined" size="lg"
+        classNames={{ panel: 'pt-2', tabList: 'max-md:w-full max-md:gap-0', tab: 'max-md:px-1', tabContent: 'max-md:text-sm' }}>
+        <Tab key="overview" title="Overview">
+          {section === 'overview' && <MetricsCard serverId={serverId} metrics={metrics} players={players} status={server.status} history={history} />}
+        </Tab>
+        <Tab key="console" title="Console">
+          {section === 'console' && <ConsoleCard serverId={server.id} status={server.status} exitCode={server.exitCode} playerNames={players?.names ?? []} />}
+        </Tab>
+        <Tab key="logs" title="Logs">
+          {section === 'logs' && <LogsCard serverId={server.id} apiBase={API_BASE} />}
+        </Tab>
+        <Tab key="snapshots" title="Snapshots">
+          {section === 'snapshots' && <SnapshotsCard serverId={server.id} status={server.status} onRestored={fetchServer} />}
+        </Tab>
+        <Tab key="settings" title="Settings">
+          {/* Retain drafts while visiting the other server tabs. */}
+          <SettingsPanel key={server.id} server={server} busy={Boolean(busy)} onUpdated={fetchServer}
+            onPrepare={() => invokeAction(server.id, 'prepare')} onDelete={() => setConfirmState('deleteServer')} />
+        </Tab>
+      </Tabs>
 
       <Modal isOpen={confirmState !== null} onClose={() => setConfirmState(null)} placement="center" size="sm">
         <ModalContent>

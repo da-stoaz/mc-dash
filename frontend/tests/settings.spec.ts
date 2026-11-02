@@ -68,7 +68,7 @@ async function setup(page: Page, options: { running?: boolean; hardcore?: boolea
     return route.fulfill({ json: {} });
   });
   await page.goto(options.entry ?? '/servers/settings-test');
-  if (!options.entry) await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  if (!options.entry) await page.getByRole('tab', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Server settings', exact: true })).toBeVisible();
   return { patches, actions, errors };
 }
@@ -82,6 +82,8 @@ for (const mobile of [false, true]) {
     const width = mobile ? 390 : 1440;
     await page.setViewportSize({ width, height: mobile ? 844 : 1100 });
     const { errors } = await setup(page);
+    await expect(page).toHaveURL(/\/servers\/settings-test\?tab=settings$/);
+    await expect(page.getByRole('link', { name: 'Back to server', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
     for (const name of ['General', 'Resources', 'Gameplay', 'Player access', 'Server pack & Java']) {
       await category(page, name);
@@ -287,13 +289,13 @@ test('categories support all arrow directions, Home, End, and keyboard activatio
   }
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/settings\?section=resources$/);
+  await expect(page).toHaveURL(/\?tab=settings&section=resources$/);
   await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toBeVisible();
 });
 
 test('browser Back, Forward and reload restore categories; server navigation keeps drafts', async ({ page }) => {
   await setup(page);
-  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page).toHaveURL(/\?tab=settings$/);
   await page.getByLabel('Server name', { exact: true }).fill('Unsaved name');
   await category(page, 'Resources');
   await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('9000');
@@ -301,7 +303,7 @@ test('browser Back, Forward and reload restore categories; server navigation kee
   await expect(page.getByLabel('Server name', { exact: true })).toHaveValue('Unsaved name');
   await page.goForward();
   await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toHaveValue('9000');
-  await page.getByRole('link', { name: 'Back to server', exact: true }).click();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Resource usage' })).toBeVisible();
   await page.goBack();
   await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toHaveValue('9000');
@@ -312,14 +314,14 @@ test('browser Back, Forward and reload restore categories; server navigation kee
 for (const entry of ['/servers/settings-test?tab=settings#settings-pack', '/servers/settings-test/settings?section=pack']) {
   test(`direct link opens requested category: ${entry}`, async ({ page }) => {
     await setup(page, { entry });
-    await expect(page).toHaveURL(/\/settings\?section=pack$/);
+    await expect(page).toHaveURL(/\?tab=settings&section=pack$/);
     await expect(page.getByRole('heading', { name: 'Server pack', exact: true })).toBeInViewport();
   });
 }
 
 test('overview shortcuts and adjacent categories provide routes in both directions', async ({ page }) => {
   await setup(page);
-  await page.getByRole('link', { name: 'Back to server', exact: true }).click();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('link', { name: 'Adjust resources', exact: true }).click();
   await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toBeVisible();
   const adjacent = page.getByRole('navigation', { name: 'Adjacent settings categories', exact: true });
@@ -327,12 +329,12 @@ test('overview shortcuts and adjacent categories provide routes in both directio
   await expect(page.getByLabel('Game mode', { exact: true })).toBeVisible();
   await adjacent.getByRole('link', { name: 'Resources', exact: true }).click();
   await expect(page.getByLabel('RAM limit (MiB)', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: 'Back to server', exact: true }).click();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('link', { name: 'Manage player access', exact: true }).click();
   await expect(page.getByLabel('Allowed players', { exact: true })).toBeVisible();
-  await page.getByRole('navigation', { name: 'Server sections' }).getByRole('link', { name: 'Logs', exact: true }).click();
+  await page.getByRole('tablist', { name: 'Server sections' }).getByRole('tab', { name: 'Logs', exact: true }).click();
   await expect(page).toHaveURL(/\?tab=logs$/);
-  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Settings', exact: true }).click();
   await expect(page.getByLabel('Server name', { exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'All servers', exact: true })).toHaveAttribute('href', '/');
 });

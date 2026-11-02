@@ -1,4 +1,4 @@
-// Settings uses the persistent server layout with its own focused presentation.
+// Compatibility entry point; the shared layout redirects to ?tab=settings.
 export default function ServerSettingsPage() {
   return null;
 }

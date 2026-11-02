@@ -360,7 +360,7 @@ export function SettingsPanel(props: Props) {
   const requested = searchParams.get('section') ?? 'general';
   const active = sections.some(section => section.id === requested) ? requested : 'general';
   const index = sections.findIndex(section => section.id === active);
-  const href = (id: string) => `/servers/${props.server.id}/settings?section=${id}`;
+  const href = (id: string) => `/servers/${props.server.id}?tab=settings&section=${id}`;
   const labelFor = (section: typeof sections[number]) => section.id === 'pack' ? 'Server pack & Java' : section.label;
 
   return <section aria-label="Server settings" className="grid items-start gap-6 md:grid-cols-[220px_minmax(0,1fr)]">

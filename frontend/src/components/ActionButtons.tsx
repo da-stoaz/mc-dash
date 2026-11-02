@@ -60,7 +60,7 @@ export function ActionButtons({ server, busy, onAction, onDeleteServer, align = 
     <div className={`flex items-center gap-2 whitespace-nowrap ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
       <Button
         as={needsSetup ? Link : 'button'}
-        href={needsSetup ? `/servers/${server.id}/settings?section=pack` : undefined}
+        href={needsSetup ? `/servers/${server.id}?tab=settings&section=pack` : undefined}
         size="sm"
         className="min-w-24"
         color={canStop || stopping || restarting ? 'default' : needsPrepare || preparing ? 'warning' : 'success'}
@@ -75,7 +75,7 @@ export function ActionButtons({ server, busy, onAction, onDeleteServer, align = 
         {primaryLabel}
       </Button>
       <Tooltip content="Settings" delay={200} closeDelay={0}>
-        <Button as={Link} role="link" href={`/servers/${server.id}/settings`} size="sm" variant="flat" isIconOnly aria-label={`Settings for ${server.name}`}>
+        <Button as={Link} role="link" href={`/servers/${server.id}?tab=settings`} size="sm" variant="flat" isIconOnly aria-label={`Settings for ${server.name}`}>
           <Settings2 size={16} />
         </Button>
       </Tooltip>
