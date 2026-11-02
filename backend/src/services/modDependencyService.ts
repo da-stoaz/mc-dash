@@ -44,7 +44,16 @@ function nextMissing(mods: Mod[], runtime?: Runtime, strictFiles = new Set<strin
           disabled.some(m => m.id === req.id && matches(m.version, req.range, req.kind) === true)) continue;
       if (BUILTINS.has(req.id)) {
         const installed = req.id === 'minecraft' ? runtime?.minecraft : req.id === runtime?.loader || (req.id === 'fabricloader' && runtime?.loader === 'fabric') ? runtime?.loaderVersion : undefined;
-        const match = installed ? matches(installed, req.range, req.kind) : undefined;
+        let match = installed ? matches(installed, req.range, req.kind) : undefined;
+        // FancyModLoader 4.0.42 VersionSupportMatrix: NeoForge on Minecraft
+        // 1.21.1 also accepts constraints matching Minecraft 1.21 / NeoForge
+        // 21.0.166. Mirror these exact aliases, not arbitrary patch versions.
+        // Without this, packs pass before the installer creates unix_args.txt
+        // but fail preflight on their next start (e.g. Additional Lights).
+        const alias = runtime?.loader === 'neoforge' && runtime.minecraft === '1.21.1' && req.kind === 'maven'
+          ? ({ minecraft: '1.21', neoforge: '21.0.166' } as Record<string, string>)[req.id]
+          : undefined;
+        if (alias && matches(alias, req.range, req.kind) === true) match = true;
         if (installed && (match === false || (match === undefined && strictFiles.has(mod.file)))) throw new Error(`${req.owner} requires ${req.id} ${JSON.stringify(req.range)}; pack uses ${installed}`);
         continue;
       }

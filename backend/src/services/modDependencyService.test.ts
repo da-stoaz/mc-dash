@@ -15,6 +15,18 @@ function forge(id: string, version: string, deps: Record<string, string> = {}, e
   for (const [name, data] of Object.entries(extras)) zip.addFile(name, Buffer.from(data));
   return zip.toBuffer();
 }
+function neoforge(id: string, deps: Record<string, string> = {}) {
+  const zip = new AdmZip();
+  zip.addFile('META-INF/neoforge.mods.toml', Buffer.from(`[[mods]]
+modId="${id}"
+version="1"
+` + Object.entries(deps).map(([dependency, range]) => `[[dependencies.${id}]]
+modId="${dependency}"
+type="required"
+versionRange="${range}"
+`).join('')));
+  return zip.toBuffer();
+}
 function fabric(id: string, version: string, deps: Record<string, any> = {}, extra: Record<string, any> = {}, files: Record<string, Buffer> = {}) {
   const zip = new AdmZip();
   zip.addFile('fabric.mod.json', Buffer.from(JSON.stringify({ schemaVersion: 1, id, version, depends: deps, ...extra })));
@@ -535,3 +547,47 @@ test('NeoForge required/incompatible metadata and Forge client-only dependency d
   assert.deepEqual(mod.requirements.map(r => r.id), ['required']);
   assert.deepEqual(mod.conflicts.map(r => r.id), ['bad']);
 });
+
+// NeoForge's authoritative compatibility aliases are in VersionSupportMatrix:
+// https://maven.neoforged.net/releases/net/neoforged/fancymodloader/loader/4.0.42/loader-4.0.42-sources.jar
+test('ATM10 dependency preflight still passes after NeoForge installs and on subsequent starts', async t => {
+  const jar = neoforge('additional_lights', { minecraft: '[1.21,1.21.1)', neoforge: '[21.0,21.1)' });
+  const root = await pack(t, { 'additional_lights.jar': jar }, '');
+  const sources = new Fixtures({});
+  assert.equal(await detectModRuntime(root), undefined);
+  assert.deepEqual(await ensureModDependencies(root, sources), { installed: [] });
+
+  // The first launch installs NeoForge; later Start/Restart checks can now
+  // discover the exact Minecraft version from the installed launch arguments.
+  const installed = path.join(root, 'libraries/net/neoforged/neoforge/21.1.200');
+  await fs.mkdir(installed, { recursive: true });
+  await fs.writeFile(path.join(installed, 'unix_args.txt'), '--fml.mcVersion 1.21.1\n');
+  assert.deepEqual(await detectModRuntime(root), { minecraft: '1.21.1', loader: 'neoforge', loaderVersion: '21.1.200' });
+  for (let start = 0; start < 3; start++) {
+    assert.deepEqual(await ensureModDependencies(root, sources), { installed: [] });
+  }
+  assert.deepEqual(sources.requested, []);
+  assert.deepEqual(await fs.readFile(path.join(root, 'mods/additional_lights.jar')), jar);
+});
+
+test('NeoForge aliases also validate newly downloaded dependencies', async t => {
+  const root = await pack(t, { 'root.jar': neoforge('root', { library: '[1,)' }) },
+    'MINECRAFT_VERSION=1.21.1\nMODLOADER=NeoForge\nMODLOADER_VERSION=21.1.200\n');
+  const sources = new Fixtures({ library: [neoforge('library', { minecraft: '[1.21,1.21.1)', neoforge: '[21.0,21.1)' })] });
+  assert.deepEqual(await ensureModDependencies(root, sources), { installed: ['library-0.jar'] });
+});
+
+for (const { name, minecraft, loader, dependency, range } of [
+  { name: 'future Minecraft requirement', minecraft: '1.21.1', loader: 'NeoForge', dependency: 'minecraft', range: '[1.21.2,)' },
+  { name: 'other Minecraft patch', minecraft: '1.21.2', loader: 'NeoForge', dependency: 'minecraft', range: '[1.21,1.21.1)' },
+  { name: 'NeoForge range excluding both actual and alias', minecraft: '1.21.1', loader: 'NeoForge', dependency: 'neoforge', range: '[21.0.167,21.1)' },
+  { name: 'Forge does not inherit NeoForge aliases', minecraft: '1.21.1', loader: 'Forge', dependency: 'minecraft', range: '[1.21,1.21.1)' },
+]) {
+  test(`compatibility aliases still reject ${name}`, async t => {
+    const jar = loader === 'Forge' ? forge('root', '1', { [dependency]: range }) : neoforge('root', { [dependency]: range });
+    const root = await pack(t, { 'root.jar': jar }, `MINECRAFT_VERSION=${minecraft}\nMODLOADER=${loader}\nMODLOADER_VERSION=21.1.200\n`);
+    await assert.rejects(ensureModDependencies(root, new Fixtures({})), (error: any) =>
+      error.code === 'MOD_DEPENDENCY_UNRESOLVED' && error.reason.includes(`requires ${dependency}`));
+    assert.deepEqual(await fs.readFile(path.join(root, 'mods/root.jar')), jar);
+  });
+}
