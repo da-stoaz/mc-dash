@@ -14,9 +14,18 @@ export function ServerTitle({ server }: ServerTitleProps) {
   const hostname = formatHostname(server.subdomain, routerDomain);
 
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="min-w-0 w-full sm:w-auto sm:flex-1">
       <div className="space-y-2">
-        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight break-words">{server.name}</h1>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="min-w-0 text-2xl sm:text-3xl font-semibold tracking-tight break-words">{server.name}</h1>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <ServerStatusChip server={server} />
+            <SleepChip server={server} />
+            {server.restartRequired && (
+              <Chip color="warning" variant="flat" size="sm">Restart required</Chip>
+            )}
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="muted">Join address</span>
           {hostname ? (
@@ -26,15 +35,6 @@ export function ServerTitle({ server }: ServerTitleProps) {
             </>
           ) : (
             <span className="muted">Not configured</span>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <ServerStatusChip server={server} />
-          <SleepChip server={server} />
-          {server.restartRequired && (
-            <Chip color="warning" variant="flat" size="sm">
-              Restart required
-            </Chip>
           )}
         </div>
       </div>

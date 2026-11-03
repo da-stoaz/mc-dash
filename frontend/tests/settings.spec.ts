@@ -69,7 +69,7 @@ async function setup(page: Page, options: { running?: boolean; hardcore?: boolea
   });
   await page.goto(options.entry ?? '/servers/settings-test');
   if (!options.entry) await page.getByRole('tab', { name: 'Settings', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Server settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sunday survival', exact: true })).toBeVisible();
   return { patches, actions, errors };
 }
 
@@ -84,7 +84,7 @@ for (const mobile of [false, true]) {
     const { errors } = await setup(page);
     await expect(page).toHaveURL(/\/servers\/settings-test\?tab=settings$/);
     await expect(page.getByRole('link', { name: 'Back to server', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('banner').getByRole('button', { name: 'Start', exact: true })).toBeVisible();
     for (const name of ['General', 'Resources', 'Gameplay', 'Player access', 'Server pack & Java']) {
       await category(page, name);
       const heading = name === 'Server pack & Java' ? 'Server pack' : name;

@@ -17,7 +17,6 @@ import {
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ServerStatusChip } from '../../../components/ServerStatusChip';
 import { SettingsPanel } from '../../../components/server-details/SettingsPanel';
 import { ConsoleCard } from '../../../components/server-details/ConsoleCard';
 import { LifecycleToolbar } from '../../../components/server-details/LifecycleToolbar';
@@ -249,31 +248,25 @@ function ServerDetails() {
         <span className="muted">{sectionLabels[section]}</span>
       </div>
 
-      {section === 'settings' ? <header className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.03] p-5">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold">Server settings</h1>
-          <p className="mt-1 break-words text-sm muted">{server.name}</p>
-        </div>
-        <ServerStatusChip server={server} />
-      </header> : <div className="flex flex-wrap items-start justify-between gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
-      <ServerTitle server={server} />
+      <header className="flex flex-wrap items-start justify-between gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
+        <ServerTitle server={server} />
 
-      <div className="flex flex-wrap items-center gap-2">
-      <LifecycleToolbar
-        busy={busy}
-        canPrepare={canPrepare}
-        canStart={canStart}
-        canStop={canStop}
-        canRestart={canRestart}
-        controlsDisabled={controlsDisabled}
-        hasContainer={Boolean(server.containerId)}
-        onPrepare={() => invokeAction(server.id, 'prepare')}
-        onStart={() => invokeAction(server.id, 'start')}
-        onStop={() => setConfirmState('stop')}
-        onRestart={() => setConfirmState('restart')}
-      />
-      </div>
-      </div>}
+        <div className="flex flex-wrap items-center gap-2">
+        <LifecycleToolbar
+          busy={busy}
+          canPrepare={canPrepare}
+          canStart={canStart}
+          canStop={canStop}
+          canRestart={canRestart}
+          controlsDisabled={controlsDisabled}
+          hasContainer={Boolean(server.containerId)}
+          onPrepare={() => invokeAction(server.id, 'prepare')}
+          onStart={() => invokeAction(server.id, 'start')}
+          onStop={() => setConfirmState('stop')}
+          onRestart={() => setConfirmState('restart')}
+        />
+        </div>
+      </header>
 
       <FailureBanner message={server.lastError} />
 
