@@ -60,7 +60,7 @@ export function ActionButtons({ server, busy, onAction, onDeleteServer, align = 
     <div className={`flex items-center gap-2 whitespace-nowrap ${align === 'end' ? 'justify-end' : 'justify-start'}`}>
       <Button
         as={needsSetup ? Link : 'button'}
-        href={needsSetup ? `/servers/${server.id}?tab=settings#settings-pack` : undefined}
+        href={needsSetup ? `/servers/${server.id}?tab=settings&section=pack` : undefined}
         size="sm"
         className="min-w-24"
         color={canStop || stopping || restarting ? 'default' : needsPrepare || preparing ? 'warning' : 'success'}

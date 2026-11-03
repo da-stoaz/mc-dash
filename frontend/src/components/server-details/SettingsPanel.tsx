@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Check, ChevronDown, Cpu, Gamepad2, Loader2, Package, Settings2, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { ArrowLeft, ArrowRight, Check, ChevronDown, Cpu, Gamepad2, Loader2, Package, Settings2, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { Alert, Button, Divider, Input, Progress, Select, SelectItem, Switch, Textarea } from '@heroui/react';
 import { API_BASE, apiFetch, apiOperation } from '@/lib/api';
 import { getApiErrorMessage } from '@/lib/apiErrors';
@@ -115,15 +117,15 @@ function SettingsForm<T extends object>({ server, initial, toPatch, onUpdated, b
     </fieldset>
     {notice && <Alert color={notice.error ? 'danger' : 'success'} variant="flat"
       role={notice.error ? 'alert' : 'status'} className="mt-6" description={notice.text} />}
-    {(dirty || saving || notice) && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
-      <p className="text-xs muted" role="status">{dirty ? 'You have unsaved changes' : 'All changes saved'}</p>
+    <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+      <p className="text-xs muted" role="status">{dirty ? 'You have unsaved changes' : 'No unsaved changes'}</p>
       <div className="flex gap-2">
         <Button size="sm" type="button" variant="light" isDisabled={!dirty || saving || busy} onPress={() => {
           setDraft({ values: initial, baseline: initial }); setNotice(null);
         }}>Discard</Button>
         <Button size="sm" color="primary" type="submit" isDisabled={!dirty || saving || busy}>{saving && <Loader2 className="animate-spin" />} {saving ? 'Saving…' : 'Save changes'}</Button>
       </div>
-    </div>}
+    </div>
   </form>;
 }
 
@@ -294,7 +296,7 @@ function PackSettings({ server, busy, onUpdated, onPrepare }: Props) {
     : javaOptions.some(option => option.value === server.javaImage) ? server.javaImage : 'custom';
   return <>
     <Heading title="Server pack">Update your modpack and choose its Java runtime.</Heading>
-    <div className="grid items-start gap-6 lg:grid-cols-2">
+    <div className="space-y-6">
     <div>
     <div className="mb-6 flex items-center gap-3 rounded-lg border border-white/10 p-4">
       <div className="rounded-md bg-white/5 p-2.5"><Package size={20} className="muted" /></div>
@@ -332,7 +334,7 @@ function PackSettings({ server, busy, onUpdated, onPrepare }: Props) {
       {pending && <p role="status" className="text-xs text-amber-300">Your pack is uploaded. Prepare the server before starting it.</p>}
     </div>
     </div>
-    <div className="border-t border-white/10 pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+    <div className="border-t border-white/10 pt-6">
     <SettingsForm server={server} busy={busy || uploading || !stopped} onUpdated={onUpdated}
       initial={{ runtime: initialRuntime, custom: initialRuntime === 'custom' ? server.javaImage ?? '' : '' }}
       toPatch={values => ({ javaImage: values.runtime === 'auto' ? null : values.runtime === 'custom' ? values.custom.trim() : values.runtime })}>
@@ -354,31 +356,51 @@ function PackSettings({ server, busy, onUpdated, onPrepare }: Props) {
 }
 
 export function SettingsPanel(props: Props) {
-  return <section aria-label="Server settings" className="space-y-5">
-    <div>
-      <h2 className="text-base font-semibold">Server settings</h2>
-      <p className="mt-1 text-sm muted">All your server settings in one place. Save changes in each section.</p>
-      <nav aria-label="Jump to settings" className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-        <span className="muted">Jump to</span>
-        {sections.map(({ id, label }) => <a key={id} href={`#settings-${id}`}
-          className="rounded-sm text-cyan-300 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-cyan-400">
-          {id === 'resources' ? 'RAM & CPU' : id === 'pack' ? 'Server pack & Java' : label}
-        </a>)}
-      </nav>
-    </div>
-    <div className="grid items-start gap-5 xl:grid-cols-2">
-      {sections.map(({ id, label }) => <section key={id} id={`settings-${id}`} aria-label={label} tabIndex={-1}
-        className={`min-w-0 scroll-mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-5 focus-visible:outline-2 focus-visible:outline-cyan-400 ${id === 'pack' ? 'xl:col-span-2' : ''}`}>
+  const searchParams = useSearchParams();
+  const requested = searchParams.get('section') ?? 'general';
+  const active = sections.some(section => section.id === requested) ? requested : 'general';
+  const index = sections.findIndex(section => section.id === active);
+  const href = (id: string) => `/servers/${props.server.id}?tab=settings&section=${id}`;
+  const labelFor = (section: typeof sections[number]) => section.id === 'pack' ? 'Server pack & Java' : section.label;
+
+  return <section aria-label="Server settings" className="grid items-start gap-6 md:grid-cols-[220px_minmax(0,1fr)]">
+    <nav aria-label="Settings categories" className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-2 md:sticky md:top-6 md:grid-cols-1"
+      onKeyDown={event => {
+        const links = Array.from(event.currentTarget.querySelectorAll<HTMLAnchorElement>('a'));
+        const current = links.indexOf(document.activeElement as HTMLAnchorElement);
+        if (current < 0) return;
+        const direction = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? links.length - 1
+          : direction ? (current + direction + links.length) % links.length : null;
+        if (next !== null) { event.preventDefault(); links[next].focus(); }
+      }}>
+      {sections.map(section => <Link key={section.id} href={href(section.id)} scroll={false}
+        aria-current={active === section.id ? 'page' : undefined}
+        className={`flex min-h-11 items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-cyan-400 ${active === section.id ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
+        <section.icon size={17} className="shrink-0" aria-hidden="true" />{labelFor(section)}
+      </Link>)}
+    </nav>
+    <div className="min-w-0 space-y-5">
+      {sections.map(({ id, label }) => <section key={id} id={`settings-${id}`} aria-label={label} hidden={active !== id}
+        className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] p-5 sm:p-6">
         {id === 'general' && <GeneralSettings {...props} />}
         {id === 'gameplay' && <GameplaySettings {...props} />}
         {id === 'resources' && <ResourceSettings {...props} />}
         {id === 'players' && <PlayerSettings {...props} />}
         {id === 'pack' && <PackSettings {...props} />}
       </section>)}
+      {active === 'general' && <section aria-label="Delete server" className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-rose-500/20 bg-rose-500/5 p-5">
+        <div><h3 className="text-sm font-medium text-rose-300">Delete server</h3><p className="mt-1 text-xs leading-relaxed muted">Permanently remove this server, its worlds, and snapshots. This cannot be undone.</p></div>
+        <Button size="sm" type="button" variant="flat" color="danger" onPress={props.onDelete} isDisabled={props.busy} startContent={<Trash2 size={15} />}>Delete server</Button>
+      </section>}
+      <nav aria-label="Adjacent settings categories" className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        {index > 0 ? <Link href={href(sections[index - 1].id)} scroll={false} className="flex min-h-11 items-center gap-2 rounded-lg px-3 text-gray-400 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-cyan-400">
+          <ArrowLeft size={16} aria-hidden="true" />{labelFor(sections[index - 1])}
+        </Link> : <span />}
+        {index < sections.length - 1 && <Link href={href(sections[index + 1].id)} scroll={false} className="ml-auto flex min-h-11 items-center gap-2 rounded-lg px-3 text-gray-400 hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-cyan-400">
+          {labelFor(sections[index + 1])}<ArrowRight size={16} aria-hidden="true" />
+        </Link>}
+      </nav>
     </div>
-    <section aria-label="Delete server" className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-rose-500/20 bg-rose-500/5 p-5">
-      <div><h3 className="text-sm font-medium text-rose-300">Delete server</h3><p className="mt-1 text-xs leading-relaxed muted">Permanently remove this server, its worlds, and snapshots. This cannot be undone.</p></div>
-      <Button size="sm" type="button" variant="flat" color="danger" onPress={props.onDelete} isDisabled={props.busy} startContent={<Trash2 size={15} />}>Delete server</Button>
-    </section>
   </section>;
 }

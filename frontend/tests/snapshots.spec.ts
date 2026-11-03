@@ -331,7 +331,7 @@ test('restore status remains visible across polling errors and failure while awa
   await page.getByRole('tab', { name: 'Logs', exact: true }).click();
   state.job = { ...state.job, status: 'failed', finishedAt: new Date().toISOString(), error: 'Disk full. Existing server data has not been replaced.' };
   await page.getByRole('tab', { name: 'Snapshots', exact: true }).click();
-  const failure = page.getByRole('tabpanel', { name: 'Snapshots' }).getByRole('alert');
+  const failure = page.getByRole('alert').filter({ hasText: 'Restore failed' });
   await expect(failure).toContainText('Restore failed');
   await expect(failure).toContainText('Existing server data has not been replaced.');
   await expect(page.getByRole('button', { name: 'Restore', exact: true })).toBeEnabled();

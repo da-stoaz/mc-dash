@@ -67,6 +67,7 @@ test('RAM edit submits the total container limit without adding overhead', async
   await expect(page).toHaveURL(/\/servers\/offline\?tab=settings$/);
   await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'Settings categories', exact: true }).getByRole('link', { name: 'Resources', exact: true }).click();
   await page.getByLabel('RAM limit (MiB)', { exact: true }).fill('10000');
   await expect(page.getByText('Total container memory, including Java overhead.')).toBeVisible();
   await page.getByRole('region', { name: 'Resources', exact: true }).getByRole('button', { name: 'Save changes', exact: true }).click();
