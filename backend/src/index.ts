@@ -11,6 +11,7 @@ import { memoryPressureService } from './services/memoryPressureService';
 import { metricsCollector } from './services/metricsCollector';
 import { hibernationService } from './services/hibernationService';
 import { uploadStaging } from './services/uploadStaging';
+import { startContainerEvents } from './services/containerEvents';
 
 // Before anything binds a port: refuse to come up unauthenticated by accident.
 try {
@@ -72,3 +73,4 @@ metricsCollector.start();
 memoryPressureService.start();
 hibernationService.start();
 uploadStaging.start();
+startContainerEvents();

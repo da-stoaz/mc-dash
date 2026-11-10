@@ -107,7 +107,12 @@ function ServerDetails() {
     setHistory(emptyLiveHistory());
     setMetrics(null);
     let es: EventSource | null = null;
-    const prune = setInterval(() => setHistory(previous => mergeLiveHistory(previous, [])), 1000);
+    // Expire readings once the stream goes quiet; keep the same object when
+    // nothing expired so an idle tick doesn't re-render the charts.
+    const prune = setInterval(() => setHistory(previous => {
+      const next = mergeLiveHistory(previous, []);
+      return next.timestamps.length === previous.timestamps.length ? previous : next;
+    }), 1000);
 
     const connect = () => {
       if (es) return;

@@ -31,6 +31,10 @@ const CPU_FILL = 'rgba(34, 211, 238, 0.18)';
 const MEM_STROKE = '#3b82f6';
 const MEM_FILL = 'rgba(59, 130, 246, 0.18)';
 
+// The collector closes a 30s bucket on its first tick past the boundary, and
+// the coarser tiers are rebuilt from it in the same write.
+const BUCKET_FLUSH_DELAY_MS = 5000;
+
 const RANGE_LABELS: Record<MetricRange, string> = { '1h': '1h', '1d': '1d', '7d': '7d' };
 
 
@@ -199,43 +203,48 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
   const [tab, setTab] = useState<'live' | MetricRange>('live');
   const [rangeData, setRangeData] = useState<MetricsHistory | null>(null);
   const [rangeError, setRangeError] = useState(false);
-  const [now, setNow] = useState(Date.now);
+  const [fetchedAt, setFetchedAt] = useState(0);
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Fetch (and periodically refresh) persisted rollups when a range tab is active.
+  // Persisted rollups only change when a bucket closes, so refetch just after
+  // the next boundary of this range's resolution instead of on a fixed timer.
   useEffect(() => {
     if (tab === 'live' || !serverId) return;
     let active = true;
+    let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
+      let resolution = 30;
       try {
         const res = await apiFetch(`${API_BASE}/servers/${serverId}/metrics/history?range=${tab}`);
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as MetricsHistory;
+        resolution = data.resolution;
         if (active) {
           setRangeData(data);
+          setFetchedAt(Date.now());
           setRangeError(false);
         }
       } catch {
         if (active) setRangeError(true);
       }
+      if (!active) return;
+      const period = resolution * 1000;
+      timer = setTimeout(load, period - (Date.now() % period) + BUCKET_FLUSH_DELAY_MS);
     };
     setRangeData(null);
     setRangeError(false);
-    load();
-    const timer = setInterval(load, 30000);
+    void load();
     return () => {
       active = false;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, [tab, serverId]);
 
-  const liveWindow: [number, number] = [now - HISTORY_LIMIT * 1000, now];
-  const visibleCpu = history.cpu.filter((_, i) => history.timestamps[i] >= liveWindow[0] && history.timestamps[i] <= now);
-  const visibleMemory = history.memory.filter((_, i) => history.timestamps[i] >= liveWindow[0] && history.timestamps[i] <= now);
+  // The live window ends at the newest reading, not the browser clock, so the
+  // chart moves only when a sample arrives and its right edge is never empty.
+  const liveEnd = history.timestamps.at(-1) ?? 0;
+  const liveWindow: [number, number] = [liveEnd - HISTORY_LIMIT * 1000, liveEnd];
+  const visibleCpu = history.cpu.filter((_, i) => history.timestamps[i] >= liveWindow[0]);
+  const visibleMemory = history.memory.filter((_, i) => history.timestamps[i] >= liveWindow[0]);
   const cpuAvgLive = visibleCpu.length ? pct(mean(visibleCpu)) : '--';
   const memAvgLive = visibleMemory.length ? pct(mean(visibleMemory)) : '--';
 
@@ -297,7 +306,7 @@ export function MetricsCard({ serverId, metrics, players, status, history }: Met
               </div>
             ) : rangeError ? (
               <div role="status" className="py-12 text-center text-sm muted">Could not load history. Retrying automatically…</div>
-            ) : rangeData ? <HistoryView history={rangeData} now={now} /> : (
+            ) : rangeData ? <HistoryView history={rangeData} now={fetchedAt} /> : (
               <div role="status" className="py-12 text-center text-sm muted">Loading history…</div>
             )}
           </CardBody>

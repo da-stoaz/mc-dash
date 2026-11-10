@@ -863,6 +863,18 @@ export class DockerService {
     });
   }
 
+  /** Last lines of output, for explaining why a container died. */
+  async logTail(server: ServerRecord, lines: number): Promise<string> {
+    const container = await this.getContainer(server);
+    const raw = await container.logs({ stdout: true, stderr: true, follow: false, tail: lines });
+    return demuxDockerLogBuffer(Buffer.from(raw as unknown as Buffer)).trim();
+  }
+
+  /** Live die / oom / health_status events for Minecraft containers only. */
+  containerEvents(since?: number): Promise<NodeJS.ReadableStream> {
+    return this.docker.getEvents({ since, filters: { type: ['container'], event: ['die', 'oom', 'health_status'], label: ['io.mc-dash.role=minecraft'] } });
+  }
+
   async metrics(server: ServerRecord) {
     const container = await this.getContainer(server);
     const inspect = await container.inspect();
