@@ -35,8 +35,13 @@ export function mergeLiveHistory(previous: LiveMetricsHistory, samples: (ServerM
     if (Number.isFinite(sample.at) && sample.status === 'running') points.set(sample.at, sample);
   }
   const result = emptyLiveHistory();
-  const sorted = [...points.values()].filter(p => p.at <= now + 1000).sort((a, b) => a.at - b.at);
-  for (const point of retainLiveWindow(sorted, p => p.at, now).slice(-120)) {
+  const sorted = [...points.values()].sort((a, b) => a.at - b.at);
+  // The window is anchored to the newest reading (as the chart draws it), not
+  // the browser clock; the clock only expires everything once the stream has
+  // been quiet for a full window.
+  const end = sorted.at(-1)?.at ?? -Infinity;
+  const retained = end >= now - HISTORY_LIMIT * 1000 ? retainLiveWindow(sorted, p => p.at, end) : [];
+  for (const point of retained.slice(-120)) {
     result.timestamps.push(point.at);
     result.cpu.push(point.cpuPercent);
     result.memory.push(point.memoryPercent);

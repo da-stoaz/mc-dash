@@ -6,7 +6,7 @@ const sample = (at: number) => ({ at, status: 'running', cpuPercent: 25, memoryP
   cpuCores: 1, cpuCoresAvailable: 4, memoryBytes: 1024 ** 3, memoryLimitBytes: 2 * 1024 ** 3,
 } as ServerMetrics & { at: number });
 
-test('rolling history retains one boundary sample, deduplicates reconnects, and expires', () => {
+test('rolling history keeps one sample before the newest reading\'s window, deduplicates reconnects, and expires', () => {
   const start = 1_000_000;
   const samples = Array.from({ length: 15 }, (_, i) => sample(start - 70_000 + i * 5000));
   let history = mergeLiveHistory(emptyLiveHistory(), samples, start);
@@ -15,8 +15,9 @@ test('rolling history retains one boundary sample, deduplicates reconnects, and 
   for (let elapsed = 1000; elapsed <= 70_000; elapsed += 1000) {
     const now = start + elapsed;
     history = mergeLiveHistory(history, elapsed % 5000 === 0 ? [sample(now)] : [], now);
-    expect(history.timestamps[0]).toBeLessThan(now - 60_000);
-    expect(history.timestamps[1]).toBeGreaterThanOrEqual(now - 60_000);
+    const end = history.timestamps.at(-1)!;
+    expect(history.timestamps[0]).toBeLessThan(end - 60_000);
+    expect(history.timestamps[1]).toBeGreaterThanOrEqual(end - 60_000);
   }
   expect(mergeLiveHistory(history, [], start + 131_000).timestamps).toEqual([]);
   expect(mergeLiveHistory(emptyLiveHistory(), [sample(start - 80_000), sample(start)], start).timestamps).toEqual([start]);
@@ -144,4 +145,38 @@ test('TPS stays still between readings and advances only when a real sample arri
   const updatedPath = await line.getAttribute('d');
   await page.clock.runFor(4000);
   await expect(line).toHaveAttribute('d', updatedPath!);
+});
+
+test('CPU and memory stay still between readings and end at the newest sample', async ({ page }) => {
+  const { now } = await chartPage(page);
+  const lines = ['CPU usage', 'Memory usage'].map(label =>
+    page.getByRole('slider', { name: `${label} history. Use arrow keys to inspect samples.` }).locator('path[fill="none"]'));
+  const initial = await Promise.all(lines.map(line => line.getAttribute('d')));
+  for (const path of initial) expect(path).toMatch(/L 100 [\d.]+$/);
+
+  // The browser clock alone must not move the window ahead of the data.
+  await page.clock.runFor(4000);
+  for (const [i, line] of lines.entries()) await expect(line).toHaveAttribute('d', initial[i]!);
+
+  await emit(page, 'metrics', sample(now + 4000));
+  for (const [i, line] of lines.entries()) {
+    await expect(line).not.toHaveAttribute('d', initial[i]!);
+    await expect(line).toHaveAttribute('d', /L 100 [\d.]+$/);
+  }
+});
+
+test('range charts refetch when their next bucket closes', async ({ page }) => {
+  await chartPage(page);
+  let calls = 0;
+  await page.route(/metrics\/history\?range=1h/, route => {
+    calls++;
+    return route.fulfill({ json: { range: '1h', resolution: 30, points: [] } });
+  });
+  await page.getByRole('button', { name: '1h' }).click();
+  await expect.poll(() => calls).toBe(1);
+  const due = await page.evaluate(() => 30_000 - Date.now() % 30_000 + 5000);
+  await page.clock.runFor(due - 100);
+  expect(calls).toBe(1);
+  await page.clock.runFor(100);
+  await expect.poll(() => calls).toBe(2);
 });
