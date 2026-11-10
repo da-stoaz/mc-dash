@@ -24,7 +24,7 @@ export function FailureBanner({ message }: { message?: string | null }) {
         <p className="text-small font-semibold">Last attempt failed</p>
         {/* Pack errors can carry a path or a long library message, so let it wrap
             rather than pushing the card into a horizontal scroll on mobile. */}
-        <p className="text-small break-words opacity-90">{message}</p>
+        <p className="text-small whitespace-pre-wrap break-words opacity-90">{message}</p>
       </div>
     </div>
   );

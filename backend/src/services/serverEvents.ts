@@ -79,6 +79,12 @@ export function addStatusClient(res: Response) {
   });
 }
 
+/** Push a Docker-observed change now instead of waiting for the next poll. */
+export function pushServerChange(id: string) {
+  if (statusClients.size) void refreshStatuses();
+  if (detailRooms.has(id)) void refreshDetail(id);
+}
+
 // ---------------------------------------------------------------------------
 // Detail stream: per-server room broadcasting the record + live metrics.
 // ---------------------------------------------------------------------------
