@@ -2,11 +2,23 @@
   "name": "mc-dash",
   "version": "1.0.0",
   "private": true,
+  "description": "Self-hosted dashboard for running Minecraft servers from uploaded server packs in Docker",
+  "license": "AGPL-3.0-only",
+  "author": "da-stoaz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/da-stoaz/mc-dash.git"
+  },
+  "homepage": "https://github.com/da-stoaz/mc-dash#readme",
+  "bugs": {
+    "url": "https://github.com/da-stoaz/mc-dash/issues"
+  },
   "scripts": {
     "dev": "concurrently --kill-others --names backend,frontend --prefix-colors cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install",
+    "test:license": "node --test tests/license-headers.test.cjs",
     "test:deployment": "node --test tests/deployment-config.test.cjs",
     "test:deployment:runtime": "node --test tests/deployment-runtime.test.cjs",
     "test:deployment:host": "node --test tests/deployment-host.test.cjs"

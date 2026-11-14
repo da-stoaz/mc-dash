@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { test, expect, type Page } from '@playwright/test';
 
 async function setup(page: Page, state: string, status = 'running', populated = false) {

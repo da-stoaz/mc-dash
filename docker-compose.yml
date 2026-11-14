@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Production on Linux: this file plus one .env, two prebuilt panel images.
 #   docker compose pull && docker compose up -d
 # Host networking keeps the existing router and published Minecraft ports reachable.

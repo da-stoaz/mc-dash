@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-only
 // Real ZIP -> production HTTP API -> Docker -> ready -> stop -> ready again.
 // Never targets an existing backend. Every invocation owns a new data directory.
 import fs, { openAsBlob } from 'node:fs';

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 const { parentPort, workerData } = require('node:worker_threads');
 const { createWriteStream } = require('node:fs');
 const { pipeline } = require('node:stream/promises');

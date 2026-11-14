@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import serversRouter from './routes/servers';

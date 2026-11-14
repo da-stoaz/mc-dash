@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Runs the backend test suite, then builds, verifies and publishes the panel
 # images that docker-compose.yml pulls:
 #   ghcr.io/da-stoaz/mc-dash-backend, ghcr.io/da-stoaz/mc-dash-frontend
@@ -62,9 +64,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Deployment config tests
+      - name: License headers and deployment config tests
         run: |
           npm --prefix frontend ci
+          npm run test:license
           npm run test:deployment
           npm --prefix frontend run test:config
 
@@ -109,6 +112,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/mc-dash-backend
+          # GitHub reports the repository license as AGPL-3.0; keep the exact SPDX id.
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
@@ -121,6 +127,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/mc-dash-frontend
+          # GitHub reports the repository license as AGPL-3.0; keep the exact SPDX id.
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch

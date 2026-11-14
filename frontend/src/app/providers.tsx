@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 'use client';
 // HeroUI provider wrapper for Next.js
 import { HeroUIProvider, ToastProvider } from '@heroui/react';

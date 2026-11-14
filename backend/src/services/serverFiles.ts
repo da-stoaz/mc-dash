@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import fs from 'fs/promises';
 import { spawn } from 'child_process';
 import path from 'path';

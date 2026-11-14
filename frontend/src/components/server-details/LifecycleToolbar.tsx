@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Button } from '@heroui/react';
 import { Play, RefreshCw, Square, Wand2 } from 'lucide-react';
 import { DisabledAction } from '../DisabledAction';

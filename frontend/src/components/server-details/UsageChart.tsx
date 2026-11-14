@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Tooltip } from '@heroui/react';
 import { buildSparklineArea, buildSparklinePath, LIVE_GAP_MS } from './metricsUtils';

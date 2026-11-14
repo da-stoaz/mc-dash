@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // ---------------------------------------------------------------------------
 // The slice of the Minecraft protocol MC Dash speaks.
 //

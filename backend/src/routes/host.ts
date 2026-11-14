@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Router } from 'express';
 import { capacityReport } from '../services/hostCapacityService';
 import { toApiError } from '../apiErrors';

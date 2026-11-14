@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '/api';
 
 // Event other components (AuthGate) listen for to drop back to the login screen

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { dockerService } from './dockerService';
 import { serverStore } from '../serverStore';
 import { metricsStore, FINE_RESOLUTION, MetricBucket } from '../metricsStore';

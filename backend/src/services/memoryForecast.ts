@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 /** Conservative trend estimate: require three increasing samples over 20 seconds.
  * Drops, stale gaps, and changed limits reset the trend (including GC/restarts).
  */

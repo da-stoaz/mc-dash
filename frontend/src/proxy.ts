@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { NextResponse, type NextRequest } from 'next/server';
 
 // The browser always calls /api on the dashboard's own origin. Forward those

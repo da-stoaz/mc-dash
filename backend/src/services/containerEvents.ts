@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { serverStore } from '../serverStore';
 import { logger } from '../logger';
 import { dockerService } from './dockerService';

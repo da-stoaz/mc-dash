@@ -12,8 +12,17 @@
     "test:jvm-integration": "node -r ts-node/register --test src/services/jvmMemoryInspection.integration.ts"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "da-stoaz",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/da-stoaz/mc-dash.git",
+    "directory": "backend"
+  },
+  "homepage": "https://github.com/da-stoaz/mc-dash#readme",
+  "bugs": {
+    "url": "https://github.com/da-stoaz/mc-dash/issues"
+  },
   "type": "commonjs",
   "dependencies": {
     "@iarna/toml": "^2.2.5",

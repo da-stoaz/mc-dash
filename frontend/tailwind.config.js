@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 const { heroui } = require('@heroui/theme');
 
 /** @type {import('tailwindcss').Config} */
