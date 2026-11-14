@@ -8,7 +8,7 @@ const snapshot = { id: 'snap-1', serverId: server.id, label: 'Navigation backup'
 
 async function setup(page: Page, withSnapshot = false, serverStatus = 'stopped') {
   const currentServer = { ...server, status: serverStatus };
-  const state = { job: null as any, snapshots: (withSnapshot ? [snapshot] : []) as any[], listFailure: false, jobFailure: false, posts: 0, cancels: 0, cancelFailure: false, deletes: 0, restorePosts: 0, createSafetySnapshot: undefined as boolean | undefined,
+  const state = { job: null as any, snapshots: (withSnapshot ? [snapshot] : []) as any[], listFailure: false, jobFailure: false, posts: 0, cancels: 0, cancelFailure: false, deletes: 0, restorePosts: 0, createSafetySnapshot: undefined as boolean | undefined, schedule: { intervalDays: null as number | null, keep: 2 }, schedulePuts: [] as unknown[],
     holdList: null as null | (() => Promise<void>), holdPost: null as null | (() => Promise<void>) };
   await page.route(/(?:localhost:4000\/|\/api\/)/, async route => {
     const path = new URL(route.request().url()).pathname;
@@ -22,6 +22,13 @@ async function setup(page: Page, withSnapshot = false, serverStatus = 'stopped')
       if (state.cancelFailure) return json({ error: 'Could not cancel the snapshot' }, 503);
       state.job = { ...state.job, cancelRequested: true };
       return json(state.job, 202);
+    }
+    if (path.endsWith('/snapshots/schedule')) {
+      if (route.request().method() === 'PUT') {
+        state.schedulePuts.push(route.request().postDataJSON());
+        state.schedule = { ...state.schedule, ...route.request().postDataJSON() };
+      }
+      return json(state.schedule);
     }
     if (path.endsWith('/snapshots/job')) return state.jobFailure ? json({ error: 'Job status unavailable' }, 500) : json(state.job);
     if (path.endsWith(`/snapshots/${snapshot.id}`) && route.request().method() === 'DELETE') {
@@ -421,4 +428,23 @@ test('unknown job status on return is not presented as permission to start anoth
   state.jobFailure = false;
   state.job = { ...running };
   await expect(page.getByText(/^Creating snapshot$/)).toBeVisible({ timeout: 8000 });
+});
+
+test('automatic backups can be turned on and off, and scheduled snapshots are labelled', async ({ page }, testInfo) => {
+  const state = await setup(page);
+  state.snapshots = [{ ...snapshot, id: 'snap-auto', label: 'Scheduled backup', kind: 'scheduled' }];
+  const select = page.getByRole('button', { name: /Automatic backups/ });
+  await expect(select).toContainText('Off');
+  await select.click();
+  await page.getByRole('option', { name: 'Daily', exact: true }).click();
+  await expect.poll(() => state.schedulePuts).toEqual([{ intervalDays: 1 }]);
+  await expect(page.getByText(/^Last .* · Next/)).toBeVisible();
+  await page.getByRole('button', { name: 'How automatic backups work' }).hover();
+  await expect(page.getByText('If no files changed, the last archive is kept.')).toBeVisible();
+  await expect(page.getByText('scheduled', { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('backup-schedule.png'), fullPage: true });
+  await select.click();
+  await page.getByRole('option', { name: 'Off', exact: true }).click();
+  await expect.poll(() => state.schedulePuts).toEqual([{ intervalDays: 1 }, { intervalDays: null }]);
+  await expect(page.getByText(/^Last .* · Next/)).toHaveCount(0);
 });

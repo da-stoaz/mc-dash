@@ -12,7 +12,8 @@ import { metricsCollector } from './services/metricsCollector';
 import { hibernationService } from './services/hibernationService';
 import { uploadStaging } from './services/uploadStaging';
 import { startContainerEvents } from './services/containerEvents';
-import { removePartialSnapshots } from './services/snapshotService';
+import { removePartialSnapshots, assertSnapshotStorage } from './services/snapshotService';
+import { backupScheduler } from './services/backupScheduler';
 import { closeEventStreams } from './services/serverEvents';
 import { db } from './db';
 
@@ -104,3 +105,5 @@ hibernationService.start();
 uploadStaging.start();
 startContainerEvents();
 removePartialSnapshots().catch(err => logger.error({ err }, 'Could not remove incomplete snapshot archives'));
+assertSnapshotStorage().catch(err => logger.error({ err }, 'Snapshot drive unavailable; snapshots will fail until it is mounted'));
+backupScheduler.start();

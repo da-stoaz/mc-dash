@@ -80,7 +80,7 @@ export type ServerRecord = {
   game: { renderDistance?: number; entityBroadcastRangePercentage?: number; gameMode?: GameMode; difficulty?: Difficulty; seed?: string };
 };
 
-export type SnapshotKind = 'manual' | 'auto-pre-restore';
+export type SnapshotKind = 'manual' | 'auto-pre-restore' | 'scheduled';
 
 export type Snapshot = {
   id: string;
