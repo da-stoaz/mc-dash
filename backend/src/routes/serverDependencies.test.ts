@@ -15,6 +15,7 @@ const { UserFacingError } = require('../apiErrors');
 const { preparing } = require('../state');
 const capacity = require('../services/hostCapacityService');
 const { hibernationService } = require('../services/hibernationService');
+const safeStop = require('../services/safeStop');
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 function handler(action: string) {
@@ -32,6 +33,7 @@ function setup(t: any) {
   t.mock.method(dockerService, 'needsUserMigration', async () => false);
   t.mock.method(dockerService, 'start', async () => { calls.push('start'); return 'container'; });
   t.mock.method(dockerService, 'stop', async () => { calls.push('stop'); });
+  t.mock.method(safeStop, 'stopServerSafely', async () => { calls.push('stop'); return { saveConfirmed: true, jvmExited: true, killedRunningJvm: false }; });
   t.mock.method(capacity, 'assertCanStart', async () => {});
   t.mock.method(hibernationService, 'releasePort', async () => {});
   t.mock.method(prepare, 'ensurePreparedModDependencies', async () => { calls.push('check'); return { installed: [] }; });

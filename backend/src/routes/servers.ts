@@ -22,7 +22,7 @@ import { readVerifiedMemoryPool, requireMemoryPool } from '../services/memoryPoo
 import { preparing, lifecycleBusy } from '../state';
 import { refreshServerStatus } from '../services/serverStatus';
 import { addStatusClient, addDetailClient } from '../services/serverEvents';
-import { runServerRcon } from '../services/rconService';
+import { stopServerSafely, unsafeStopMessage } from '../services/safeStop';
 import { clearConsoleHistory, consoleHistory, forgetServerConsole, knownCommands, runConsoleCommand } from '../services/consoleService';
 import { assertCanStart, capacityReport, committedMbFor, floorMbFor } from '../services/hostCapacityService';
 import { hibernationService } from '../services/hibernationService';
@@ -991,37 +991,12 @@ router.post('/:id/stop', lifecycle(async (req, res) => {
     await hibernationService.releasePort(server.id);
     serverStore.update(server.id, { status: 'stopping' });
 
-    // Graceful shutdown: ask Minecraft to save the world and quit via its own
-    // `stop` console command over RCON, so the JVM's shutdown hook flushes every
-    // dimension to disk before the process dies (avoids the exit-137 mid-write
-    // corruption a bare `docker stop` SIGKILL caused).
-    //
-    // We can't rely on the *container* exiting on its own, though: pack start
-    // scripts (ServerPackCreator) run the JVM in a restart loop, so after a
-    // clean `stop` the wrapper immediately relaunches the server and PID 1 never
-    // dies. Waiting for a container exit there just burns the timeout and then a
-    // second `docker stop` SIGTERM window before Docker SIGKILLs the *relaunched*
-    // server mid-boot — slow, and back to exit 137.
-    //
-    // So: send `stop`, give a well-behaved (non-looping) pack a short window to
-    // exit cleanly on its own (exit 0), and otherwise hard-stop promptly. The
-    // world is already saved by the RCON `stop` above, so the short-timeout stop
-    // (escalating to kill) is safe and fast rather than a 30s + 30s hang.
-    //
-    // We gate on RCON reachability, not the command's result: MC closes the RCON
-    // socket as it shuts down without replying to `stop`, so runServerRcon
-    // resolves null even on success.
-    let exitedCleanly = false;
-    const rconReachable = (await dockerService.rconAddress(server)) !== null;
-    if (rconReachable) {
-      await runServerRcon(server, ['stop']);
-      exitedCleanly = await dockerService.waitForExit(server, 20_000);
-    }
-    if (!exitedCleanly) {
-      await dockerService.stop(server, { timeoutSec: rconReachable ? 5 : 30 });
-    }
-
-    const updated = serverStore.update(server.id, { status: 'stopped', hibernated: false });
+    // Save, ask Minecraft to stop, and wait for its JVM to exit before Docker
+    // is allowed to kill anything. See safeStop.ts.
+    const outcome = await stopServerSafely(server);
+    const warning = unsafeStopMessage(outcome);
+    if (warning) logger.warn({ serverId: server.id, outcome }, 'Server was stopped by force');
+    const updated = serverStore.update(server.id, { status: 'stopped', hibernated: false, ...(warning ? { lastError: warning } : {}) });
     res.json(updated);
   } catch (err: any) {
     logger.error({ err }, 'Stop failed');
@@ -1050,7 +1025,10 @@ router.post('/:id/restart', lifecycle(async (req, res) => {
     serverStore.update(server.id, { status: 'restarting', lastError: null });
     // Never add/remove JARs under a running JVM. A failed check leaves the
     // container stopped and returns the dependency error to the dashboard.
-    await dockerService.stop(server, { timeoutSec: 30 });
+    // Same save-first shutdown as Stop: a bare `docker stop` SIGKILLs pack
+    // scripts that run Java as a child, before the world is saved.
+    const outcome = await stopServerSafely(server);
+    if (outcome.killedRunningJvm) logger.warn({ serverId: server.id, outcome }, 'Server was stopped by force during restart');
     await ensurePreparedModDependencies(server);
     await hibernationService.releasePort(server.id);
     const containerId = await dockerService.start(server);
