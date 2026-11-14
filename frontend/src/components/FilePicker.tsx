@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@heroui/react';
 import { FileUp, Upload, X } from 'lucide-react';

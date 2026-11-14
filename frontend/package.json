@@ -13,8 +13,17 @@
     "test:config": "node --test ../tests/frontend-config.test.cjs"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "da-stoaz",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/da-stoaz/mc-dash.git",
+    "directory": "frontend"
+  },
+  "homepage": "https://github.com/da-stoaz/mc-dash#readme",
+  "bugs": {
+    "url": "https://github.com/da-stoaz/mc-dash/issues"
+  },
   "dependencies": {
     "@heroui/react": "^2.8.6",
     "@heroui/theme": "^2.4.24",

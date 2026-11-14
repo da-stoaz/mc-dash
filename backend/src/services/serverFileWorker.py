@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Descriptor-relative server file operations (Linux and macOS).
 
 Node does not expose openat/renameat. Python's standard-library dir_fd operations

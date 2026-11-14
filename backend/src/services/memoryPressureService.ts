@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { config } from '../config';
 import { logger } from '../logger';
 import { serverStore } from '../serverStore';

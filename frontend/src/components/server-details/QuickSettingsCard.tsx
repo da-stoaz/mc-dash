@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Button, Card, CardBody, CardHeader } from '@heroui/react';
 import { Pencil } from 'lucide-react';
 import type { ServerRecord } from '../../lib/serverTypes';

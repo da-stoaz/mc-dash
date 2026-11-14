@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Shared in-memory runtime state.
 //
 // `preparing` holds the ids of servers currently being prepared (unzip/build).

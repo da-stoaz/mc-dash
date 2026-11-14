@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { test, expect, type Page } from '@playwright/test';
 
 const server = { id: 'snapshot-test', name: 'Snapshot test server', status: 'stopped', serverPort: 25565,

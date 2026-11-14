@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type { Response } from 'express';
 import { refreshServerStatus } from './serverStatus';
 import { getPlayerCount } from './playerService';

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { ServerStatus } from './serverTypes';
 
 /** Mirrors CapacityReport in backend/src/services/hostCapacityService.ts. */

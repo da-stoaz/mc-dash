@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -15,6 +17,7 @@ import { uploadInChunks } from '../lib/chunkedUpload';
 import { Logo } from '../components/Logo';
 import { CapacityBar } from '../components/CapacityBar';
 import { HostCapacity } from '../lib/hostCapacity';
+import { SourceNotice } from '../components/SourceNotice';
 
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
@@ -361,6 +364,8 @@ export default function Page() {
           onAction={invokeAction}
           onDeleteServer={deleteServer}
         />
+
+        <SourceNotice />
       </div>
 
       <CreateModal

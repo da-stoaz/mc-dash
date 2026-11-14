@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { serverStorageUsage } from '../services/serverFiles';
 import { Router, raw, Request, RequestHandler } from 'express';
 import multer from 'multer';

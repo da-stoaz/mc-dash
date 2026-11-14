@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { dockerService } from './dockerService';
 import { sendRconCommands } from './rconClient';
 import { locateWorkingDir, readServerProperties, parseAccessEntry } from './prepareService';

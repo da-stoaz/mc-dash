@@ -193,3 +193,44 @@ reassembled; a short packet ends the response.
 - Add richer health checks (RCON or ping) and reflect in status.
 - Support per-server host ports and collision checks.
 - Add auth and validation on mutating endpoints.
+
+## License
+
+Copyright (C) 2025-2026 da-stoaz
+
+MC Dash is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3 only (`AGPL-3.0-only`). It is distributed in the
+hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+[LICENSE](LICENSE) for the full text.
+
+Each source file carries an `SPDX-License-Identifier: AGPL-3.0-only` header;
+`npm run test:license` checks that none is missing.
+
+What this means in practice:
+
+- You may run, study, modify and share MC Dash, including commercially.
+- If you distribute it, or a modified version, you must do so under the same
+  license and make the corresponding source code available.
+- If you run a **modified** version that other people use over a network, you
+  must offer those users its source code (AGPL section 13). The dashboard links
+  to the source in its footer; point `SOURCE_CODE_URL` in
+  [frontend/src/lib/project.ts](frontend/src/lib/project.ts) at your own
+  repository when you change the code.
+
+### Third-party software
+
+Dependencies keep their own licenses (mostly MIT, Apache-2.0, ISC and BSD); see
+each package in `node_modules`. The backend image also ships
+[jattach](https://github.com/jattach/jattach) (Apache-2.0), whose license is at
+`/usr/share/licenses/jattach/LICENSE` in the image.
+
+### Minecraft
+
+MC Dash is not an official Minecraft product and is not approved by or
+associated with Mojang or Microsoft. The Minecraft server software comes from
+the server packs you upload and is covered by the
+[Minecraft EULA](https://www.minecraft.net/eula). MC Dash writes `eula=true`
+for each server it prepares, so by running a server with MC Dash you accept
+that EULA on that server's behalf.

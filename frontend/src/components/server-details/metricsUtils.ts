@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type { ServerMetrics } from '../../lib/serverTypes';
 
 export const HISTORY_LIMIT = 60;

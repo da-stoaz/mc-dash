@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 'use client';
 
 import { Suspense, useEffect, useRef, useState } from 'react';
@@ -29,6 +31,7 @@ import { emptyLiveHistory, mergeLiveHistory, LiveMetricsHistory } from '../../..
 import { PlayerInfo, ServerMetrics, ServerRecord } from '../../../lib/serverTypes';
 import { getApiErrorMessage } from '../../../lib/apiErrors';
 import { API_BASE, apiFetch, apiOperation } from '../../../lib/api';
+import { SourceNotice } from '../../../components/SourceNotice';
 
 export default function ServerLayout({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<div className="page muted">Loading server…</div>}><ServerDetails />{children}</Suspense>;
@@ -339,6 +342,8 @@ function ServerDetails() {
           }}
         </ModalContent>
       </Modal>
+
+      <SourceNotice />
     </div>
   );
 }

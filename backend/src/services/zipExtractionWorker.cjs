@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // ZIP parsing and decompression are synchronous in adm-zip. Keep them off the
 // API event loop so job-status requests and the Minecraft router remain usable.
 const { workerData } = require('node:worker_threads');

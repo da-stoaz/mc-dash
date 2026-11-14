@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Explicit opt-in: build `docker build --target jattach -t mc-dash-jattach:inspection-check backend`
 // then npm run test:jvm-integration (DOCKER_SOCKET may select a local daemon).
 import { test, after } from 'node:test';
