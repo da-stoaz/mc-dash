@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { existsSync } from 'fs';
 import { db } from '../db';
 import { logger } from '../logger';
