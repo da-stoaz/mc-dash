@@ -747,7 +747,9 @@ export function parseRecommendedJavaMajor(recommended?: string): number | undefi
   return undefined;
 }
 
-async function getServerPackArchive(serverPackUrl: string, downloadsDir: string): Promise<string> {
+/** The uploaded pack archive, read in place. It stays in uploads/ as the server's
+ * source for later rebuilds, so it is never copied into the server folder. */
+function resolveServerPackArchive(serverPackUrl: string): string {
   if (serverPackUrl.startsWith('http://') || serverPackUrl.startsWith('https://')) {
     throw new Error('Remote URLs are not supported. Upload the server pack zip instead.');
   }
@@ -757,10 +759,7 @@ async function getServerPackArchive(serverPackUrl: string, downloadsDir: string)
   if (!fsSync.existsSync(resolved)) {
     throw new Error(`Server pack file not found at ${resolved}`);
   }
-  const dest = path.join(downloadsDir, path.basename(resolved));
-  await fs.copyFile(resolved, dest);
-  logger.info({ dest }, 'Copied server pack file');
-  return dest;
+  return resolved;
 }
 
 export async function prepareServer(server: ServerRecord): Promise<{
@@ -776,13 +775,15 @@ export async function prepareServer(server: ServerRecord): Promise<{
   }
 
   const serverRoot = path.join(config.dataRoot, 'servers', server.id);
-  const downloadsDir = path.join(serverRoot, 'downloads');
   const packDir = path.join(serverRoot, 'pack');
 
   await prepareServerFiles(server.id, false);
   await ensureDir(serverRoot);
-  await ensureDir(downloadsDir);
-  const zipPath = await getServerPackArchive(server.serverPackUrl, downloadsDir);
+  const zipPath = resolveServerPackArchive(server.serverPackUrl);
+  // Earlier versions copied the upload into downloads/ on every prepare and never
+  // removed it: a full duplicate of the pack that snapshots also archived. rm
+  // removes a symlink itself, never its target.
+  await fs.rm(path.join(serverRoot, 'downloads'), { recursive: true, force: true });
   const staging = await fs.mkdtemp(path.join(serverRoot, '.rebuild-'));
   const previous = path.join(serverRoot, '.pack-before-rebuild');
   if (await pathExists(previous)) {
@@ -865,7 +866,7 @@ export async function ensurePreparedModDependencies(server: ServerRecord) {
 
 /**
  * Delete everything a server owns on disk: its data root (world, pack,
- * downloads, snapshots) and the uploaded server-pack archive. Called when a
+ * snapshots) and the uploaded server-pack archive. Called when a
  * server record is deleted so worlds don't linger orphaned with no UI to
  * reclaim them. Best-effort — missing paths are ignored.
  */

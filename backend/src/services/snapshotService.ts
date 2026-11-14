@@ -101,6 +101,7 @@ async function writeArchive(root: string, entries: string[], archivePath: string
 // It is excluded from snapshots and preserved across restores so a server's
 // history is never archived into itself or wiped by a restore.
 const SNAPSHOTS_DIRNAME = 'snapshots';
+const PARTIAL_SUFFIX = '.partial';
 
 function serverRootDir(serverId: string): string {
   return path.join(config.dataRoot, 'servers', serverId);
@@ -143,6 +144,29 @@ function toPermissionError(err: NodeJS.ErrnoException, serverRoot: string): Erro
       `MC Dash user, so the world stays readable instead of re-breaking on the next save (see ` +
       `MC_CONTAINER_USER in DEPLOY.md).`
   );
+}
+
+/**
+ * Remove archives left behind by snapshots that a backend restart cut off. Run
+ * once at startup, before any snapshot can be in progress. Only regular
+ * `*.tar.gz.partial` files are removed; links and other entries are left alone.
+ */
+export async function removePartialSnapshots(): Promise<number> {
+  let removed = 0;
+  for (const server of serverStore.list()) {
+    // Jobs from before this start were marked failed at load; a running one is new.
+    if (getSnapshotJob(server.id)?.status === 'running') continue;
+    const dir = snapshotsDir(server.id);
+    const info = await fs.lstat(dir).catch(() => null);
+    if (!info?.isDirectory()) continue;
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.tar.gz' + PARTIAL_SUFFIX)) continue;
+      await fs.rm(path.join(dir, entry.name), { force: true });
+      removed++;
+      logger.warn({ serverId: server.id, file: entry.name }, 'Removed snapshot archive left incomplete by a restart');
+    }
+  }
+  return removed;
 }
 
 /**
@@ -204,6 +228,9 @@ async function archiveSnapshot(
 
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tar.gz`;
   const archivePath = path.join(dir, fileName);
+  // Written under a temporary name and renamed once complete, so an archive cut
+  // off by a backend restart is recognisable and swept at the next start.
+  const partialPath = archivePath + PARTIAL_SUFFIX;
 
   // Minecraft keeps recent play (block edits, movement, inventories) in memory
   // and only writes to disk on autosave or shutdown. For a *hot* snapshot we
@@ -226,7 +253,7 @@ async function archiveSnapshot(
         throw new Error('Could not flush the running server. Snapshot cancelled; retry when RCON is available or stop the server first.');
       }
       progress.onPhase?.('archiving', bytes);
-      bytes = await writeArchive(root, entries, archivePath, (written, finished) => {
+      bytes = await writeArchive(root, entries, partialPath, (written, finished) => {
         bytes = written;
         progress.onBytes(written, finished);
       }, signal);
@@ -246,6 +273,7 @@ async function archiveSnapshot(
     }
     signal?.throwIfAborted();
     progress.onPhase?.('finalizing', bytes);
+    await fs.rename(partialPath, archivePath);
     const stat = await fs.stat(archivePath);
     signal?.throwIfAborted();
     const record = serverStore.createSnapshot({
@@ -258,7 +286,7 @@ async function archiveSnapshot(
     logger.info({ serverId: server.id, snapshotId: record.id, sizeBytes: record.sizeBytes }, 'Created snapshot');
     return record;
   } catch (err) {
-    try { await fs.rm(archivePath, { force: true }); }
+    try { await Promise.all([fs.rm(partialPath, { force: true }), fs.rm(archivePath, { force: true })]); }
     catch (cleanupError) {
       throw new Error(`Could not remove the partial snapshot archive ${archivePath}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
     }

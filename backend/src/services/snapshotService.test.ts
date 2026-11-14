@@ -16,7 +16,7 @@ process.env.DATA_ROOT = TMP;
 process.env.SQLITE_PATH = path.join(TMP, 'test.sqlite');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { createSnapshot, restoreSnapshot, deleteSnapshot, importSnapshotArchive, cancelSnapshot, SnapshotCancelledError } = require('./snapshotService');
+const { createSnapshot, restoreSnapshot, deleteSnapshot, importSnapshotArchive, cancelSnapshot, SnapshotCancelledError, removePartialSnapshots } = require('./snapshotService');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { purgeServerData } = require('./prepareService');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -483,6 +483,40 @@ test('purgeServerData removes the server root and the uploaded pack', async () =
 
   assert.ok(!fs.existsSync(serverRoot(id)), 'server root should be gone');
   assert.ok(!fs.existsSync(upload), 'uploaded pack should be gone');
+});
+
+test('an archive keeps a temporary name until it is complete', async t => {
+  const id = 'srv-partial-name';
+  writeFile(id, 'world/level.dat', 'W');
+  const dir = path.join(serverRoot(id), 'snapshots');
+  let duringResume: string[] = [];
+  t.mock.method(require('./rconService'), 'runServerRcon', async (_server: any, batch: string[]) => {
+    if (batch[0] === 'save-on') duringResume = fs.readdirSync(dir);
+    return ['ok'];
+  });
+  const snap = await createSnapshot(fakeServer(id));
+  assert.deepEqual(duringResume, [snap.fileName + '.partial']);
+  assert.deepEqual(fs.readdirSync(dir), [snap.fileName]);
+});
+
+test('startup sweep removes only incomplete archives and skips running jobs', async t => {
+  const idle = 'srv-sweep-idle';
+  const busy = 'srv-sweep-busy';
+  const outside = path.join(TMP, 'outside-target.tar.gz.partial');
+  fs.writeFileSync(outside, 'not a snapshot');
+  for (const name of ['1-cut.tar.gz.partial', '2-done.tar.gz', 'notes.partial']) writeFile(idle, `snapshots/${name}`, 'x');
+  fs.symlinkSync(outside, path.join(serverRoot(idle), 'snapshots', '3-link.tar.gz.partial'));
+  writeFile(busy, 'snapshots/4-in-progress.tar.gz.partial', 'x');
+  t.mock.method(serverStore, 'list', () => [fakeServer(idle), fakeServer(busy), fakeServer('srv-sweep-none')]);
+  beginSnapshotJob(busy);
+  try {
+    assert.equal(await removePartialSnapshots(), 1);
+  } finally {
+    snapshotJobs.finishSnapshotJob(busy, null, null);
+  }
+  assert.deepEqual(fs.readdirSync(path.join(serverRoot(idle), 'snapshots')).sort(), ['2-done.tar.gz', '3-link.tar.gz.partial', 'notes.partial']);
+  assert.ok(fs.existsSync(outside));
+  assert.ok(fs.existsSync(path.join(serverRoot(busy), 'snapshots', '4-in-progress.tar.gz.partial')));
 });
 
 test('delete removes both the DB row and the archive file', async () => {

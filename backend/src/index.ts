@@ -12,6 +12,7 @@ import { metricsCollector } from './services/metricsCollector';
 import { hibernationService } from './services/hibernationService';
 import { uploadStaging } from './services/uploadStaging';
 import { startContainerEvents } from './services/containerEvents';
+import { removePartialSnapshots } from './services/snapshotService';
 
 // Before anything binds a port: refuse to come up unauthenticated by accident.
 try {
@@ -74,3 +75,4 @@ memoryPressureService.start();
 hibernationService.start();
 uploadStaging.start();
 startContainerEvents();
+removePartialSnapshots().catch(err => logger.error({ err }, 'Could not remove incomplete snapshot archives'));
