@@ -9,11 +9,11 @@ RUN npm ci
 
 COPY . .
 
-# The browser uses /api; Next proxies it to the backend. Both are build inputs.
+# The browser always uses /api; Next proxies it to the backend. The proxy target
+# compiled here is only a default: start.mjs repoints it from MC_DASH_BACKEND_URL
+# at container start, so one published image serves any backend port.
 ARG NEXT_PUBLIC_API_BASE_URL=/api
-ARG MC_DASH_BACKEND_URL=http://127.0.0.1:4000
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
-ENV MC_DASH_BACKEND_URL=$MC_DASH_BACKEND_URL
 RUN npm run build
 
 # --- Runtime stage ---
@@ -26,5 +26,5 @@ ENV NODE_ENV=production
 COPY --from=build /app ./
 
 EXPOSE 3000
-# Compose supplies the production bind address and port.
-CMD ["npm", "run", "start"]
+# Compose supplies the production bind address, port and backend URL.
+CMD ["node", "start.mjs"]

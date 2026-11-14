@@ -8,6 +8,8 @@ const { execFileSync } = require('node:child_process');
 // Build the :deployment-check images first (see DEPLOY.md). This uses disposable
 // storage and no Docker socket. Shared networking exercises the same loopback
 // proxy as production without requiring Docker Desktop's host networking option.
+// The frontend image is built for the default backend port (4000); running the
+// backend on 3301 proves start.mjs repoints the compiled /api rewrite at runtime.
 test('built panel images serve the UI and authenticate through /api', { timeout: 120_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-compose-runtime-'));
   const password = 'runtime$literal#password';
@@ -43,7 +45,7 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
     image: mc-dash-frontend:deployment-check
     restart: "no"
     network_mode: service:backend
-    command: ["node", "node_modules/next/dist/bin/next", "start", "--hostname", "0.0.0.0"]
+    command: ["node", "start.mjs", "--hostname", "0.0.0.0"]
 `);
     compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '60');
     const base = `http://${compose('port', 'backend', '3000').trim()}`;
