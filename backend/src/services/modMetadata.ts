@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { unzipSync } from 'fflate';
 import { parse } from '@iarna/toml';
 import fs from 'fs/promises';

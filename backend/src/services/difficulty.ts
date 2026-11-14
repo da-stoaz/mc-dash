@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Difficulty } from '../types';
 
 // Vanilla Minecraft difficulties, ordered to match the numeric values used by

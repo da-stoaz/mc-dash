@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { config } from './config';

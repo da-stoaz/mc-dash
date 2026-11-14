@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# SPDX-License-Identifier: AGPL-3.0-only
 
 # Small static attach client: reads effective VM flags from JREs without a JDK.
 FROM alpine:3.22 AS jattach
@@ -28,6 +29,8 @@ RUN npm run build
 
 # --- Runtime stage ---
 FROM node:22-bookworm-slim AS runtime
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.source="https://github.com/da-stoaz/mc-dash"
 WORKDIR /app
 ENV NODE_ENV=production
 

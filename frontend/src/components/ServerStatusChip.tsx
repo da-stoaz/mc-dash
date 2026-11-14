@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Chip } from '@heroui/react';
 import { CircleAlert, CircleCheck, CircleOff, Loader, Power, type LucideIcon } from 'lucide-react';
 import { formatServerStatus, statusColor, type ServerRecord } from '../lib/serverTypes';

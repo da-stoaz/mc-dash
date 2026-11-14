@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';

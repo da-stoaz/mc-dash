@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import Docker, { Container } from 'dockerode';
 import { PassThrough } from 'stream';
 import { randomUUID } from 'crypto';

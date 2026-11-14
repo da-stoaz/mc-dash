@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { serverStore } from '../serverStore';
 import { lifecycleBusy, preparing } from '../state';
 import type { ServerRecord } from '../types';

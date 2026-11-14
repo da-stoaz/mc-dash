@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Card, CardBody, CardHeader } from '@heroui/react';

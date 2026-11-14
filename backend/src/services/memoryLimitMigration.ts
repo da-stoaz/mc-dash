@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type Database from 'better-sqlite3';
 import { jvmOverheadMb } from './memoryPlan';
 

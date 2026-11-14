@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { Chip } from '@heroui/react';
 import type { ServerRecord } from '../../lib/serverTypes';
 import { CopyButton } from '../CopyButton';

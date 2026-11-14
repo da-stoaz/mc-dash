@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { API_BASE, apiFetch } from './api';
 import { extractApiErrorMessageFromText, getApiErrorMessage } from './apiErrors';
 

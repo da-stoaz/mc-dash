@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import path from 'path';
 import fs from 'fs/promises';
 import { Worker } from 'worker_threads';
