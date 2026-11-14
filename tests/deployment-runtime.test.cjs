@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
 // Build the :deployment-check images first (see DEPLOY.md). This uses disposable
 // storage and no Docker socket. Shared networking exercises the same loopback
@@ -104,6 +104,60 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
     const logout = await request('/api/auth/logout', { method: 'POST', headers });
     assert.equal(logout.status, 200);
     assert.match(logout.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);
+
+    // Every page, every asset the pages reference, and every static/public file
+    // in the image must be served (catches build output missing from the image).
+    const urls = new Set();
+    for (const pagePath of ['/', '/servers/example', '/servers/example/settings']) {
+      const response = await request(pagePath);
+      assert.equal(response.status, 200, pagePath);
+      for (const [, url] of (await response.text()).matchAll(/(?:src|href)="(\/[^"]+)"/g)) {
+        urls.add(url.replaceAll('&amp;', '&'));
+      }
+    }
+    assert.ok([...urls].some(url => url.startsWith('/_next/static/')), 'pages reference built assets');
+    const files = compose('exec', '-T', 'frontend', 'sh', '-c', 'cd /app && find .next/static public -type f')
+      .trim().split('\n');
+    assert.ok(files.some(file => file.startsWith('.next/static/')), 'image contains built assets');
+    for (const file of files) {
+      urls.add(file.startsWith('public/') ? file.slice('public'.length) : `/_next/${file.slice('.next/'.length)}`);
+    }
+    for (const url of urls) {
+      const response = await request(url);
+      await response.arrayBuffer();
+      assert.equal(response.status, 200, url);
+    }
+
+    // Both containers must exit on SIGTERM, not by Docker's kill after the timeout,
+    // the backend even with a live-update stream open.
+    const stop = service => {
+      const started = Date.now();
+      compose('stop', '--timeout', '20', service);
+      const ms = Date.now() - started;
+      assert.ok(ms < 10_000, `${service} stop took ${ms} ms`);
+      return compose('ps', '--all', '--format', '{{.ExitCode}}', service).trim();
+    };
+    assert.notEqual(stop('frontend'), '137', 'frontend was killed instead of shutting down');
+    // The backend listens on loopback only, so hold a stream open from inside it.
+    const holder = spawn('docker', [
+      'compose', '--project-name', `mc-deploy-test-${process.pid}`, '-f', 'docker-compose.yml', '-f', 'test.yml',
+      'exec', '-T', 'backend', 'node', '-e', `(async () => {
+        const base = 'http://127.0.0.1:' + process.env.PORT;
+        const login = await fetch(base + '/auth/login', { method: 'POST',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: process.env.MC_DASH_PASSWORD }) });
+        const open = await fetch(base + '/servers/stream', { headers: { cookie: login.headers.get('set-cookie').split(';')[0] } });
+        console.log('open ' + open.status);
+        for await (const chunk of open.body) void chunk;
+      })()`,
+    ], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+    await new Promise((resolve, reject) => {
+      holder.stdout.on('data', data => String(data).includes('open 200') && resolve());
+      holder.on('exit', () => reject(new Error('could not open a stream inside the backend')));
+      setTimeout(() => reject(new Error('timed out opening a stream inside the backend')), 15_000).unref();
+    });
+    assert.equal(stop('backend'), '0', 'backend did not shut down cleanly');
+    holder.kill();
+    assert.match(compose('logs', '--no-color', 'backend'), /Shutting down/);
   } catch (error) {
     let logs = '';
     try { logs = compose('logs', '--no-color', '--tail', '40'); } catch {}

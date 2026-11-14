@@ -155,3 +155,9 @@ export function addDetailClient(id: string, res: Response) {
     }
   });
 }
+
+/** End every open event stream, so the HTTP server can close on shutdown. */
+export function closeEventStreams() {
+  for (const res of statusClients) res.end();
+  for (const room of detailRooms.values()) for (const res of room.clients) res.end();
+}
