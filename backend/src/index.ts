@@ -13,6 +13,8 @@ import { hibernationService } from './services/hibernationService';
 import { uploadStaging } from './services/uploadStaging';
 import { startContainerEvents } from './services/containerEvents';
 import { removePartialSnapshots } from './services/snapshotService';
+import { closeEventStreams } from './services/serverEvents';
+import { db } from './db';
 
 // Before anything binds a port: refuse to come up unauthenticated by accident.
 try {
@@ -65,9 +67,35 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-app.listen(config.port, config.bindHost, () => {
+const server = app.listen(config.port, config.bindHost, () => {
   logger.info(`API listening on ${config.bindHost}:${config.port}`);
 });
+
+// `docker stop` sends SIGTERM. Node running as the container's PID 1 ignores it
+// unless handled, so Docker would kill the backend after its 10 s timeout.
+// Stop accepting requests, give in-flight ones a few seconds, close SQLite, exit.
+// Minecraft containers are separate and keep running.
+const SHUTDOWN_GRACE_MS = 8000;
+let shuttingDown = false;
+function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, 'Shutting down');
+  const exit = () => {
+    try {
+      db.close();
+    } catch (err) {
+      logger.warn({ err }, 'Could not close the database cleanly');
+    }
+    process.exit(0);
+  };
+  setTimeout(exit, SHUTDOWN_GRACE_MS);
+  server.close(exit);
+  closeEventStreams();
+  server.closeIdleConnections();
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);
 
 routerService.start();
 metricsCollector.start();

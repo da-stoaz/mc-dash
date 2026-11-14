@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
 // Build the :deployment-check images first (see DEPLOY.md). This uses disposable
 // storage and no Docker socket. Shared networking exercises the same loopback
@@ -128,14 +128,36 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
       assert.equal(response.status, 200, url);
     }
 
-    // The frontend must exit on SIGTERM, not by Docker's kill after the timeout.
-    // (The backend does not handle SIGTERM yet, so it is not checked here.)
-    const stopping = Date.now();
-    compose('stop', '--timeout', '20', 'frontend');
-    const stopMs = Date.now() - stopping;
-    assert.ok(stopMs < 10_000, `frontend stop took ${stopMs} ms`);
-    const exit = compose('ps', '--all', '--format', '{{.ExitCode}}', 'frontend').trim();
-    assert.notEqual(exit, '137', 'frontend was killed instead of shutting down');
+    // Both containers must exit on SIGTERM, not by Docker's kill after the timeout,
+    // the backend even with a live-update stream open.
+    const stop = service => {
+      const started = Date.now();
+      compose('stop', '--timeout', '20', service);
+      const ms = Date.now() - started;
+      assert.ok(ms < 10_000, `${service} stop took ${ms} ms`);
+      return compose('ps', '--all', '--format', '{{.ExitCode}}', service).trim();
+    };
+    assert.notEqual(stop('frontend'), '137', 'frontend was killed instead of shutting down');
+    // The backend listens on loopback only, so hold a stream open from inside it.
+    const holder = spawn('docker', [
+      'compose', '--project-name', `mc-deploy-test-${process.pid}`, '-f', 'docker-compose.yml', '-f', 'test.yml',
+      'exec', '-T', 'backend', 'node', '-e', `(async () => {
+        const base = 'http://127.0.0.1:' + process.env.PORT;
+        const login = await fetch(base + '/auth/login', { method: 'POST',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: process.env.MC_DASH_PASSWORD }) });
+        const open = await fetch(base + '/servers/stream', { headers: { cookie: login.headers.get('set-cookie').split(';')[0] } });
+        console.log('open ' + open.status);
+        for await (const chunk of open.body) void chunk;
+      })()`,
+    ], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+    await new Promise((resolve, reject) => {
+      holder.stdout.on('data', data => String(data).includes('open 200') && resolve());
+      holder.on('exit', () => reject(new Error('could not open a stream inside the backend')));
+      setTimeout(() => reject(new Error('timed out opening a stream inside the backend')), 15_000).unref();
+    });
+    assert.equal(stop('backend'), '0', 'backend did not shut down cleanly');
+    holder.kill();
+    assert.match(compose('logs', '--no-color', 'backend'), /Shutting down/);
   } catch (error) {
     let logs = '';
     try { logs = compose('logs', '--no-color', '--tail', '40'); } catch {}
