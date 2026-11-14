@@ -45,7 +45,9 @@ test('Compose uses one configuration, matching paths/ports, and no frontend secr
     assert.equal(frontend.network_mode, 'host');
     const data = backend.volumes.find(v => v.source === '/srv/existing-mc-data');
     assert.equal(data.target, data.source);
-    assert.equal(data.bind.create_host_path, false);
+    // Older Compose omits false from `config` output; absent means false there.
+    assert.equal(data.bind?.create_host_path ?? false, false);
+    assert.match(source, /create_host_path: false/);
     assert.equal(backend.cgroup_parent, undefined);
     assert.equal(frontend.cgroup_parent, undefined);
     fs.appendFileSync(path.join(dir, '.env'), 'MC_DASH_VERSION=sha-abc1234\n');
