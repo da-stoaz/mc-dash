@@ -38,7 +38,8 @@ test('Compose uses one configuration, matching paths/ports, and no frontend secr
     assert.equal(backend.build, undefined);
     assert.equal(frontend.build, undefined);
     assert.equal(frontend.environment.MC_DASH_BACKEND_URL, 'http://127.0.0.1:3301');
-    assert.deepEqual(frontend.command, ['node', 'start.mjs', '--hostname', '127.0.0.1']);
+    assert.equal(frontend.environment.HOSTNAME, '127.0.0.1');
+    assert.equal(frontend.command ?? null, null, 'the image runs Next\'s own server.js');
     assert.equal(backend.environment.MC_DASH_BIND_HOST, '127.0.0.1');
     assert.equal(backend.environment.MC_DASH_MEMORY_POOL, 'true');
     assert.equal(backend.network_mode, 'host');

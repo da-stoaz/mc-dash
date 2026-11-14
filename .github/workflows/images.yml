@@ -90,8 +90,11 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
-      - name: Runtime test (UI, /api proxy, login, uploads)
+      - name: Runtime test (UI, /api proxy, login, live updates, uploads)
         run: npm run test:deployment:runtime
+
+      - name: Production compose on Linux host networking
+        run: npm run test:deployment:host
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

@@ -79,7 +79,20 @@ docker image prune -f   # drop superseded image layers
 ```
 
 `.env` and host data are never touched by an update. `docker-compose.yml` rarely
-changes; when a release notes that it did, fetch it again with the `curl` above.
+changes; when a release notes that it did, fetch it again with the `curl` above
+**before** pulling.
+
+> **One-time step for the standalone frontend image:** images from this change on
+> run Next's `server.js` directly and no longer contain `start.mjs`. A compose
+> file that still runs `node start.mjs` must be replaced first (the new compose
+> file also works with older images):
+>
+> ```sh
+> cd ~/mc-dash
+> curl -fsSLO https://raw.githubusercontent.com/da-stoaz/mc-dash/main/docker-compose.yml
+> docker compose pull && docker compose up -d
+> ```
+
 Changing `.env` needs container recreation (`up -d`), not `restart`.
 
 Back up the SQLite database (`DATA_ROOT`, including any `-wal`/`-shm` files)
@@ -98,9 +111,10 @@ without explicitly choosing that recovery point.
 - Root `.env` is the only production configuration. `backend/.env` and
   `frontend/.env.local` are for local development and never enter the images.
 - The browser always calls `/api`; the frontend proxies it to the backend.
-  `MC_DASH_BACKEND_PORT` sets the backend's loopback port, and the frontend
-  container points its proxy there at startup (`frontend/start.mjs`), so the same
-  published image works with any port. Only `MC_DASH_BACKEND_URL` and the port
+  `MC_DASH_BACKEND_PORT` sets the backend's loopback port, and the frontend's
+  Next.js proxy ([`frontend/src/proxy.ts`](frontend/src/proxy.ts)) reads the
+  resulting `MC_DASH_BACKEND_URL` at runtime, so the same published image works
+  with any port. Only `MC_DASH_BACKEND_URL` and the port
   settings enter the frontend container; backend secrets do not.
 - The backend assigns managed working files to `MC_CONTAINER_USER` after pack
   preparation/restoration and before Minecraft starts. Root-owned leftovers are
@@ -137,17 +151,20 @@ npm --prefix frontend run test:config
 docker build -t mc-dash-backend:deployment-check backend
 docker build -t mc-dash-frontend:deployment-check frontend
 npm run test:deployment:runtime
+npm run test:deployment:host   # Linux only
 ```
 
 The runtime check requires Compose 2.24.4+ and starts disposable containers with
 temporary data and no Docker socket. It checks UI delivery, the real `/api` proxy,
-login with a special-character password, session cookies, database access, and
-an intact 64 MiB upload chunk. Next's proxy body limit accommodates the backend's
+login with a special-character password, session cookies, database access, live
+updates streaming through the proxy, and an intact 64 MiB upload chunk. Next's proxy body limit accommodates the backend's
 maximum supported chunk size (90 MiB plus 1 MiB slack).
 The frontend image is built for the default backend port while the test runs the
 backend on 3301, which proves the runtime proxy target works.
-It uses a shared container network namespace for Docker Desktop compatibility;
-it does not validate Linux host networking or the Minecraft memory slice.
+It uses a shared container network namespace for Docker Desktop compatibility.
+The host check runs the shipped `docker-compose.yml` with Linux host networking
+and verifies both panel ports answer on loopback only. Neither validates the
+Minecraft memory slice.
 
 ## Rebuild safety and temporary storage
 

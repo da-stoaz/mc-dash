@@ -9,22 +9,27 @@ RUN npm ci
 
 COPY . .
 
-# The browser always uses /api; Next proxies it to the backend. The proxy target
-# compiled here is only a default: start.mjs repoints it from MC_DASH_BACKEND_URL
-# at container start, so one published image serves any backend port.
+# The browser always uses /api; src/proxy.ts forwards it to the backend named by
+# MC_DASH_BACKEND_URL at runtime, so one published image serves any backend port.
 ARG NEXT_PUBLIC_API_BASE_URL=/api
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 RUN npm run build
 
 # --- Runtime stage ---
+# Only Next's standalone output: server.js with the traced subset of
+# node_modules, plus the static assets it serves. No dev dependencies, sources
+# or build cache.
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# server.js listens on HOSTNAME, which Docker otherwise sets to the container ID.
+# Compose sets the production bind address.
+ENV HOSTNAME=0.0.0.0
 
-# Copy the whole built app (node_modules, .next, package.json) so `next start`
-# has everything it needs regardless of whether a public/ dir exists.
-COPY --from=build /app ./
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
 
 EXPOSE 3000
-# Compose supplies the production bind address, port and backend URL.
-CMD ["node", "start.mjs"]
+# Compose supplies the production bind address (HOSTNAME), PORT and MC_DASH_BACKEND_URL.
+CMD ["node", "server.js"]
