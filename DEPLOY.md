@@ -7,7 +7,7 @@ self-hosted apps. No Git checkout, Node.js or image builds on the server:
 docker compose pull && docker compose up -d
 ```
 
-GitHub Actions ([images.yml](.github/workflows/images.yml)) tests and publishes
+GitHub Actions ([images.yml](.github/workflows/images.yml)) runs the backend tests, then tests and publishes
 two images on every push to `main` and every `v*` tag:
 
 | Image | Tags |
