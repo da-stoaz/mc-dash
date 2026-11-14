@@ -1,10 +1,13 @@
-# Production on Linux: one root .env, two containerized panel services.
+# Production on Linux: this file plus one .env, two prebuilt panel images.
+#   docker compose pull && docker compose up -d
 # Host networking keeps the existing router and published Minecraft ports reachable.
 # Both panel services remain OUTSIDE minecraft.slice. See DEPLOY.md.
+# To build the images from a checkout instead: add -f docker-compose.build.yml.
+name: mc-dash
+
 services:
   backend:
-    build: ./backend
-    image: mc-dash-backend
+    image: ghcr.io/da-stoaz/mc-dash-backend:${MC_DASH_VERSION:-latest}
     labels:
       io.mc-dash.role: backend
     restart: unless-stopped
@@ -35,12 +38,7 @@ services:
       retries: 3
 
   frontend:
-    build:
-      context: ./frontend
-      args:
-        NEXT_PUBLIC_API_BASE_URL: /api
-        MC_DASH_BACKEND_URL: http://127.0.0.1:${MC_DASH_BACKEND_PORT:-4000}
-    image: mc-dash-frontend
+    image: ghcr.io/da-stoaz/mc-dash-frontend:${MC_DASH_VERSION:-latest}
     labels:
       io.mc-dash.role: frontend
     restart: unless-stopped
@@ -50,7 +48,7 @@ services:
       NODE_ENV: production
       PORT: ${MC_DASH_FRONTEND_PORT:-3000}
       MC_DASH_BACKEND_URL: http://127.0.0.1:${MC_DASH_BACKEND_PORT:-4000}
-    command: ["node", "node_modules/next/dist/bin/next", "start", "--hostname", "${MC_DASH_FRONTEND_BIND_HOST:-127.0.0.1}"]
+    command: ["node", "start.mjs", "--hostname", "${MC_DASH_FRONTEND_BIND_HOST:-127.0.0.1}"]
     depends_on:
       backend:
         condition: service_healthy

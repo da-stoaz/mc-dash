@@ -2,9 +2,9 @@
 
 TypeScript/Express backend and Next.js frontend for managing Minecraft servers from uploaded server packs running in Docker.
 
-Production uses **Docker Compose with one root `.env`**. See [DEPLOY.md](DEPLOY.md)
-for setup and migration from host services. Per-app environment files below are
-for local development only.
+Production runs prebuilt images from GHCR: a folder with `docker-compose.yml` and
+`.env`, updated with `docker compose pull && docker compose up -d`. See
+[DEPLOY.md](DEPLOY.md). Per-app environment files below are for local development only.
 
 ## Features (current)
 - Persist server definitions (server pack file, RAM/CPU caps, render distance, game mode, seed) in SQLite.

@@ -1,147 +1,119 @@
 # Deploy MC Dash with Docker Compose
 
-Production uses **Docker Compose and one root `.env`**. The backend and Next.js
-frontend are containers. Minecraft containers are managed through the host Docker
-socket. No panel systemd units or production-only source patches are required.
-
-The root `package.json` is a development command runner. Backend and frontend have
-separate npm packages and lockfiles. Next.js's tracing and Turbopack roots are
-explicitly `frontend`; the parent lockfile does not select the app root.
-
-## Configuration and requirements
-
-- Linux host, Docker Engine, and Docker Compose v2 with `up --wait` support.
-- Rootful Docker using the systemd cgroup driver and cgroup v2, with
-  `minecraft.slice` installed for the shared Minecraft RAM ceiling.
-- Root `.env`: the sole production configuration; copy `.env.example` for a fresh install.
-- `backend/.env` and `frontend/.env.local`: local development only. Docker ignores
-  these files when building images. They do not configure the Compose deployment.
-- Existing data stays on the host and is mounted at its **same absolute path**.
-- Host networking allows the existing Minecraft router to reach published local
-  ports. Both panel containers remain outside `minecraft.slice`.
-- Frontend listens on loopback by default for a host reverse proxy or tunnel.
-  Set `MC_DASH_FRONTEND_BIND_HOST=0.0.0.0` for deliberate LAN access.
-
-The browser calls `/api`. The tracked `frontend/next.config.ts` forwards these
-requests to the backend. `MC_DASH_BACKEND_PORT` determines both the backend port
-and frontend proxy target. Rebuild the frontend when changing it. Do not copy or
-cherry-pick a host-specific `next.config.ts` onto production.
-
-Only explicitly listed frontend settings enter its container/build. Backend
-passwords and session secrets stay out of the frontend image. Dockerfiles use
-`npm ci` and the committed lockfiles; host `node_modules` are not used.
-
-## Fresh installation
-
-From the checkout:
+Production is **one folder with `docker-compose.yml` and `.env`**, like most
+self-hosted apps. No Git checkout, Node.js or image builds on the server:
 
 ```sh
-cp .env.example .env
+docker compose pull && docker compose up -d
+```
+
+GitHub Actions ([images.yml](.github/workflows/images.yml)) tests and publishes
+two images on every push to `main` and every `v*` tag:
+
+| Image | Tags |
+| --- | --- |
+| `ghcr.io/da-stoaz/mc-dash-backend` | `latest` (main), `sha-<short>`, `1.2.3` / `1.2` (tags) |
+| `ghcr.io/da-stoaz/mc-dash-frontend` | same |
+
+`MC_DASH_VERSION` in `.env` selects the tag (default `latest`). Pin a `sha-…` or
+version tag to hold a known-good build and to roll back.
+
+The backend manages Minecraft containers through the host Docker socket. The
+Compose project is named `mc-dash` regardless of the folder name.
+
+## Requirements
+
+- Linux host, Docker Engine, and Docker Compose v2.
+- Rootful Docker using the systemd cgroup driver and cgroup v2, with
+  [`minecraft.slice`](deploy/systemd/minecraft.slice) installed for the shared
+  Minecraft RAM ceiling (see [memory-pool.md](docs/memory-pool.md#explicit-ubuntu-configuration)).
+  Keep `MC_DASH_MEMORY_POOL=true`. The panel stays usable if verification fails,
+  but Minecraft starts are blocked.
+- Existing data stays on the host and is mounted at its **same absolute path**
+  (`DATA_ROOT`). The bind mount refuses to create a missing directory, so a typo
+  cannot silently start with empty data. Treat `DATA_ROOT` as fixed once servers
+  exist: Minecraft containers bind-mount absolute paths below it and are reused on
+  start, and uploaded packs are recorded by file path. It does not need to be next
+  to `docker-compose.yml`.
+- Host networking lets the Minecraft router reach published local ports. Both
+  panel containers stay outside `minecraft.slice`.
+
+## Install
+
+```sh
+mkdir -p ~/mc-dash && cd ~/mc-dash
+base=https://raw.githubusercontent.com/da-stoaz/mc-dash/main
+curl -fsSLO "$base/docker-compose.yml"
+curl -fsSL "$base/.env.example" -o .env
 chmod 600 .env
 ```
 
-Edit `.env`: set credentials, browser origin, absolute `DATA_ROOT`, and the
-Minecraft process `MC_CONTAINER_USER` as `uid:gid`. Create the data directory and
-give that user appropriate access. The bind mount refuses to create a missing
-host directory, preventing a typo from silently starting with empty data.
-Use single quotes around values containing `$` or `#` to preserve them literally
-in Compose configuration. Do not publish `.env` or output containing its values.
+Edit `.env`: credentials, browser origin, absolute `DATA_ROOT`, and the Minecraft
+process `MC_CONTAINER_USER` as numeric `uid:gid`. Create the data directory and
+give that user access. Use single quotes around values containing `$` or `#`.
+Never publish `.env` or output containing its values.
 
-Install and verify [the Minecraft RAM slice](docs/memory-pool.md#explicit-ubuntu-configuration)
-before starting Minecraft. Keep `MC_DASH_MEMORY_POOL=true`. The panel remains
-usable if verification fails, but Minecraft starts are blocked.
+Install the RAM slice once (while no Minecraft server runs):
+
+```sh
+curl -fsSL "$base/deploy/systemd/minecraft.slice" -o /tmp/minecraft.slice
+sudo install -m 0644 /tmp/minecraft.slice /etc/systemd/system/minecraft.slice
+sudoedit /etc/systemd/system/minecraft.slice   # choose MemoryMax
+sudo systemctl daemon-reload && sudo systemctl enable --now minecraft.slice
+```
+
+Then start:
 
 ```sh
 docker compose config --quiet
-docker compose build
+docker compose pull
 docker compose up -d --wait --wait-timeout 120
 ```
 
-## Migrate an existing host-process deployment
-
-Keep the Minecraft servers stopped throughout the cutover. Do not move data or
-change its ownership as part of this migration.
-
-1. **Record the actual running configuration.** Inspect the old panel units
-   locally: service user, working directory, executable, ports, environment files,
-   inline overrides, and reverse-proxy/tunnel target. Resolve relative `DATA_ROOT`
-   and `SQLITE_PATH` against the backend's current working directory. Confirm the
-   database and server directories exist there. Do not infer them from examples.
-2. **Back up configuration and state.** Save the old units, environment files,
-   deployed commit, and proxy configuration outside the checkout. Stop the old
-   panel services before making a consistent backup of the database (including
-   any SQLite WAL/SHM files) and server data. Keep the old services disabled only
-   after a successful cutover; do not uninstall them yet.
-3. **Create root `.env` from the example and transfer existing settings.** Preserve
-   the password, session secret, router domain/port, Java selection, upload limits,
-   and other backend overrides. Preserve the Minecraft uid:gid. Set `DATA_ROOT`
-   to the existing absolute data directory and `SQLITE_PATH` to the existing
-   database, inside that directory. If the database is outside it, stop here and
-   explicitly add its required same-path bind mount before deploying.
-4. **Preserve the network contract.** Set `MC_DASH_BACKEND_PORT` to the old API port
-   (for example `3301`) and `MC_DASH_FRONTEND_PORT` to the old dashboard port. Keep
-   the public browser origin and proxy/tunnel target unchanged. Set
-   `MC_DASH_MEMORY_POOL=true`. Check the Docker cgroup driver and install/verify
-   `minecraft.slice` using the RAM instructions linked above, while all
-   Minecraft servers remain stopped. Preserve an existing slice's chosen limit.
-5. **Build and start from the merged repository source.** Run the fresh-install
-   Compose commands above. Do not run the host npm services at the same time:
-   they would compete for the same ports and database.
-6. **Check before starting Minecraft.** Both containers must be healthy. Through
-   the existing dashboard URL, verify login, server list, snapshots, and data
-   paths. The frontend healthcheck also exercises `/api/health` through the actual
-   proxy. Verify the RAM pool is enforced and the panel is outside it. Rebuild
-   stopped Minecraft containers into the pool using the RAM migration guide.
-   Start one server, verify its slice membership, files/ownership and router
-   connection, then check a clean save and stop before starting the others.
-7. **Finish the cutover.** Disable the old panel services so they cannot return on
-   reboot. Archive old per-app runtime environment files outside the checkout;
-   keep root `.env` as the sole production source. Retain backups for rollback.
-
-### Rollback
-
-Stop the Compose panel containers with `docker compose down` (never delete data
-or volumes). Restore the saved application version/configuration and matching
-backend database backup if necessary, then start the old panel services. Never
-run both backends against the same database. Do not restore old world backups
-over newer player progress without explicitly choosing that recovery point.
-
-## Updates after migration
-
-The total-container-RAM update migrates stored limits while preserving existing
-ceilings. Back up SQLite before upgrading; rolling back to the previous heap-based
-version requires restoring the matching database backup. See
-[RAM settings and migration](docs/memory-pool.md).
-
-The backend now assigns managed working files to `MC_CONTAINER_USER` after pack
-preparation/restoration and before Minecraft starts. Keep numeric `uid:gid` in
-`.env`. Existing root-owned working files are repaired on the next stopped start;
-no rebuild or archive re-extraction is required solely to fix ownership. Linked
-or special files fail with an explicit error rather than being followed outside
-the server tree. Snapshot archives retain backend ownership.
+## Update
 
 ```sh
-git pull --ff-only
-docker compose config --quiet
-docker compose build
-docker compose up -d --wait --wait-timeout 120
+cd ~/mc-dash
+docker compose pull && docker compose up -d
+docker image prune -f   # drop superseded image layers
 ```
 
-Back up state before upgrades that change storage. Root `.env` and host data are
-not replaced by a Git update. A failed build leaves the existing containers alone.
-Changing runtime settings requires container recreation (`up -d`), not merely
-`restart`. The browser API path is always `/api`; no per-host source edits are needed.
+`.env` and host data are never touched by an update. `docker-compose.yml` rarely
+changes; when a release notes that it did, fetch it again with the `curl` above.
+Changing `.env` needs container recreation (`up -d`), not `restart`.
 
-## Shared Minecraft RAM limit
+Back up the SQLite database (`DATA_ROOT`, including any `-wal`/`-shm` files)
+before updates that change storage. Rolling back across such a change requires
+the matching database backup. See [RAM settings and migration](docs/memory-pool.md).
 
-The shared ceiling requires `minecraft.slice` and `MC_DASH_MEMORY_POOL=true`.
-Both are part of this production upgrade. Follow
-[the RAM migration instructions](docs/memory-pool.md) while Minecraft servers
-are stopped. The slice groups only Minecraft workloads; the dashboard containers
-remain outside it. Setting the flag to false explicitly disables enforcement and
-is not a completed RAM-management deployment. Ubuntu/systemd and real-world
-save/recovery validation remains outstanding; the local container tests do not
-provide that evidence.
+### Roll back
+
+Set `MC_DASH_VERSION=sha-<previous>` (or a version tag) in `.env`, then
+`docker compose pull && docker compose up -d`. Never run two backends against the
+same database. Do not restore old world backups over newer player progress
+without explicitly choosing that recovery point.
+
+## Configuration notes
+
+- Root `.env` is the only production configuration. `backend/.env` and
+  `frontend/.env.local` are for local development and never enter the images.
+- The browser always calls `/api`; the frontend proxies it to the backend.
+  `MC_DASH_BACKEND_PORT` sets the backend's loopback port, and the frontend
+  container points its proxy there at startup (`frontend/start.mjs`), so the same
+  published image works with any port. Only `MC_DASH_BACKEND_URL` and the port
+  settings enter the frontend container; backend secrets do not.
+- The backend assigns managed working files to `MC_CONTAINER_USER` after pack
+  preparation/restoration and before Minecraft starts. Root-owned leftovers are
+  repaired on the next stopped start. Linked or special files fail with an
+  explicit error rather than being followed outside the server tree.
+
+## Build from source instead
+
+From a checkout, the build override builds both images locally instead of pulling:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build --wait
+```
 
 ## Public access
 
@@ -157,11 +129,13 @@ and `MC_DASH_COOKIE_SECURE=false`. For HTTPS use `MC_DASH_COOKIE_SECURE=true`.
 
 ## Verify deployment changes locally
 
+CI runs exactly these before publishing images:
+
 ```sh
 npm run test:deployment
 npm --prefix frontend run test:config
 docker build -t mc-dash-backend:deployment-check backend
-docker build -t mc-dash-frontend:deployment-check --build-arg MC_DASH_BACKEND_URL=http://127.0.0.1:3301 frontend
+docker build -t mc-dash-frontend:deployment-check frontend
 npm run test:deployment:runtime
 ```
 
@@ -170,6 +144,8 @@ temporary data and no Docker socket. It checks UI delivery, the real `/api` prox
 login with a special-character password, session cookies, database access, and
 an intact 64 MiB upload chunk. Next's proxy body limit accommodates the backend's
 maximum supported chunk size (90 MiB plus 1 MiB slack).
+The frontend image is built for the default backend port while the test runs the
+backend on 3301, which proves the runtime proxy target works.
 It uses a shared container network namespace for Docker Desktop compatibility;
 it does not validate Linux host networking or the Minecraft memory slice.
 
