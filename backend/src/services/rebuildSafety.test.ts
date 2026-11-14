@@ -51,6 +51,17 @@ test('bundled saves cannot overwrite existing progress or merge obsolete chunks 
   assert.equal(fs.existsSync(path.join(f.pack, 'world/region/obsolete.mca')), false);
 });
 
+test('prepare extracts the upload in place and removes legacy pack copies', async t => {
+  const f = fixture(t, 'in-place', { 'start.sh': 'echo new' });
+  f.write('start.sh', 'echo old');
+  const legacy = path.join(path.dirname(f.pack), 'downloads', 'in-place.zip');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true }); fs.writeFileSync(legacy, 'stale copy');
+  await prepareServer(f.server);
+  assert.equal(f.read('start.sh'), 'echo new');
+  assert.deepEqual(fs.readdirSync(path.dirname(f.pack)).sort(), ['pack']);
+  assert.ok(fs.existsSync(f.archive), 'the upload stays as the source for later rebuilds');
+});
+
 for (const failure of ['corrupt-zip', 'missing-launcher', 'image', 'world-copy', 'container']) {
   test(`failed rebuild preserves the complete old installation: ${failure}`, async t => {
     const f = fixture(t, failure, failure === 'missing-launcher' ? { 'notes.txt': 'no launcher' } : { 'start.sh': 'echo new' });
@@ -63,7 +74,7 @@ for (const failure of ['corrupt-zip', 'missing-launcher', 'image', 'world-copy',
     assert.equal(f.read('start.sh'), 'echo old');
     assert.equal(f.read('custom/level.dat'), 'progress');
     assert.equal(f.read('server.properties'), 'level-name=custom');
-    assert.deepEqual(fs.readdirSync(path.dirname(f.pack)).sort(), ['downloads', 'pack']);
+    assert.deepEqual(fs.readdirSync(path.dirname(f.pack)).sort(), ['pack']);
   });
 }
 
