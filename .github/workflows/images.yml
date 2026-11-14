@@ -1,7 +1,10 @@
-# Builds, verifies and publishes the panel images that docker-compose.yml pulls:
+# Runs the backend test suite, then builds, verifies and publishes the panel
+# images that docker-compose.yml pulls:
 #   ghcr.io/da-stoaz/mc-dash-backend, ghcr.io/da-stoaz/mc-dash-frontend
 # main -> :latest, :main, :sha-<short>   tag v1.2.3 -> :1.2.3, :1.2
-name: Images
+# Pull requests run everything except publishing. Images are never published
+# from a commit whose backend tests fail.
+name: CI
 
 on:
   push:
@@ -22,7 +25,33 @@ env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
+  backend-tests:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same Node major as the backend image.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      # File operations use python3 (preinstalled on the runner), as in the image.
+      - name: Test
+        run: npm test
+
   images:
+    needs: backend-tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
