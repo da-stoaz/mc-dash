@@ -7,6 +7,7 @@ import { API_BASE, apiFetch, apiOperation } from '../../lib/api';
 import { getApiErrorMessage } from '../../lib/apiErrors';
 import { Snapshot, ServerStatus } from '../../lib/serverTypes';
 import { DisabledAction } from '../DisabledAction';
+import { BackupSchedule } from './BackupSchedule';
 
 type SnapshotsCardProps = {
   serverId: string;
@@ -274,6 +275,7 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
+        <BackupSchedule serverId={serverId} snapshots={snapshots} />
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Input
             size="sm"
@@ -375,6 +377,11 @@ export function SnapshotsCard({ serverId, status, onRestored }: SnapshotsCardPro
                     {snap.kind === 'auto-pre-restore' && (
                       <Chip size="sm" variant="flat" color="warning">
                         auto-backup
+                      </Chip>
+                    )}
+                    {snap.kind === 'scheduled' && (
+                      <Chip size="sm" variant="flat" color="secondary">
+                        scheduled
                       </Chip>
                     )}
                   </div>

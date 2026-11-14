@@ -8,6 +8,11 @@ const dataRoot = process.env.DATA_ROOT
   ? path.resolve(process.cwd(), process.env.DATA_ROOT)
   : path.resolve(__dirname, '..', 'data');
 const defaultSqlitePath = path.join(dataRoot, 'mc-dash.sqlite');
+// Optional separate drive (e.g. an NFS share) for snapshot archives. Unset keeps
+// them in each server's own folder under DATA_ROOT.
+const snapshotRoot = process.env.SNAPSHOT_ROOT?.trim()
+  ? path.resolve(process.cwd(), process.env.SNAPSHOT_ROOT.trim())
+  : null;
 
 const homeSocket = process.env.HOME ? path.join(process.env.HOME, '.docker', 'run', 'docker.sock') : null;
 const defaultDockerSocketPath = (() => {
@@ -216,6 +221,7 @@ export const config = {
   dockerTlsVerify: process.env.DOCKER_TLS_VERIFY,
   dockerApiVersion: process.env.DOCKER_API_VERSION,
   dataRoot,
+  snapshotRoot,
   maxUploadBytes: maxUploadMb * 1024 * 1024,
   uploadDiskFactor,
   uploadDiskMinFreeBytes: uploadDiskMinFreeMb * 1024 * 1024,

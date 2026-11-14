@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs/promises';
-import { createReadStream } from 'fs';
+import { createReadStream, existsSync } from 'fs';
+import { createHash } from 'crypto';
 import { pipeline } from 'stream/promises';
 import { Worker } from 'worker_threads';
 import { prepareServerFiles } from './serverFiles';
@@ -107,12 +108,68 @@ function serverRootDir(serverId: string): string {
   return path.join(config.dataRoot, 'servers', serverId);
 }
 
-function snapshotsDir(serverId: string): string {
+// With SNAPSHOT_ROOT set, archives live on that drive as <root>/<serverId>/.
+// Archives made before it was set stay in the server folder and are still found.
+const STORAGE_MARKER = '.mc-dash-snapshots';
+
+function legacySnapshotsDir(serverId: string): string {
   return path.join(serverRootDir(serverId), SNAPSHOTS_DIRNAME);
 }
 
+function snapshotsDir(serverId: string): string {
+  return config.snapshotRoot ? path.join(config.snapshotRoot, serverId) : legacySnapshotsDir(serverId);
+}
+
 export function snapshotFilePath(serverId: string, fileName: string): string {
-  return path.join(snapshotsDir(serverId), fileName);
+  const current = path.join(snapshotsDir(serverId), fileName);
+  if (!config.snapshotRoot || existsSync(current)) return current;
+  const legacy = path.join(legacySnapshotsDir(serverId), fileName);
+  return existsSync(legacy) ? legacy : current;
+}
+
+/** Remove a deleted server's archives from the snapshot drive. */
+export async function removeServerSnapshots(serverId: string): Promise<void> {
+  if (config.snapshotRoot && serverId) await fs.rm(path.join(config.snapshotRoot, serverId), { recursive: true, force: true });
+}
+
+/**
+ * An unmounted network share is just an empty local folder. Writing there would
+ * fill the local disk with "backups" that vanish when the share is mounted, so
+ * the drive must carry a marker file that the operator created once.
+ */
+export async function assertSnapshotStorage(): Promise<void> {
+  if (!config.snapshotRoot) return;
+  if (await pathExists(path.join(config.snapshotRoot, STORAGE_MARKER))) return;
+  throw new Error(
+    `The snapshot drive is not available: ${config.snapshotRoot} has no ${STORAGE_MARKER} file. ` +
+    'Check that the network share is mounted, then restart MC Dash if it was mounted after MC Dash started.'
+  );
+}
+
+/**
+ * A cheap summary of the files a snapshot would archive: every path with its
+ * size and modification time. Equal fingerprints mean nothing was written in
+ * between, so an existing archive still matches the server.
+ */
+export async function fingerprintServerFiles(serverId: string): Promise<string> {
+  const hash = createHash('sha256');
+  const walk = async (dir: string, relative: string): Promise<void> => {
+    const entries = (await fs.readdir(dir, { withFileTypes: true }))
+      .filter(entry => relative || entry.name !== SNAPSHOTS_DIRNAME)
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const stats = await Promise.all(entries.map(entry => entry.isDirectory() ? null : fs.lstat(path.join(dir, entry.name))));
+    for (const [index, entry] of entries.entries()) {
+      const name = relative ? `${relative}/${entry.name}` : entry.name;
+      const stat = stats[index];
+      if (stat) hash.update(`${JSON.stringify(name)} ${stat.size} ${stat.mtimeMs}\n`);
+      else {
+        hash.update(`${JSON.stringify(name)}/\n`);
+        await walk(path.join(dir, entry.name), name);
+      }
+    }
+  };
+  await walk(serverRootDir(serverId), '');
+  return hash.digest('hex');
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -156,14 +213,15 @@ export async function removePartialSnapshots(): Promise<number> {
   for (const server of serverStore.list()) {
     // Jobs from before this start were marked failed at load; a running one is new.
     if (getSnapshotJob(server.id)?.status === 'running') continue;
-    const dir = snapshotsDir(server.id);
-    const info = await fs.lstat(dir).catch(() => null);
-    if (!info?.isDirectory()) continue;
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.tar.gz' + PARTIAL_SUFFIX)) continue;
-      await fs.rm(path.join(dir, entry.name), { force: true });
-      removed++;
-      logger.warn({ serverId: server.id, file: entry.name }, 'Removed snapshot archive left incomplete by a restart');
+    for (const dir of new Set([snapshotsDir(server.id), legacySnapshotsDir(server.id)])) {
+      const info = await fs.lstat(dir).catch(() => null);
+      if (!info?.isDirectory()) continue;
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.tar.gz' + PARTIAL_SUFFIX)) continue;
+        await fs.rm(path.join(dir, entry.name), { force: true });
+        removed++;
+        logger.warn({ serverId: server.id, file: entry.name }, 'Removed snapshot archive left incomplete by a restart');
+      }
     }
   }
   return removed;
@@ -178,7 +236,7 @@ export async function removePartialSnapshots(): Promise<number> {
  */
 export async function createSnapshot(
   server: ServerRecord,
-  options: { label?: string | null; kind?: SnapshotKind } = {}
+  options: SnapshotOptions = {}
 ): Promise<SnapshotRecord> {
   beginSnapshotJob(server.id);
   const controller = new AbortController();
@@ -201,9 +259,16 @@ export async function createSnapshot(
   }
 }
 
+type SnapshotOptions = {
+  label?: string | null;
+  kind?: SnapshotKind;
+  /** fingerprintServerFiles() taken just before, while the server was stopped. */
+  fingerprint?: string | null;
+};
+
 async function archiveSnapshot(
   server: ServerRecord,
-  options: { label?: string | null; kind?: SnapshotKind },
+  options: SnapshotOptions,
   progress: ArchiveProgress,
   signal?: AbortSignal
 ): Promise<SnapshotRecord> {
@@ -217,6 +282,7 @@ async function archiveSnapshot(
   // an archive that cannot be restored, before disabling Minecraft autosaves.
   await prepareServerFiles(server.id, false, signal);
   signal?.throwIfAborted();
+  await assertSnapshotStorage();
   const dir = snapshotsDir(server.id);
   await fs.mkdir(dir, { recursive: true });
 
@@ -282,6 +348,7 @@ async function archiveSnapshot(
       fileName,
       sizeBytes: stat.size,
       kind: options.kind ?? 'manual',
+      fingerprint: options.fingerprint ?? null,
     });
     logger.info({ serverId: server.id, snapshotId: record.id, sizeBytes: record.sizeBytes }, 'Created snapshot');
     return record;

@@ -13,7 +13,8 @@ import { logger } from '../logger';
 import { applyConfigFiles, prepareServer, recreateContainer, purgeServerData, ensurePreparedModDependencies } from '../services/prepareService';
 import { syncBlacklistLive } from '../services/accessControlService';
 import { getDifficultyOptions, syncDifficultyLive } from '../services/gameSettingsService';
-import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive, cancelSnapshot, SnapshotCancelledError } from '../services/snapshotService';
+import { createSnapshot, restoreSnapshot, deleteSnapshot, snapshotFilePath, importSnapshotArchive, cancelSnapshot, SnapshotCancelledError, removeServerSnapshots } from '../services/snapshotService';
+import { getBackupSchedule, setBackupSchedule, forgetBackupSchedule, MAX_INTERVAL_DAYS } from '../services/backupScheduler';
 import { getSnapshotJob } from '../services/snapshotJobStore';
 import { beginServerOperation, finishServerOperation, getServerOperation } from '../services/serverOperationStore';
 import { config } from '../config';
@@ -1047,7 +1048,13 @@ router.post('/:id/restart', lifecycle(async (req, res) => {
 router.get('/:id/storage', async (req, res, next) => {
   const server = serverStore.get(String(req.params.id));
   if (!server) return res.status(404).json({ error: 'Server not found' });
-  try { res.json(await serverStorageUsage(server.id)); }
+  try {
+    const usage = await serverStorageUsage(server.id);
+    if (!config.snapshotRoot) return res.json(usage);
+    // Archives on a separate snapshot drive are not in the server folder.
+    const snapshotsBytes = serverStore.listSnapshots(server.id).reduce((sum, snapshot) => sum + snapshot.sizeBytes, 0);
+    res.json({ ...usage, snapshotsBytes, totalBytes: usage.filesBytes + snapshotsBytes });
+  }
   catch (error) { next(error); }
 });
 
@@ -1231,6 +1238,7 @@ router.delete('/:id', lifecycle(async (req, res) => {
   // orphaned. Best-effort: a failure here shouldn't block removing the record.
   try {
     await purgeServerData(server);
+    await removeServerSnapshots(server.id);
   } catch (err: any) {
     logger.warn({ err, serverId: server.id }, 'Failed to purge server data during delete');
   }
@@ -1238,12 +1246,32 @@ router.delete('/:id', lifecycle(async (req, res) => {
   const removed = serverStore.delete(server.id);
   if (!removed) return notFound(res);
   forgetServerConsole(server.id);
+  forgetBackupSchedule(server.id);
   res.json({ ok: true });
 }));
 
 const snapshotCreateSchema = z.object({
   label: z.string().trim().max(200).optional(),
   background: z.boolean().optional(),
+});
+
+const backupScheduleSchema = z.object({
+  intervalDays: z.number().int().min(1).max(MAX_INTERVAL_DAYS).nullable(),
+});
+
+router.get('/:id/snapshots/schedule', (req, res) => {
+  if (!serverStore.get(req.params.id)) return notFound(res);
+  res.json(getBackupSchedule(req.params.id));
+});
+
+router.put('/:id/snapshots/schedule', (req, res, next) => {
+  try {
+    if (!serverStore.get(req.params.id)) return notFound(res);
+    const { intervalDays } = backupScheduleSchema.parse(req.body ?? {});
+    res.json(setBackupSchedule(req.params.id, intervalDays));
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.get('/:id/snapshots/job', (req, res) => {
