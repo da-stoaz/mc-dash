@@ -700,6 +700,42 @@ export class DockerService {
     await this.start(server);
   }
 
+  // Whether the container is running, and how it last exited when it is not.
+  // A missing container counts as not running.
+  async runState(server: ServerRecord): Promise<{ running: boolean; exitCode: number | null }> {
+    try {
+      const inspect = await (await this.getContainer(server)).inspect();
+      return {
+        running: !!inspect.State?.Running,
+        exitCode: inspect.State?.Running ? null : inspect.State?.ExitCode ?? null,
+      };
+    } catch (err) {
+      if ((err as { statusCode?: number })?.statusCode === 404) return { running: false, exitCode: null };
+      throw err;
+    }
+  }
+
+  // Host PIDs of the Java processes in a running container, read through
+  // Docker's `top` (no exec, nothing installed in the image). Lets a stop tell
+  // "this JVM finished shutting down" apart from "the container exited": pack
+  // scripts that relaunch the server in a loop keep the container alive after
+  // a clean Minecraft exit. Null when the process list cannot be read.
+  async javaProcessIds(server: ServerRecord): Promise<number[] | null> {
+    try {
+      const top = await (await this.getContainer(server)).top() as { Titles?: string[]; Processes?: string[][] };
+      const pidColumn = top.Titles?.indexOf('PID') ?? -1;
+      const commandColumn = top.Titles?.findIndex(title => title === 'CMD' || title === 'COMMAND') ?? -1;
+      if (pidColumn < 0 || commandColumn < 0 || !top.Processes) return null;
+      return top.Processes
+        .filter(row => /(?:^|\/)java(?:\s|$)/.test(row[commandColumn] ?? ''))
+        .map(row => Number(row[pidColumn]))
+        .filter(Number.isInteger);
+    } catch (err) {
+      logger.debug({ err, serverId: server.id }, 'Could not list container processes');
+      return null;
+    }
+  }
+
   // Resolve the RCON endpoint for a running server: its container bridge IP plus
   // the fixed RCON port. Returns null when the container isn't running or has no
   // reachable IP, so callers can fall back to restart-based config application.

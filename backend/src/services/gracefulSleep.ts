@@ -1,6 +1,7 @@
 import type { ServerRecord } from '../types';
 import { dockerService } from './dockerService';
 import { runServerRcon } from './rconService';
+import { WORLD_SAVED } from './safeStop';
 
 type Dependencies = {
   command: typeof runServerRcon;
@@ -16,7 +17,7 @@ export async function gracefulSleep(
   const saved = await deps.command(server, ['save-all flush'], { timeoutMs: 30_000 });
   // A response alone is not success: RCON also returns syntax and disk errors.
   // Unknown/modded responses fail closed until their save acknowledgement is supported.
-  if (!saved?.some(output => /\bSaved the (?:game|world)\b/i.test(output))) {
+  if (!saved?.some(output => WORLD_SAVED.test(output))) {
     throw new Error('World save was not confirmed. Automatic shutdown was cancelled; no forced stop was sent.');
   }
   if (!await beforeStop()) throw new Error('Server changed during saving. Automatic shutdown was cancelled.');
