@@ -104,7 +104,7 @@ export interface ServerUpdateInput {
   hibernated?: boolean;
 }
 
-export type SnapshotKind = 'manual' | 'auto-pre-restore';
+export type SnapshotKind = 'manual' | 'auto-pre-restore' | 'scheduled';
 
 export interface SnapshotRecord {
   id: string;
@@ -114,6 +114,8 @@ export interface SnapshotRecord {
   sizeBytes: number;
   kind: SnapshotKind;
   createdAt: string;
+  /** File listing fingerprint of a scheduled snapshot of a stopped server, or null. */
+  fingerprint?: string | null;
 }
 
 export interface SnapshotCreateInput {
@@ -122,4 +124,5 @@ export interface SnapshotCreateInput {
   fileName: string;
   sizeBytes: number;
   kind: SnapshotKind;
+  fingerprint?: string | null;
 }

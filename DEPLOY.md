@@ -121,6 +121,57 @@ without explicitly choosing that recovery point.
   repaired on the next stopped start. Linked or special files fail with an
   explicit error rather than being followed outside the server tree.
 
+## Snapshot drive (optional)
+
+By default, snapshots are stored in each server's folder under `DATA_ROOT`. To
+keep them on a separate drive, such as an NFS share on a NAS, mount the drive on
+the host and point `SNAPSHOT_ROOT` at it. Archives are then written to
+`SNAPSHOT_ROOT/<server id>/`. Snapshots taken before the change stay where they
+are and can still be downloaded and restored.
+
+1. Mount the share on the host. Find its export path with `showmount -e`:
+
+   ```sh
+   sudo apt install nfs-common
+   showmount -e <nas-ip>
+   sudo mkdir -p /mnt/mc-dash-snapshots
+   echo '<nas-ip>:<export-path> /mnt/mc-dash-snapshots nfs defaults,_netdev,nofail 0 0' | sudo tee -a /etc/fstab
+   sudo mount /mnt/mc-dash-snapshots
+   ```
+
+2. Create the marker file. This also checks that root can write to the share,
+   because the backend runs as root:
+
+   ```sh
+   sudo touch /mnt/mc-dash-snapshots/.mc-dash-snapshots
+   ```
+
+   Snapshots fail with "The snapshot drive is not available" when the marker is
+   missing. This stops MC Dash from writing archives to the empty local folder
+   of a share that is not mounted.
+
+3. Next to `docker-compose.yml`, create `docker-compose.override.yml`. Compose
+   reads it automatically:
+
+   ```yaml
+   services:
+     backend:
+       environment:
+         SNAPSHOT_ROOT: /mnt/mc-dash-snapshots
+       volumes:
+         - type: bind
+           source: /mnt/mc-dash-snapshots
+           target: /mnt/mc-dash-snapshots
+           bind:
+             create_host_path: false
+   ```
+
+   Then run `docker compose up -d`. If the share is mounted after the backend
+   has started, run `docker compose restart backend`, because the container
+   only sees mounts that were present when it started.
+
+Automatic backups are configured per server on its Snapshots tab.
+
 ## Build from source instead
 
 From a checkout, the build override builds both images locally instead of pulling:

@@ -108,6 +108,9 @@ db.prepare(
     createdAt TEXT NOT NULL
   )`
 ).run();
+if (!(db.prepare(`PRAGMA table_info(snapshots)`).all() as { name: string }[]).some(col => col.name === 'fingerprint')) {
+  db.prepare(`ALTER TABLE snapshots ADD COLUMN fingerprint TEXT`).run();
+}
 
 migrateMemoryLimits(db);
 
@@ -456,8 +459,8 @@ export class ServerStore {
     const id = randomUUID();
     const createdAt = new Date().toISOString();
     db.prepare(
-      `INSERT INTO snapshots (id, serverId, label, fileName, sizeBytes, kind, createdAt)
-       VALUES (@id, @serverId, @label, @fileName, @sizeBytes, @kind, @createdAt)`
+      `INSERT INTO snapshots (id, serverId, label, fileName, sizeBytes, kind, createdAt, fingerprint)
+       VALUES (@id, @serverId, @label, @fileName, @sizeBytes, @kind, @createdAt, @fingerprint)`
     ).run({
       id,
       serverId: input.serverId,
@@ -466,10 +469,17 @@ export class ServerStore {
       sizeBytes: input.sizeBytes,
       kind: input.kind,
       createdAt,
+      fingerprint: input.fingerprint ?? null,
     });
     const created = this.getSnapshot(id);
     if (!created) throw new Error('Failed to fetch created snapshot');
     return created;
+  }
+
+  /** Mark an existing archive as current again: the files have not changed since. */
+  touchSnapshot(id: string): SnapshotRecord | null {
+    db.prepare(`UPDATE snapshots SET createdAt = ? WHERE id = ?`).run(new Date().toISOString(), id);
+    return this.getSnapshot(id);
   }
 
   deleteSnapshot(id: string): boolean {
