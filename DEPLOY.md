@@ -31,7 +31,10 @@ Compose project is named `mc-dash` regardless of the folder name.
   but Minecraft starts are blocked.
 - Existing data stays on the host and is mounted at its **same absolute path**
   (`DATA_ROOT`). The bind mount refuses to create a missing directory, so a typo
-  cannot silently start with empty data.
+  cannot silently start with empty data. Treat `DATA_ROOT` as fixed once servers
+  exist: Minecraft containers bind-mount absolute paths below it and are reused on
+  start, and uploaded packs are recorded by file path. It does not need to be next
+  to `docker-compose.yml`.
 - Host networking lets the Minecraft router reach published local ports. Both
   panel containers stay outside `minecraft.slice`.
 
