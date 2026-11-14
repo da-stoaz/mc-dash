@@ -104,6 +104,38 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
     const logout = await request('/api/auth/logout', { method: 'POST', headers });
     assert.equal(logout.status, 200);
     assert.match(logout.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);
+
+    // Every page, every asset the pages reference, and every static/public file
+    // in the image must be served (catches build output missing from the image).
+    const urls = new Set();
+    for (const pagePath of ['/', '/servers/example', '/servers/example/settings']) {
+      const response = await request(pagePath);
+      assert.equal(response.status, 200, pagePath);
+      for (const [, url] of (await response.text()).matchAll(/(?:src|href)="(\/[^"]+)"/g)) {
+        urls.add(url.replaceAll('&amp;', '&'));
+      }
+    }
+    assert.ok([...urls].some(url => url.startsWith('/_next/static/')), 'pages reference built assets');
+    const files = compose('exec', '-T', 'frontend', 'sh', '-c', 'cd /app && find .next/static public -type f')
+      .trim().split('\n');
+    assert.ok(files.some(file => file.startsWith('.next/static/')), 'image contains built assets');
+    for (const file of files) {
+      urls.add(file.startsWith('public/') ? file.slice('public'.length) : `/_next/${file.slice('.next/'.length)}`);
+    }
+    for (const url of urls) {
+      const response = await request(url);
+      await response.arrayBuffer();
+      assert.equal(response.status, 200, url);
+    }
+
+    // The frontend must exit on SIGTERM, not by Docker's kill after the timeout.
+    // (The backend does not handle SIGTERM yet, so it is not checked here.)
+    const stopping = Date.now();
+    compose('stop', '--timeout', '20', 'frontend');
+    const stopMs = Date.now() - stopping;
+    assert.ok(stopMs < 10_000, `frontend stop took ${stopMs} ms`);
+    const exit = compose('ps', '--all', '--format', '{{.ExitCode}}', 'frontend').trim();
+    assert.notEqual(exit, '137', 'frontend was killed instead of shutting down');
   } catch (error) {
     let logs = '';
     try { logs = compose('logs', '--no-color', '--tail', '40'); } catch {}

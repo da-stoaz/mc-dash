@@ -157,7 +157,9 @@ npm run test:deployment:host   # Linux only
 The runtime check requires Compose 2.24.4+ and starts disposable containers with
 temporary data and no Docker socket. It checks UI delivery, the real `/api` proxy,
 login with a special-character password, session cookies, database access, live
-updates streaming through the proxy, and an intact 64 MiB upload chunk. Next's proxy body limit accommodates the backend's
+updates streaming through the proxy, an intact 64 MiB upload chunk, that every
+page and every built or public file is served, and that the frontend shuts down
+on SIGTERM instead of being killed. Next's proxy body limit accommodates the backend's
 maximum supported chunk size (90 MiB plus 1 MiB slack).
 The frontend image is built for the default backend port while the test runs the
 backend on 3301, which proves the runtime proxy target works.
