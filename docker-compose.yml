@@ -47,8 +47,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: ${MC_DASH_FRONTEND_PORT:-3000}
+      # Next's server listens on HOSTNAME (with host networking, Docker would set the host's name).
+      HOSTNAME: ${MC_DASH_FRONTEND_BIND_HOST:-127.0.0.1}
       MC_DASH_BACKEND_URL: http://127.0.0.1:${MC_DASH_BACKEND_PORT:-4000}
-    command: ["node", "start.mjs", "--hostname", "${MC_DASH_FRONTEND_BIND_HOST:-127.0.0.1}"]
     depends_on:
       backend:
         condition: service_healthy

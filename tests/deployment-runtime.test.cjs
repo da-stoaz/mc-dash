@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 // storage and no Docker socket. Shared networking exercises the same loopback
 // proxy as production without requiring Docker Desktop's host networking option.
 // The frontend image is built for the default backend port (4000); running the
-// backend on 3301 proves start.mjs repoints the compiled /api rewrite at runtime.
+// backend on 3301 proves src/proxy.ts reads MC_DASH_BACKEND_URL at runtime.
 test('built panel images serve the UI and authenticate through /api', { timeout: 120_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-compose-runtime-'));
   const password = 'runtime$literal#password';
@@ -25,6 +25,8 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
       'MC_CONTAINER_USER=1234:5678',
       'MC_DASH_BACKEND_PORT=3301',
       'MC_DASH_FRONTEND_PORT=3000',
+      // Reachable through the backend container's published port.
+      'MC_DASH_FRONTEND_BIND_HOST=0.0.0.0',
       `MC_DASH_PASSWORD='${password}'`,
       'MC_DASH_SESSION_SECRET=disposable-integration-test-session-secret',
       'MC_DASH_COOKIE_SECURE=false',
@@ -45,7 +47,6 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
     image: mc-dash-frontend:deployment-check
     restart: "no"
     network_mode: service:backend
-    command: ["node", "start.mjs", "--hostname", "0.0.0.0"]
 `);
     compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '60');
     const base = `http://${compose('port', 'backend', '3000').trim()}`;
@@ -71,6 +72,18 @@ test('built panel images serve the UI and authenticate through /api', { timeout:
     const servers = await request('/api/servers', { headers });
     assert.equal(servers.status, 200);
     assert.deepEqual(await servers.json(), []);
+    // Live updates must stream through the proxy event by event, not buffered.
+    const stream = await request('/api/servers/stream', { headers });
+    assert.equal(stream.status, 200);
+    assert.match(stream.headers.get('content-type'), /^text\/event-stream/);
+    const reader = stream.body.getReader();
+    let events = '';
+    while (!/event: servers\ndata: \[\]\n\n/.test(events)) {
+      const { done, value } = await reader.read();
+      assert.ok(!done, 'stream ended before the first event');
+      events += Buffer.from(value).toString();
+    }
+    await reader.cancel();
     // Large upload chunks must survive Next's proxy without truncation.
     const bytes = 64 * 1024 * 1024;
     const begin = await request('/api/servers/uploads', {
