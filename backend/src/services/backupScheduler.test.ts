@@ -136,3 +136,61 @@ test('a due server is backed up once it has been stopped for a while, not while 
   setBackupSchedule(stopped.id, null);
   assert.equal(getBackupSchedule(stopped.id).intervalDays, null);
 });
+
+test('the task list shows running, finished and planned backups, and finished ones stay until dismissed', async t => {
+  t.mock.method(rconService, 'runServerRcon', async () => null);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { dismissAllTasks } = require('./taskHistory');
+  dismissAllTasks();
+  const server = newServer();
+  setBackupSchedule(server.id, 2);
+  const { default: router } = require('../routes/tasks');
+  const route = (method: string, routePath: string) => router.stack.find((layer: any) => layer.route?.path === routePath && layer.route.methods[method]).route.stack[0].handle;
+  const reply = () => ({ code: 200, body: null as any, status(code: number) { this.code = code; return this; }, json(body: any) { this.body = body; return this; }, setHeader() {} });
+  const list = () => { const res = reply(); route('get', '/')({}, res); return res.body; };
+
+  // Never backed up: due now, waiting for the server to have been idle a while.
+  const before = list().planned.find((plan: any) => plan.serverId === server.id);
+  assert.equal(before.waitingFor, 'idle');
+  assert.equal(before.serverName, server.name);
+
+  const running = runScheduledBackup(server, true);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { getSnapshotJob } = require('./snapshotJobStore');
+  while (getSnapshotJob(server.id)?.status !== 'running') await new Promise(resolve => setImmediate(resolve));
+  const during = list();
+  assert.equal(during.running.find((task: any) => task.serverId === server.id)?.kind, 'scheduled-backup');
+  assert.equal(during.planned.some((plan: any) => plan.serverId === server.id), false);
+  await running;
+  await runScheduledBackup(server, true);           // nothing changed
+
+  const after = list();
+  assert.equal(after.running.length, 0);
+  const mine = after.history.filter((task: any) => task.serverId === server.id);
+  assert.deepEqual(mine.map((task: any) => [task.kind, task.status]), [['scheduled-backup', 'completed'], ['scheduled-backup', 'completed']]);
+  assert.match(mine[0].detail, /Unchanged/);
+  assert.ok(mine[1].bytes > 0);
+  const planned = after.planned.find((plan: any) => plan.serverId === server.id);
+  assert.equal(planned.waitingFor, null);
+  assert.ok(Date.parse(planned.dueAt) > Date.now() + 47 * HOUR);
+
+  const dismissed = reply();
+  route('delete', '/history/:id')({ params: { id: mine[0].id } }, dismissed);
+  assert.equal(dismissed.code, 200);
+  assert.equal(list().history.filter((task: any) => task.serverId === server.id).length, 1);
+  route('delete', '/history')({}, reply());
+  assert.equal(list().history.length, 0);
+});
+
+test('a failed manual snapshot is recorded with its error', async t => {
+  t.mock.method(rconService, 'runServerRcon', async () => null);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { listTaskHistory } = require('./taskHistory');
+  const server = newServer();
+  fs.rmSync(MARKER);
+  await assert.rejects(createSnapshot(server));
+  const [latest] = listTaskHistory();
+  assert.equal(latest.kind, 'snapshot');
+  assert.equal(latest.status, 'failed');
+  assert.match(latest.error, /snapshot drive is not available/);
+});

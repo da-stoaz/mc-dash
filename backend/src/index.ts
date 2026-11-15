@@ -4,6 +4,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import serversRouter from './routes/servers';
 import hostRouter from './routes/host';
+import tasksRouter from './routes/tasks';
 import authRouter from './routes/auth';
 import { assertAuthConfig, requireAuth } from './auth';
 import { config } from './config';
@@ -60,6 +61,7 @@ app.get('/config', requireAuth, (_req, res) => {
 app.use('/auth', authRouter);
 app.use('/servers', requireAuth, serversRouter);
 app.use('/host', requireAuth, hostRouter);
+app.use('/tasks', requireAuth, tasksRouter);
 
 // Simple error handler
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
