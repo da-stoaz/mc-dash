@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { db } from '../db';
+import { recordTask, TaskKind } from './taskHistory';
 
 export type SnapshotJob = {
   serverId: string;
@@ -18,6 +19,8 @@ export type SnapshotJob = {
   safetySnapshotId: string | null;
   createSafetySnapshot: boolean;
   cancelRequested: boolean;
+  /** Who started it: a person, or the backup schedule. */
+  trigger: 'manual' | 'scheduled';
 };
 
 db.exec(`CREATE TABLE IF NOT EXISTS snapshot_jobs (
@@ -32,11 +35,14 @@ for (const [name, definition] of Object.entries({
   updatedAt: 'TEXT', safetySnapshotId: 'TEXT',
   createSafetySnapshot: 'INTEGER NOT NULL DEFAULT 1',
   cancelRequested: 'INTEGER NOT NULL DEFAULT 0',
+  trigger: "TEXT NOT NULL DEFAULT 'manual'",
 })) {
   if (!columns.has(name)) db.exec(`ALTER TABLE snapshot_jobs ADD COLUMN ${name} ${definition}`);
 }
 // This backend owns the archive workers. A new process cannot resume an old
 // tar stream; retain an explicit failure rather than an eternal spinner.
+const interrupted = (db.prepare("SELECT serverId FROM snapshot_jobs WHERE status = 'running'").all() as { serverId: string }[])
+  .map(row => row.serverId);
 db.prepare(`UPDATE snapshot_jobs SET status = 'failed', finishedAt = ?,
   error = CASE WHEN operation = 'restore'
     THEN CASE WHEN phase IN ('validating', 'backup')
@@ -44,18 +50,38 @@ db.prepare(`UPDATE snapshot_jobs SET status = 'failed', finishedAt = ?,
       ELSE 'Restore interrupted by a backend restart. Server data may be incomplete. Keep the server stopped and restore again.' || CASE WHEN safetySnapshotId IS NOT NULL THEN ' The safety backup is retained in the snapshot list.' ELSE ' No safety backup was created.' END END
     ELSE 'Snapshot interrupted by a backend restart. Please create a new snapshot.' END
   WHERE status = 'running'`).run(new Date().toISOString());
+for (const serverId of interrupted) recordFinishedJob(serverId);
+
+export function snapshotTaskKind(job: Pick<SnapshotJob, 'operation' | 'trigger'>): TaskKind {
+  return job.operation === 'restore' ? 'restore' : job.trigger === 'scheduled' ? 'scheduled-backup' : 'snapshot';
+}
+
+function recordFinishedJob(serverId: string): void {
+  const job = getSnapshotJob(serverId);
+  if (!job || job.status === 'running') return;
+  recordTask({
+    kind: snapshotTaskKind(job), serverId, status: job.status, startedAt: job.startedAt,
+    finishedAt: job.finishedAt ?? undefined, error: job.error,
+    bytes: job.status === 'completed' && job.operation === 'create' ? job.bytesProcessed : null,
+  });
+}
+
+export function listRunningSnapshotJobs(): SnapshotJob[] {
+  return (db.prepare("SELECT serverId FROM snapshot_jobs WHERE status = 'running' ORDER BY startedAt").all() as { serverId: string }[])
+    .map(row => getSnapshotJob(row.serverId)!).filter(Boolean);
+}
 
 export function getSnapshotJob(serverId: string): SnapshotJob | null {
   const row = db.prepare('SELECT * FROM snapshot_jobs WHERE serverId = ?').get(serverId) as (Omit<SnapshotJob, 'createSafetySnapshot' | 'cancelRequested'> & { createSafetySnapshot: number; cancelRequested: number }) | undefined;
   return row ? { ...row, createSafetySnapshot: row.createSafetySnapshot !== 0, cancelRequested: row.cancelRequested !== 0 } : null;
 }
 
-export function beginSnapshotJob(serverId: string, operation: SnapshotJob['operation'] = 'create', snapshotId: string | null = null, createSafetySnapshot = true): void {
+export function beginSnapshotJob(serverId: string, operation: SnapshotJob['operation'] = 'create', snapshotId: string | null = null, createSafetySnapshot = true, trigger: SnapshotJob['trigger'] = 'manual'): void {
   if (getSnapshotJob(serverId)?.status === 'running') throw new Error('A snapshot is already being created or restored for this server.');
   db.prepare(`INSERT OR REPLACE INTO snapshot_jobs
-    (serverId, status, startedAt, finishedAt, snapshotId, error, operation, phase, updatedAt, createSafetySnapshot)
-    VALUES (?, 'running', ?, NULL, ?, NULL, ?, ?, ?, ?)`).run(serverId, new Date().toISOString(), snapshotId, operation,
-      operation === 'restore' ? 'validating' : 'checking-files', new Date().toISOString(), Number(createSafetySnapshot));
+    (serverId, status, startedAt, finishedAt, snapshotId, error, operation, phase, updatedAt, createSafetySnapshot, trigger)
+    VALUES (?, 'running', ?, NULL, ?, NULL, ?, ?, ?, ?, ?)`).run(serverId, new Date().toISOString(), snapshotId, operation,
+      operation === 'restore' ? 'validating' : 'checking-files', new Date().toISOString(), Number(createSafetySnapshot), trigger);
 }
 
 export function updateSnapshotProgress(serverId: string, phase: SnapshotJob['phase'], bytesProcessed = 0, totalBytes: number | null = null): void {
@@ -74,4 +100,5 @@ export function requestSnapshotCancellation(serverId: string): void {
 export function finishSnapshotJob(serverId: string, snapshotId: string | null, error: string | null, cancelled = false): void {
   db.prepare(`UPDATE snapshot_jobs SET status = ?, finishedAt = ?, snapshotId = ?, error = ? WHERE serverId = ?`)
     .run(error ? 'failed' : cancelled ? 'cancelled' : 'completed', new Date().toISOString(), snapshotId, error, serverId);
+  recordFinishedJob(serverId);
 }

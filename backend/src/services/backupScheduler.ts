@@ -8,6 +8,7 @@ import { lifecycleBusy, preparing } from '../state';
 import { ServerRecord, SnapshotRecord } from '../types';
 import { dockerService } from './dockerService';
 import { getSnapshotJob } from './snapshotJobStore';
+import { recordTask } from './taskHistory';
 import { createSnapshot, deleteSnapshot, fingerprintServerFiles, snapshotFilePath } from './snapshotService';
 
 /** Scheduled snapshots kept per server. Manual and pre-restore snapshots are not counted. */
@@ -97,11 +98,14 @@ async function isStopped(server: ServerRecord): Promise<boolean> {
  * Then drop scheduled snapshots beyond SCHEDULED_KEEP, oldest first.
  */
 export async function runScheduledBackup(server: ServerRecord, stopped: boolean): Promise<'created' | 'unchanged'> {
+  const startedAt = new Date().toISOString();
   const latest = scheduledSnapshots(server.id)[0];
   // A running server keeps unsaved changes in memory, so its files say nothing.
   const fingerprint = stopped ? await fingerprintServerFiles(server.id).catch(() => null) : null;
   if (fingerprint && latest?.fingerprint === fingerprint && existsSync(snapshotFilePath(server.id, latest.fileName))) {
     serverStore.touchSnapshot(latest.id);
+    recordTask({ kind: 'scheduled-backup', serverId: server.id, status: 'completed', startedAt,
+      detail: 'Unchanged since the last backup; kept its archive.' });
     logger.info({ serverId: server.id, snapshotId: latest.id }, 'Scheduled backup: no files changed, kept the existing archive');
     return 'unchanged';
   }
@@ -110,6 +114,37 @@ export async function runScheduledBackup(server: ServerRecord, stopped: boolean)
     await deleteSnapshot(server, old.id);
   }
   return 'created';
+}
+
+export type PlannedBackup = {
+  serverId: string;
+  intervalDays: number;
+  /** When the backup becomes due (or, after a failure, when it is retried). */
+  dueAt: string;
+  /** Once due: what it is waiting for before it runs. */
+  waitingFor: 'idle' | 'stop' | null;
+  /** When a server that keeps running is backed up live instead. */
+  liveAt: string;
+};
+
+/** The next scheduled backup of every server that has a schedule and is not being backed up right now. */
+export function plannedBackups(now = Date.now()): PlannedBackup[] {
+  const rows = db.prepare('SELECT * FROM backup_schedules').all() as ScheduleRow[];
+  const planned: PlannedBackup[] = [];
+  for (const row of rows) {
+    const server = serverStore.get(row.serverId);
+    if (!server || getSnapshotJob(server.id)?.status === 'running') continue;
+    const due = Math.max(dueAt(row, scheduledSnapshots(server.id)[0]?.createdAt ?? null), (failedAt.get(server.id) ?? 0) + RETRY_MS);
+    const stopped = server.status === 'stopped' || server.status === 'exited';
+    planned.push({
+      serverId: server.id,
+      intervalDays: row.intervalDays,
+      dueAt: new Date(due).toISOString(),
+      waitingFor: due > now ? null : stopped ? 'idle' : 'stop',
+      liveAt: new Date(due + RUNNING_GRACE_MS).toISOString(),
+    });
+  }
+  return planned.sort((a, b) => a.dueAt.localeCompare(b.dueAt));
 }
 
 let ticking = false;

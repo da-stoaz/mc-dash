@@ -3,7 +3,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { addToast, Button } from '@heroui/react';
+import { addToast, Button, Tooltip } from '@heroui/react';
 import { LogOut, Plus, Upload } from 'lucide-react';
 import { emptyForm, FormState, ServerRecord, ServerStatus } from '../lib/serverTypes';
 import { FilterKey, StatusBar } from '../components/StatusBar';
@@ -18,6 +18,7 @@ import { Logo } from '../components/Logo';
 import { CapacityBar } from '../components/CapacityBar';
 import { HostCapacity } from '../lib/hostCapacity';
 import { SourceNotice } from '../components/SourceNotice';
+import { TaskQueue } from '../components/TaskQueue';
 
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
@@ -333,11 +334,16 @@ export default function Page() {
             <Button variant="flat" startContent={<Upload size={16} />} onPress={() => setShowImport(true)}>
               Import
             </Button>
-            {authRequired && (
-              <Button variant="flat" startContent={<LogOut size={16} />} onPress={logout} aria-label="Log out">
-                Log out
-              </Button>
-            )}
+            <div className="flex items-center gap-1">
+              <TaskQueue />
+              {authRequired && (
+                <Tooltip content="Log out" size="sm" delay={200} closeDelay={0}>
+                  <Button isIconOnly variant="light" onPress={logout} aria-label="Log out">
+                    <LogOut size={18} />
+                  </Button>
+                </Tooltip>
+              )}
+            </div>
           </div>
         </div>
 

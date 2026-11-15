@@ -240,7 +240,7 @@ export async function createSnapshot(
   server: ServerRecord,
   options: SnapshotOptions = {}
 ): Promise<SnapshotRecord> {
-  beginSnapshotJob(server.id);
+  beginSnapshotJob(server.id, 'create', null, true, options.kind === 'scheduled' ? 'scheduled' : 'manual');
   const controller = new AbortController();
   snapshotControllers.set(server.id, controller);
   try {
