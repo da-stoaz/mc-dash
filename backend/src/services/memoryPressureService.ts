@@ -233,7 +233,7 @@ export async function assessRuntimeRisks(pool:MemoryPoolReport) {
   const predicted=workingSet!==null && forecast.approaching('pool',workingSet,pool.limitMb * 0.97,now,horizon);
   let global=predicted, critical=predicted || (workingSet!==null && workingSet>=pool.limitMb*0.97), reason='Shared RAM is nearly full';
   if(predicted) reason='Shared RAM is growing too quickly';
-  const {readHostMemory}=await import('./hostCapacityService');
+  const {readHostMemory}=require('./hostCapacityService') as typeof import('./hostCapacityService');
   const host=await readHostMemory();
   if(host.availableKnown) {
     const floor=config.hostFreeFloorMb;

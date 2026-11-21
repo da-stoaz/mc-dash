@@ -617,13 +617,13 @@ export class DockerService {
         const info = await container.inspect();
         this.requirePoolParent(info.HostConfig?.CgroupParent);
         if (info.State?.Running) return container.id;
-        const { metricsCollector } = await import('./metricsCollector');
+        const { metricsCollector } = require('./metricsCollector') as typeof import('./metricsCollector');
         const usage = new Map([...metricsCollector.liveAll()].map(([id, value]) => [id, (value.memoryWorkingSetBytes ?? value.memoryBytes) / MB]));
         const request = memoryPlan ? Math.max(bootMemoryDemand(server), recoveryDemand) : undefined;
         if (!request) throw new UserFacingError({error: 'Configure server memory first', code: 'MEMORY_LIMIT_REQUIRED', status: 409});
         startupReservations.release(server.id);
         // Keep the existing host-free-memory check for unrelated deployments.
-        const { readHostMemory } = await import('./hostCapacityService');
+        const { readHostMemory } = require('./hostCapacityService') as typeof import('./hostCapacityService');
         const host = await readHostMemory();
         const pending = startupReservations.pending(usage);
         if (host.availableKnown && host.availableMb - pending - request < config.hostFreeFloorMb) {

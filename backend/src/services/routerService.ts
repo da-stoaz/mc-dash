@@ -37,8 +37,18 @@ function findServerBySubdomain(subdomain: string | undefined): ServerRecord | nu
   return servers.find((server) => server.subdomain?.toLowerCase() === target) ?? null;
 }
 
+export type RouterOptions = {
+  /** How long a client gets to send a complete handshake. */
+  handshakeTimeoutMs?: number;
+};
+
 export class RouterService {
   private server: net.Server | null = null;
+  private readonly handshakeTimeoutMs: number;
+
+  constructor(options: RouterOptions = {}) {
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
+  }
 
   start() {
     if (!config.routerEnabled) {
@@ -61,19 +71,38 @@ export class RouterService {
   }
 
   private handleConnection(socket: net.Socket) {
+    // This socket comes straight from the internet. Its 'error' listener must
+    // stay attached for the socket's whole life: an 'error' with no listener is
+    // an uncaught exception, and the router shares its process with the API.
+    // A client could trigger one at will by resetting the connection after we
+    // gave up on it — one packet, whole backend down. So nothing below ever
+    // calls removeAllListeners() on the client socket; only our own 'data'
+    // handler is detached, by reference.
+    socket.on('error', () => teardown());
+    socket.on('close', () => teardown());
     socket.setNoDelay(true);
 
     let buffered = Buffer.alloc(0);
     let upstream: net.Socket | null = null;
     let resolved = false;
 
-    const cleanup = () => {
+    const teardown = () => {
+      clearTimeout(timeout);
+      socket.removeListener('data', onData);
       if (upstream) {
-        upstream.removeAllListeners();
+        // destroy() without an error emits no 'error', so the upstream's own
+        // listener can stay too.
         upstream.destroy();
         upstream = null;
       }
-      socket.removeAllListeners();
+    };
+
+    // Destroy rather than end(): there is nothing left to say to this client,
+    // and a half-closed socket would wait on the peer — which can stall it, or
+    // reset it, as it pleases.
+    const reject = () => {
+      teardown();
+      socket.destroy();
     };
 
     const timeout = setTimeout(() => {
@@ -83,19 +112,17 @@ export class RouterService {
           resolved = true;
           upstream = this.connectUpstream(socket, buffered, fallback);
         } else {
-          socket.end();
-          cleanup();
+          reject();
         }
       }
-    }, HANDSHAKE_TIMEOUT_MS);
+    }, this.handshakeTimeoutMs);
 
-    socket.on('data', (chunk) => {
+    const onData = (chunk: Buffer | string) => {
       if (upstream) return;
       const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       buffered = Buffer.concat([buffered, next]);
       if (buffered.length > MAX_HANDSHAKE_BYTES) {
-        socket.end();
-        cleanup();
+        reject();
         return;
       }
 
@@ -116,8 +143,7 @@ export class RouterService {
 
         if (!target) {
           logger.warn({ hostname, subdomain }, 'Router could not resolve target subdomain');
-          socket.end();
-          cleanup();
+          reject();
           return;
         }
 
@@ -125,7 +151,7 @@ export class RouterService {
           // Nothing is listening upstream — the container is stopped. Answer in
           // process so the player sees "sleeping" rather than a refused
           // connection, and so a join attempt starts the server.
-          socket.removeAllListeners('data');
+          socket.removeListener('data', onData);
           serveSleepingClient(socket, buffered, {
             versionName: 'Sleeping',
             motd: config.hibernationWakeOnConnect ? config.hibernationMotd : 'Sleeping — start this server from MC Dash',
@@ -146,20 +172,11 @@ export class RouterService {
           upstream = this.connectUpstream(socket, buffered, fallback);
           return;
         }
-        socket.end();
-        cleanup();
+        reject();
       }
-    });
+    };
 
-    socket.on('error', () => {
-      clearTimeout(timeout);
-      cleanup();
-    });
-
-    socket.on('close', () => {
-      clearTimeout(timeout);
-      cleanup();
-    });
+    socket.on('data', onData);
   }
 
   private connectUpstream(client: net.Socket, buffered: Buffer, server: ServerRecord): net.Socket {
@@ -171,7 +188,7 @@ export class RouterService {
 
     upstream.on('error', (err) => {
       logger.warn({ err }, 'Router upstream error');
-      client.end();
+      client.destroy();
     });
     return upstream;
   }
