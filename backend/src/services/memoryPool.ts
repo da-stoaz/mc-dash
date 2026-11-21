@@ -124,7 +124,7 @@ export async function readVerifiedMemoryPool(): Promise<MemoryPoolReport> {
   let pool = await readMemoryPool();
   if (!pool.enforced) return pool;
   try {
-    const { dockerService } = await import('./dockerService');
+    const { dockerService } = require('./dockerService') as typeof import('./dockerService');
     await dockerService.verifyMemoryPoolContainers();
     pool = await readMemoryPool();
   } catch {
