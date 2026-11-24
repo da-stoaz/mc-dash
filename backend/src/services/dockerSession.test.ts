@@ -3,10 +3,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Dockerode 4 pins uuid 10. Its only UUID call is CommonJS v4(), which is also
-// supported by patched uuid 11. Check the actual consumer before overriding it.
+// Dockerode 4 pinned a vulnerable uuid 10, which package.json overrode. Dockerode
+// 5 dropped the dependency for Node's crypto.randomUUID(), so the override is
+// gone; this keeps the session handshake honest if that ever changes again.
 // The dial error stops before any real Docker connection or gRPC server starts.
-test('Dockerode session generates a UUID with the patched CommonJS dependency', () => {
+test('Dockerode session sends a random v4 UUID', () => {
   const withSession = require('dockerode/lib/session');
   const unavailable = new Error('Docker connection intentionally stubbed');
   let completed = false;

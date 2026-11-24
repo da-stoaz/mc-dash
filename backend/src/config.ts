@@ -255,6 +255,8 @@ export const config = {
   // Bind 127.0.0.1 when a tunnel/proxy fronts the API, so the port can't be hit
   // directly and bypass whatever gating sits in front of it.
   bindHost: process.env.MC_DASH_BIND_HOST || '0.0.0.0',
+  // Ask GitHub once an hour whether a newer release exists (see updateCheck).
+  updateCheckEnabled: envBool(process.env.MC_DASH_UPDATE_CHECK, true),
   hibernationEnabled,
   hibernationIdleMs,
   hibernationWakeOnConnect,

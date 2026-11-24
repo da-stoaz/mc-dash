@@ -3,7 +3,14 @@
 # Runs the backend test suite, then builds, verifies and publishes the panel
 # images that docker-compose.yml pulls:
 #   ghcr.io/da-stoaz/mc-dash-backend, ghcr.io/da-stoaz/mc-dash-frontend
-# main -> :latest, :main, :sha-<short>   tag v1.2.3 -> :1.2.3, :1.2
+# main -> :latest, :main, :sha-<short>, and for a new version :1.2.3 and :1.2
+#
+# Versions: every pull request bumps the version in the package.json files
+# (npm run version:bump -- patch|minor|major); the version job enforces it.
+# When main reaches a version that has no v<version> tag yet, the images are
+# also tagged with it and, after both are pushed, a GitHub release v<version>
+# is created. A release therefore means its images can be pulled.
+#
 # Pull requests run everything except publishing. Images are never published
 # from a commit whose backend tests fail.
 name: CI
@@ -11,13 +18,15 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
+# Superseded pull request runs are cancelled. Runs on main never are: each one
+# may be the only build of a version, and cancelling it would skip its images
+# and release.
 concurrency:
   group: images-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -27,6 +36,23 @@ env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
+  version:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Version is consistent and higher than the target branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          node scripts/version.cjs check --base FETCH_HEAD
+
   backend-tests:
     runs-on: ubuntu-24.04
     defaults:
@@ -55,8 +81,27 @@ jobs:
   images:
     needs: backend-tests
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # create the v<version> release
+      packages: write
     steps:
       - uses: actions/checkout@v4
+
+      # A version that already has a release is not published again: its
+      # version tags and release stay pointing at the build that made them.
+      - name: Version
+        id: version
+        run: |
+          version=$(node scripts/version.cjs)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+              echo "::warning::v$version is already released, so this build is published as latest/main/sha only. Bump the version in every pull request."
+            fi
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -68,6 +113,7 @@ jobs:
         run: |
           npm --prefix frontend ci
           npm run test:license
+          npm run test:version
           npm run test:deployment
           npm --prefix frontend run test:config
 
@@ -119,8 +165,8 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=v${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.new == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.new == 'true' }}
 
       - name: Frontend tags
         id: frontend-meta
@@ -134,8 +180,8 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=v${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.new == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.new == 'true' }}
 
       - name: Push backend
         if: github.event_name != 'pull_request'
@@ -156,3 +202,11 @@ jobs:
           tags: ${{ steps.frontend-meta.outputs.tags }}
           labels: ${{ steps.frontend-meta.outputs.labels }}
           cache-from: type=gha,scope=frontend
+
+      # Last, so a release only exists once both of its images can be pulled.
+      - name: Release
+        if: github.event_name == 'push' && steps.version.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "MC Dash $VERSION" --generate-notes

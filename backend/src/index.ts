@@ -18,6 +18,8 @@ import { startContainerEvents } from './services/containerEvents';
 import { removePartialSnapshots, assertSnapshotStorage } from './services/snapshotService';
 import { backupScheduler } from './services/backupScheduler';
 import { closeEventStreams } from './services/serverEvents';
+import { updateCheck } from './services/updateCheck';
+import { appVersion } from './version';
 import { db } from './db';
 
 // Before anything binds a port: refuse to come up unauthenticated by accident.
@@ -50,11 +52,18 @@ app.get('/health', (_req, res) => {
 // NEXT_PUBLIC_ROUTER_DOMAIN in the frontend, so it had to be set twice and the
 // bundle rebuilt to change it — and when it was missed the UI silently showed
 // bare subdomains instead of full hostnames.
+//
+// The version sits behind auth on purpose: /health is public through the
+// frontend proxy, and an exact version only helps someone matching exploits.
 app.get('/config', requireAuth, (_req, res) => {
+  const latest = updateCheck.latestRelease();
   res.json({
     routerEnabled: config.routerEnabled,
     routerDomain: config.routerDomain ?? null,
     routerPort: config.routerPort,
+    version: appVersion,
+    latestVersion: latest?.version ?? null,
+    latestReleaseUrl: latest?.url ?? null,
   });
 });
 
@@ -73,7 +82,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const server = app.listen(config.port, config.bindHost, () => {
-  logger.info(`API listening on ${config.bindHost}:${config.port}`);
+  logger.info(`MC Dash ${appVersion}: API listening on ${config.bindHost}:${config.port}`);
 });
 
 // `docker stop` sends SIGTERM. Node running as the container's PID 1 ignores it
@@ -111,3 +120,4 @@ startContainerEvents();
 removePartialSnapshots().catch(err => logger.error({ err }, 'Could not remove incomplete snapshot archives'));
 assertSnapshotStorage().catch(err => logger.error({ err }, 'Snapshot drive unavailable; snapshots will fail until it is mounted'));
 backupScheduler.start();
+updateCheck.start();

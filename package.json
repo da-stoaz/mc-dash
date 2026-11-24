@@ -1,6 +1,6 @@
 {
   "name": "mc-dash",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Self-hosted dashboard for running Minecraft servers from uploaded server packs in Docker",
   "license": "AGPL-3.0-only",
@@ -18,12 +18,15 @@
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install",
+    "version:bump": "node scripts/version.cjs bump",
+    "version:check": "node scripts/version.cjs check",
+    "test:version": "node --test tests/version.test.cjs",
     "test:license": "node --test tests/license-headers.test.cjs",
     "test:deployment": "node --test tests/deployment-config.test.cjs",
     "test:deployment:runtime": "node --test tests/deployment-runtime.test.cjs",
     "test:deployment:host": "node --test tests/deployment-host.test.cjs"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.7"
   }
 }

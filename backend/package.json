@@ -1,6 +1,6 @@
 {
   "name": "backend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Minecraft server manager API",
   "main": "dist/index.js",
   "scripts": {
@@ -27,29 +27,24 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "adm-zip": "^0.6.1",
-    "better-sqlite3": "^12.5.0",
-    "cors": "^2.8.5",
-    "dockerode": "^4.0.9",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
+    "better-sqlite3": "^13.2.0",
+    "cors": "^2.8.6",
+    "dockerode": "^5.0.1",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
     "fflate": "^0.8.3",
-    "multer": "^2.4.0",
-    "pino": "^10.1.0",
-    "tar": "^7.5.16",
-    "zod": "^4.2.1"
+    "multer": "^2.5.0",
+    "pino": "^10.4.0",
+    "tar": "^7.5.23",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/multer": "^2.0.0",
-    "@types/node": "^25.0.3",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.6.6",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.9.3"
-  },
-  "overrides": {
-    "dockerode": {
-      "uuid": "^11.1.1"
-    }
+    "typescript": "^6.0.3"
   }
 }
