@@ -27,6 +27,6 @@
     "test:deployment:host": "node --test tests/deployment-host.test.cjs"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.7"
   }
 }
