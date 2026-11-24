@@ -19,6 +19,7 @@ import { CapacityBar } from '../components/CapacityBar';
 import { HostCapacity } from '../lib/hostCapacity';
 import { SourceNotice } from '../components/SourceNotice';
 import { TaskQueue } from '../components/TaskQueue';
+import { VersionBadge } from '../components/VersionBadge';
 
 export default function Page() {
   const [servers, setServers] = useState<ServerRecord[]>([]);
@@ -325,7 +326,11 @@ export default function Page() {
               <Logo size={22} />
               MC Dash
             </div>
-            <div className="muted text-sm">Minecraft server manager</div>
+            <div className="muted text-sm flex flex-wrap items-center gap-x-1.5">
+              <span>Minecraft server manager</span>
+              <span aria-hidden>·</span>
+              <VersionBadge />
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button color="primary" variant="shadow" startContent={<Plus size={16} />} onPress={() => setShowCreate(true)}>

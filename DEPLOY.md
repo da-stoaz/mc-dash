@@ -8,15 +8,45 @@ docker compose pull && docker compose up -d
 ```
 
 GitHub Actions ([images.yml](.github/workflows/images.yml)) runs the backend tests, then tests and publishes
-two images on every push to `main` and every `v*` tag:
+two images on every push to `main`:
 
 | Image | Tags |
 | --- | --- |
-| `ghcr.io/da-stoaz/mc-dash-backend` | `latest` (main), `sha-<short>`, `1.2.3` / `1.2` (tags) |
+| `ghcr.io/da-stoaz/mc-dash-backend` | `latest`, `main`, `sha-<short>`, and `1.2.3` / `1.2` for each release |
 | `ghcr.io/da-stoaz/mc-dash-frontend` | same |
 
-`MC_DASH_VERSION` in `.env` selects the tag (default `latest`). Pin a `sha-…` or
-version tag to hold a known-good build and to roll back.
+`MC_DASH_VERSION` in `.env` selects the tag (default `latest`). Pin a release
+(`1.2.3`) or a `sha-…` to hold a known-good build and to roll back.
+
+## Versions
+
+Every merged pull request carries a new version. Once **both** of its images
+are pushed, CI creates the GitHub release `v<version>`. A release that exists
+can be pulled; until it does, `latest` still points at the previous build. The
+build takes several minutes after a merge, so check the
+[releases](https://github.com/da-stoaz/mc-dash/releases) (or the `CI` run)
+before updating.
+
+**Which version is running.** The dashboard header shows it next to "Minecraft
+server manager":
+
+- `v1.2.3` — what you are running.
+- `v1.2.4 available` — a newer release has been published; the link opens its
+  notes. The backend asks GitHub once an hour; set
+  `MC_DASH_UPDATE_CHECK=false` to turn that off.
+- `backend v1.2.2` (amber) — the two images run different versions. Pull and
+  recreate both.
+
+From the shell:
+
+```sh
+docker inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' mc-dash-backend-1 mc-dash-frontend-1
+```
+
+**Update to an exact version.** With `MC_DASH_VERSION=1.2.4` in `.env`,
+`docker compose pull` fails with `manifest unknown` while that release is still
+building, instead of quietly pulling the previous `latest`. Change the number
+for each update.
 
 The backend manages Minecraft containers through the host Docker socket. The
 Compose project is named `mc-dash` regardless of the folder name.
@@ -78,6 +108,10 @@ docker compose pull && docker compose up -d
 docker image prune -f   # drop superseded image layers
 ```
 
+Then reload the dashboard: its header should show the version of the latest
+[release](https://github.com/da-stoaz/mc-dash/releases) and no
+`available` link. See [Versions](#versions).
+
 `.env` and host data are never touched by an update. `docker-compose.yml` rarely
 changes; when a release notes that it did, fetch it again with the `curl` above
 **before** pulling.
@@ -101,7 +135,7 @@ the matching database backup. See [RAM settings and migration](docs/memory-pool.
 
 ### Roll back
 
-Set `MC_DASH_VERSION=sha-<previous>` (or a version tag) in `.env`, then
+Set `MC_DASH_VERSION=<previous version>` (or a `sha-…` tag) in `.env`, then
 `docker compose pull && docker compose up -d`. Never run two backends against the
 same database. Do not restore old world backups over newer player progress
 without explicitly choosing that recovery point.

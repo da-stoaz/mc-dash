@@ -30,9 +30,24 @@ are needed. The production backend image includes Python.
 3. Run `npm run dev` from the repository root to start both the backend and frontend. Logs are labelled by app; Ctrl+C stops both.
    - To run just one app: `npm run dev:backend` or `npm run dev:frontend`.
 
+### Versions
+
+Every pull request bumps the version, and CI fails a pull request that does not.
+Run one of these from the repository root; it updates all three `package.json`
+files and their lockfiles together:
+
+```sh
+npm run version:bump -- patch   # fixes
+npm run version:bump -- minor   # features
+npm run version:bump -- major   # breaking changes
+```
+
+Each new version merged to `main` is published as images tagged with it and a
+GitHub release `v<version>`. See [Versions in DEPLOY.md](DEPLOY.md#versions).
+
 ## Backend endpoints (initial pass)
 - `GET /health`
-- `GET /config` — browser-facing settings from the backend env (`routerEnabled`, `routerDomain`, `routerPort`). The dashboard reads this to render full hostnames.
+- `GET /config` — browser-facing settings from the backend env (`routerEnabled`, `routerDomain`, `routerPort`), the running `version`, and the newest published release (`latestVersion`, `latestReleaseUrl`, null until known or with `MC_DASH_UPDATE_CHECK=false`). The dashboard reads this to render full hostnames and its version.
 - `GET /host/capacity` — verified shared-pool usage and protection status, plus legacy diagnostic accounting. Drives the RAM bar.
 - `GET /servers` — list server records.
 - `POST /servers` — create a record with a server pack zip (multipart form, fields include `name`, `subdomain` (optional), `serverPort` (optional), `minRamMb`, `maxRamMb`, `cpuLimit`, `renderDistance`, `gameMode`, `seed`, `javaImage`, and file field `file`).
